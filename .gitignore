@@ -19,3 +19,4 @@ __pycache__/
 *.orig
 *.pyc
 /config/DAO.gen.toml
+/dist/

@@ -1,20 +1,21 @@
-"""Build tools: CMake/Ninja (pip, private venv), LLVM (system or pinned download) and
+"""Build tools: CMake/Ninja and (on Windows, if missing) git, LLVM (system or pinned download) and
 the MSVC CRT + Windows SDK splatted by xwin."""
 import glob
 import os
 import re
 import shutil
 import subprocess
-import venv
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import deps
-from .util import EXE, HOST, IS_WINDOWS, REPO, InstallError, clean_env, download, extract_tar, run
+from . import deps, util
+from .util import EXE, HOST, IS_WINDOWS, REPO, InstallError, clean_env, download, extract, run
 
 TOOLS = REPO / "tools"
 DOWNLOADS = TOOLS / "downloads"
-VENV = TOOLS / "venv"
+CMAKE_DIR = TOOLS / "cmake"
+NINJA_DIR = TOOLS / "ninja"
+MINGIT_DIR = TOOLS / "mingit"
 LLVM_DIR = TOOLS / "llvm"
 XWIN_DIR = TOOLS / "xwin"
 WINSYSROOT = TOOLS / "winsysroot"
@@ -33,25 +34,32 @@ class Toolchain:
 
 # ------------------------------------------------------------------ cmake/ninja
 
+def _ensure_download(reporter, dl, dest, stamp_text, label):
+    """Downloads and extracts dl into dest unless dest already holds stamp_text's version."""
+    stamp = dest / "dao-version.txt"
+    if stamp.exists() and stamp.read_text() == stamp_text:
+        reporter.log(f"{label}: ready ({stamp_text})")
+        return
+    archive = download(reporter, dl, DOWNLOADS)
+    extract(reporter, archive, dl.top_dir, dest)
+    archive.unlink()
+    stamp.write_text(stamp_text)
+
+
 def ensure_build_tools(reporter):
-    bindir = VENV / ("Scripts" if IS_WINDOWS else "bin")
-    cmake, ninja = bindir / ("cmake" + EXE), bindir / ("ninja" + EXE)
-    stamp = VENV / "dao-packages.txt"
-    wanted = "\n".join(deps.PIP_PACKAGES)
-    if cmake.exists() and ninja.exists() and stamp.exists() and stamp.read_text() == wanted:
-        reporter.log(f"CMake and Ninja: ready ({', '.join(deps.PIP_PACKAGES)})")
-        return cmake, ninja
-    if not (bindir / ("python" + EXE)).exists():
-        reporter.log(f"Creating a Python virtual environment in {VENV}")
-        try:
-            venv.EnvBuilder(with_pip=True, clear=True).create(VENV)
-        except Exception as e:
-            raise InstallError(f"Could not create a Python virtual environment ({e}). On Debian/Ubuntu "
-                               "install the python3-venv package.")
-    run(reporter, [bindir / ("python" + EXE), "-m", "pip", "install", "--disable-pip-version-check",
-                   "-q", *deps.PIP_PACKAGES], env=clean_env())
-    stamp.write_text(wanted)
-    return cmake, ninja
+    _ensure_download(reporter, deps.CMAKE[HOST], CMAKE_DIR, deps.CMAKE_VERSION, "CMake")
+    _ensure_download(reporter, deps.NINJA[HOST], NINJA_DIR, deps.NINJA_VERSION, "Ninja")
+    return CMAKE_DIR / "bin" / ("cmake" + EXE), NINJA_DIR / ("ninja" + EXE)
+
+
+def ensure_git(reporter):
+    """Uses the installed git, or on Windows downloads a portable MinGit."""
+    if shutil.which("git"):
+        return
+    if not IS_WINDOWS:
+        raise InstallError("git was not found. Install git and run this again.")
+    _ensure_download(reporter, deps.MINGIT, MINGIT_DIR, deps.MINGIT.url.rsplit("/", 1)[1], "Portable git")
+    util.GIT[:] = [str(MINGIT_DIR / "cmd" / "git.exe")]
 
 
 # ------------------------------------------------------------------------ LLVM
@@ -65,7 +73,8 @@ def llvm_version(bindir):
         return None
     try:
         out = subprocess.run([str(Path(bindir) / ("clang-cl" + EXE)), "--version"], capture_output=True,
-                             text=True, timeout=30).stdout
+                             text=True, timeout=30, stdin=subprocess.DEVNULL,
+                             creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
     match = re.search(r"clang version (\d+)", out)
@@ -118,7 +127,7 @@ def ensure_llvm(reporter, choice="auto"):
 
     dl = deps.LLVM[HOST]
     archive = download(reporter, dl, DOWNLOADS)
-    extract_tar(reporter, archive, dl.top_dir, LLVM_DIR)
+    extract(reporter, archive, dl.top_dir, LLVM_DIR)
     if llvm_version(pinned) is None:
         raise InstallError(f"The LLVM download in {LLVM_DIR} lacks one of {', '.join(LLVM_TOOLS)}.")
     archive.unlink()
@@ -152,7 +161,7 @@ def ensure_winsysroot(reporter, accept_license):
     if not xwin.exists():
         dl = deps.XWIN[HOST]
         archive = download(reporter, dl, DOWNLOADS)
-        extract_tar(reporter, archive, dl.top_dir, XWIN_DIR)
+        extract(reporter, archive, dl.top_dir, XWIN_DIR)
         archive.unlink()
 
     if WINSYSROOT.exists():

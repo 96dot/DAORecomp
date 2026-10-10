@@ -9,8 +9,8 @@ import shutil
 import sys
 
 
-def main():
-    src, dst = sys.argv[1], sys.argv[2]
+def sync(src, dst):
+    """Returns (changed, removed, unchanged) file counts."""
     os.makedirs(dst, exist_ok=True)
     changed = 0
     names = set(os.listdir(src))
@@ -24,7 +24,12 @@ def main():
         if name not in names:
             os.remove(os.path.join(dst, name))
             removed += 1
-    print(f'{changed} files updated, {removed} removed, {len(names) - changed} unchanged')
+    return changed, removed, len(names) - changed
+
+
+def main():
+    changed, removed, unchanged = sync(sys.argv[1], sys.argv[2])
+    print(f'{changed} files updated, {removed} removed, {unchanged} unchanged')
 
 
 if __name__ == '__main__':

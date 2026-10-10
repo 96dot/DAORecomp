@@ -8,12 +8,34 @@ import sys
 import tarfile
 import threading
 import urllib.request
+import zipfile
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
 IS_WINDOWS = sys.platform == "win32"
 HOST = "windows" if IS_WINDOWS else "linux"
 EXE = ".exe" if IS_WINDOWS else ""
+# Running as the bundled installer executable (PyInstaller).
+FROZEN = getattr(sys, "frozen", False)
+
+
+def _work_root():
+    if os.environ.get("DAO_WORK_DIR"):
+        return Path(os.environ["DAO_WORK_DIR"]).expanduser().absolute()
+    if not FROZEN:
+        return Path(__file__).resolve().parent.parent  # the repository checkout
+    base = os.environ.get("LOCALAPPDATA") if IS_WINDOWS else None
+    base = Path(base) if base else Path.home() / ".local" / "share"
+    return base / "DAORecomp-build"
+
+
+# The project source as shipped: the checkout, or the copy inside the executable.
+SOURCE = Path(sys._MEIPASS) / "source" if FROZEN else Path(__file__).resolve().parent.parent
+# Where the build happens: the project source plus tools/, build/ and ppc/. The
+# executable copies its source here first (see pipeline.sync_source).
+REPO = _work_root()
+
+# git to run; toolchain.ensure_git may switch it to a downloaded MinGit.
+GIT = ["git"]
 
 
 class InstallError(Exception):
@@ -138,26 +160,46 @@ def download(reporter, dl, dest_dir):
     return path
 
 
-def extract_tar(reporter, archive, top_dir, dest):
-    """Extracts a .tar.xz/.tar.gz whose contents sit in top_dir, so that top_dir becomes dest."""
+def extract(reporter, archive, top_dir, dest):
+    """Extracts a .tar.xz/.tar.gz/.zip to dest. top_dir: the archive's single top-level
+    directory (its contents become dest), or "" if the files sit at the top."""
     reporter.log(f"Extracting {archive.name}")
     staging = dest.with_name(dest.name + ".extract")
     if staging.exists():
         shutil.rmtree(staging)
-    with tarfile.open(archive) as tar:
-        members = tar.getmembers()
-        for i, member in enumerate(members):
-            if hasattr(tarfile, "data_filter"):
-                tar.extract(member, staging, filter="data")
-            else:
-                tar.extract(member, staging)
-            if i % 200 == 0:
-                reporter.progress(i / len(members))
-                reporter.check_cancel()
+    staging.mkdir(parents=True)
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive) as z:
+            names = z.namelist()
+            root = staging.resolve()
+            for i, name in enumerate(names):
+                target = (staging / name).resolve()
+                if root not in target.parents and target != root:
+                    raise InstallError(f"{archive.name}: unsafe path {name}")
+                z.extract(name, staging)
+                if i % 200 == 0:
+                    reporter.progress(i / len(names))
+                    reporter.check_cancel()
+        if not IS_WINDOWS:  # zipfile drops the executable bits
+            for path in staging.rglob("*"):
+                if path.is_file():
+                    path.chmod(0o755)
+    else:
+        with tarfile.open(archive) as tar:
+            members = tar.getmembers()
+            for i, member in enumerate(members):
+                if hasattr(tarfile, "data_filter"):
+                    tar.extract(member, staging, filter="data")
+                else:
+                    tar.extract(member, staging)
+                if i % 200 == 0:
+                    reporter.progress(i / len(members))
+                    reporter.check_cancel()
     if dest.exists():
         shutil.rmtree(dest)
-    (staging / top_dir).replace(dest)
-    shutil.rmtree(staging)
+    (staging / top_dir).replace(dest) if top_dir else staging.replace(dest)
+    if staging.exists():
+        shutil.rmtree(staging)
 
 
 def human_size(n):
@@ -172,5 +214,5 @@ def check_host():
         raise InstallError(f"This needs an x86-64 computer (this one is {platform.machine()}).")
     if sys.version_info < (3, 10):
         raise InstallError("This needs Python 3.10 or newer.")
-    if not shutil.which("git"):
+    if not IS_WINDOWS and not shutil.which("git"):  # Windows downloads MinGit if needed
         raise InstallError("git was not found. Install git and run this again.")

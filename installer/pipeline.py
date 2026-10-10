@@ -9,9 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import deps, sources, toolchain
-from .util import EXE, IS_WINDOWS, REPO, InstallError, check_host, clean_env, human_size, run
+from .util import EXE, FROZEN, IS_WINDOWS, REPO, SOURCE, InstallError, check_host, clean_env, human_size, run
 
-sys.path.insert(0, str(REPO / "scripts"))
+sys.path.insert(0, str(SOURCE / "scripts"))
+import patch_recompiler  # noqa: E402
+import sync_dir  # noqa: E402
 import xiso  # noqa: E402
 
 BUILD = REPO / "build" / "installer"
@@ -27,6 +29,34 @@ class Options:
     accept_license: bool = False
     llvm: str = "auto"
     jobs: int = 0  # 0 = Ninja's default
+
+
+# --------------------------------------------------------------------- source
+
+SOURCE_MANIFEST = "dao-source-files.txt"
+
+
+def sync_source(reporter):
+    """The executable carries the project source; copy it into the work folder, changing
+    only files that differ (so rebuilds stay incremental) and removing ones it dropped."""
+    if not FROZEN or SOURCE == REPO:
+        return
+    files = sorted(p.relative_to(SOURCE).as_posix() for p in SOURCE.rglob("*") if p.is_file())
+    REPO.mkdir(parents=True, exist_ok=True)
+    manifest = REPO / SOURCE_MANIFEST
+    old = set(manifest.read_text(encoding="utf-8").splitlines()) if manifest.exists() else set()
+    changed = 0
+    for rel in files:
+        src, dst = SOURCE / rel, REPO / rel
+        data = src.read_bytes()
+        if not dst.exists() or dst.read_bytes() != data:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(data)
+            changed += 1
+    for rel in old - set(files) - {""}:
+        (REPO / rel).unlink(missing_ok=True)
+    manifest.write_text("\n".join(files), encoding="utf-8")
+    reporter.log(f"Source: {len(files)} files in {REPO} ({changed} updated)")
 
 
 # ----------------------------------------------------------------- game files
@@ -140,8 +170,7 @@ def _build(reporter, tc, build, target, jobs):
 
 def build_recompiler(reporter, tc, jobs):
     """Patches XenonRecomp and builds it for this computer."""
-    run(reporter, [sys.executable, "-I", REPO / "scripts" / "patch_recompiler.py",
-                   REPO / "tools" / "XenonRecomp" / "XenonRecomp" / "recompiler.cpp"])
+    patch_recompiler.patch(str(REPO / "tools" / "XenonRecomp" / "XenonRecomp" / "recompiler.cpp"))
     build = BUILD / "xenonrecomp"
     _configure(reporter, tc, REPO / "tools" / "XenonRecomp", build, {}, native_linux=not IS_WINDOWS)
     _build(reporter, tc, build, "XenonRecomp", jobs)
@@ -176,7 +205,8 @@ def recompile(reporter, recompiler, game):
     if not (out / "ppc_func_mapping.cpp").exists():
         raise InstallError(f"XenonRecomp produced no code (see {BUILD / 'recomp.log'}).")
     # Copy only what changed, so rebuilding after an update recompiles little.
-    run(reporter, [sys.executable, "-I", REPO / "scripts" / "sync_dir.py", out, REPO / "ppc"])
+    changed, removed, unchanged = sync_dir.sync(out, REPO / "ppc")
+    reporter.log(f"Generated code: {changed} files updated, {removed} removed, {unchanged} unchanged")
 
 
 # ------------------------------------------------------------------- building
@@ -235,6 +265,8 @@ def _check_license(options):
 def _prepare(reporter, options, first_step):
     """Sources, toolchain and the recompiler: everything that doesn't need the game."""
     _step(reporter, first_step, "Fetching the source code")
+    sync_source(reporter)
+    toolchain.ensure_git(reporter)
     sources.ensure_all(reporter)
     _step(reporter, first_step + 1, "Setting up the compiler")
     tc = toolchain.ensure_toolchain(reporter, options.accept_license, options.llvm)

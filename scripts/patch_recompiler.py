@@ -260,18 +260,26 @@ uint64_t PPCQueryTimebase() noexcept;
 #endif'''
 
 
+def write_if_changed(path, text):
+    """Writes text unless the file already has it (keeps the timestamp, so builds stay incremental)."""
+    if os.path.exists(path) and open(path, encoding='utf-8', newline='').read() == text:
+        return False
+    open(path, 'w', encoding='utf-8', newline='').write(text)
+    return True
+
+
 def patch_context(path):
     orig = path + '.orig'
     if not os.path.exists(orig):
         shutil.copyfile(path, orig)
     s = open(orig, encoding='utf-8').read()
     assert s.count(CONTEXT_ANCHOR) == 1, 'ppc_context anchor'
-    open(path, 'w', encoding='utf-8', newline='').write(s.replace(CONTEXT_ANCHOR, CONTEXT_ADDITION))
-    print('patched', path)
+    if write_if_changed(path, s.replace(CONTEXT_ANCHOR, CONTEXT_ADDITION)):
+        print('patched', path)
 
 
-def main():
-    path = sys.argv[1]
+def patch(path):
+    """Patches recompiler.cpp at path (and XenonUtils/ppc_context.h next to it)."""
     orig = path + '.orig'
     if not os.path.exists(orig):
         shutil.copyfile(path, orig)
@@ -280,9 +288,13 @@ def main():
         assert s.count(needle) == 1, needle[:60]
     s = s.replace(OLD_VCMPBFP, '').replace(OLD_BDNZF, NEW_BDNZF).replace(OLD_MFTB, NEW_MFTB)
     s = s.replace(ANCHOR, NEW_CASES + ANCHOR)
-    open(path, 'w', encoding='utf-8', newline='').write(s)
-    print('patched', path)
+    if write_if_changed(path, s):
+        print('patched', path)
     patch_context(os.path.join(os.path.dirname(path), '..', 'XenonUtils', 'ppc_context.h'))
+
+
+def main():
+    patch(sys.argv[1])
 
 
 if __name__ == '__main__':

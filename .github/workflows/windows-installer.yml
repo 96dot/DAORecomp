@@ -1,0 +1,31 @@
+# Builds DAORecomp-Installer.exe. Run it from the Actions tab (the exe is an artifact
+# of the run), or push a version tag (v1.0 ...) to publish it on a release.
+name: Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build the installer
+        run: python scripts/build_installer_exe.py
+      - uses: actions/upload-artifact@v5
+        with:
+          name: DAORecomp-Installer
+          path: dist/DAORecomp-Installer.exe
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/DAORecomp-Installer.exe --generate-notes

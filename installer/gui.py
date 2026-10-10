@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from . import deps, pipeline
-from .util import IS_WINDOWS, Cancelled, InstallError, Reporter
+from .util import IS_WINDOWS, REPO, Cancelled, InstallError, Reporter
 
 
 def default_dest():
@@ -55,9 +55,9 @@ class App:
         link.pack(side="left", padx=6)
         link.bind("<Button-1>", lambda e: webbrowser.open(deps.MSVC_LICENSE_URL))
 
-        note = ttk.Label(frame, text="Needs about 25 GB: 8 GB for the game, the rest for tools and the build "
-                                     "(in the installer's tools/ and build/ folders). The first build takes "
-                                     "30-60 minutes.", foreground="#666")
+        note = ttk.Label(frame, text="Needs about 25 GB: 8 GB for the game, the rest for the tools and the "
+                                     f"build in {REPO} (keep it for quick updates, or delete it after "
+                                     "installing). The first build takes 30-60 minutes.", foreground="#666")
         note.grid(row=4, column=0, columnspan=3, sticky="w", pady=6)
         # Wrap the texts at the window width (in real pixels, whatever the display scaling).
         frame.bind("<Configure>", lambda e: [w.configure(wraplength=max(e.width - 30, 200)) for w in (intro, note)])

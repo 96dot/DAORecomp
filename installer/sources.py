@@ -2,8 +2,8 @@
 import subprocess
 from pathlib import Path
 
-from . import deps
-from .util import REPO, InstallError, clean_env, run
+from . import deps, util
+from .util import IS_WINDOWS, REPO, InstallError, clean_env, run
 
 # Marks checkouts this installer created, which it may move to another commit.
 MARKER = "dao-installer"
@@ -20,19 +20,22 @@ GIT_ENV = clean_env({
 
 
 def _git(reporter, path, *args):
-    run(reporter, ["git", "-C", path, *args], env=GIT_ENV)
+    run(reporter, [*util.GIT, "-C", path, *args], env=GIT_ENV)
+
+
+def _git_output(path, *args):
+    result = subprocess.run([*util.GIT, "-C", str(path), *args], capture_output=True, text=True, env=GIT_ENV,
+                            stdin=subprocess.DEVNULL,
+                            creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0)
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def _head(path):
-    result = subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"], capture_output=True, text=True,
-                            env=GIT_ENV)
-    return result.stdout.strip() if result.returncode == 0 else None
+    return _git_output(path, "rev-parse", "HEAD")
 
 
 def _git_dir(path):
-    result = subprocess.run(["git", "-C", str(path), "rev-parse", "--absolute-git-dir"], capture_output=True,
-                            text=True, env=GIT_ENV)
-    return result.stdout.strip() if result.returncode == 0 else None
+    return _git_output(path, "rev-parse", "--absolute-git-dir")
 
 
 def ensure(reporter, source):

@@ -75,7 +75,7 @@ class Download:
     url: str
     sha256: str
     size: int
-    top_dir: str = ""  # the archive's single top-level directory
+    top_dir: str = ""  # the archive's single top-level directory, if it has one
 
 
 LLVM_VERSION = "22.1.8"
@@ -106,5 +106,27 @@ MSVC_CRT_VERSION = "14.44.17.14"
 WINDOWS_SDK_VERSION = "10.0.26100"
 MSVC_LICENSE_URL = "https://go.microsoft.com/fwlink/?LinkId=2086102"
 
-# Build tools installed into a private virtual environment.
-PIP_PACKAGES = ["cmake==4.4.4", "ninja==1.13.2"]
+CMAKE_VERSION = "4.4.3"
+_CMAKE_RELEASE = f"https://github.com/Kitware/CMake/releases/download/v{CMAKE_VERSION}"
+CMAKE = {
+    "windows": Download(f"{_CMAKE_RELEASE}/cmake-{CMAKE_VERSION}-windows-x86_64.zip",
+                        "4d52ebab7193a698651639ed80d8d04fd903358843572cf44c7fd234cb7c26ab", 54408599,
+                        f"cmake-{CMAKE_VERSION}-windows-x86_64"),
+    "linux": Download(f"{_CMAKE_RELEASE}/cmake-{CMAKE_VERSION}-linux-x86_64.tar.gz",
+                      "d6c83076c575bc00b823522ac974bda66d0af05d6ddc30e739c12385cf32c6cc", 64872980,
+                      f"cmake-{CMAKE_VERSION}-linux-x86_64"),
+}
+
+NINJA_VERSION = "1.13.2"
+_NINJA_RELEASE = f"https://github.com/ninja-build/ninja/releases/download/v{NINJA_VERSION}"
+NINJA = {
+    "windows": Download(f"{_NINJA_RELEASE}/ninja-win.zip",
+                        "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65", 291570),
+    "linux": Download(f"{_NINJA_RELEASE}/ninja-linux.zip",
+                      "5749cbc4e668273514150a80e387a957f933c6ed3f5f11e03fb30955e2bbead6", 134040),
+}
+
+# Portable git, downloaded on Windows when git isn't installed.
+MINGIT = Download("https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/"
+                  "MinGit-2.55.0.5-64-bit.zip",
+                  "56d7b226b7693196cfc71fef26568f536c4a021ab6c37ff2db4287bed908e96e", 38989688)
