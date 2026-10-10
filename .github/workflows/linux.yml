@@ -1,0 +1,22 @@
+# Checks the Linux side of the installer without game files: fetches the pinned
+# sources, sets up clang-cl + the xwin sysroot, builds the recompiler natively,
+# and checks #include case. (Running it accepts the Microsoft build tools license
+# for the download, as install.py --accept-msvc-license does.)
+name: Linux installer check
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y clang-18 lld-18 llvm-18 python3-venv
+      - name: Sources, toolchain, recompiler
+        run: python3 install.py --prepare-only --accept-msvc-license
+      - name: Include case
+        run: python3 scripts/check_include_case.py

@@ -1,0 +1,21 @@
+# Game data and everything derived from it: never commit or share these.
+*.iso
+*.xex
+/game/
+/ppc/
+/analysis/
+/userdata/
+/mods/*
+!/mods/README.txt
+
+# Downloaded and built by install.py
+/tools/
+/thirdparty/
+/build/
+/xenia/third_party
+
+# Local leftovers
+__pycache__/
+*.orig
+*.pyc
+/config/DAO.gen.toml

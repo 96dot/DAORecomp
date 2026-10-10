@@ -1,0 +1,99 @@
+/**
+ ******************************************************************************
+ * Xenia : Xbox 360 Emulator Research Project                                 *
+ ******************************************************************************
+ * Copyright 2022 Ben Vanik. All rights reserved.                             *
+ * Released under the BSD license - see LICENSE in the root for more details. *
+ ******************************************************************************
+ */
+
+#ifndef XENIA_GPU_SHADERS_EDRAM_XESLI_
+#define XENIA_GPU_SHADERS_EDRAM_XESLI_
+
+#include "pixel_formats.xesli"
+
+#define kXenosMsaaSamples_1X 0u
+#define kXenosMsaaSamples_2X 1u
+#define kXenosMsaaSamples_4X 2u
+
+// `wrap = false` can be used if it's known that the resulting tile indices
+// can't exceed 11 bits, and the modulo operator doesn't need to be performed to
+// access the data in the render targets that are located in both ends of the
+// EDRAM at the same time.
+uint XeEdramOffsetBytes(uint2_xe pixel_index, uint base_tiles, bool wrap,
+                        uint pitch_tiles, uint msaa_samples, bool is_depth,
+                        uint format_ints_log2, uint pixel_sample_index,
+                        uint2_xe resolution_scale) {
+  // Map the pixel and its sample index to canonical sample coordinates.
+  // Views with 1x/2x/4x samples of a single EDRAM allocation have the same
+  // physical samples, just arranged differently in 4x4 sample blocks. This
+  // function, ownership transfer shaders, render target dumping shaders, and
+  // the interlock output code use the following equations.
+  //
+  // u and v as the sample coordinates in the single sampled view:
+  // 4x: u = ((x & ~1) << 1) | (x & 1) | ((s & 1) << 1)
+  //     v = ((y & ~1) << 1) | (y & 1) | (s & 2)
+  // 2x: u = (x & ~2) | (s << 1)
+  //     v = ((y & ~1) << 1) | (y & 1) | (x & 2)
+  //
+  // The bit 0 of 4x sample index is horizontal, and bit 1 is vertical, and
+  // 2x sample 0 is the top one. Some properties of the above equations used by
+  // the layout's users include:
+  // - The offsets of the other samples of a pixel from its sample 0 are
+  //   constant, +2 sample columns for the horizontal (or the only 2x) sample
+  //   bit and +2 sample rows for the vertical one.
+  // - A 64bpp sample is two horizontally adjacent 32bpp sample columns, so a
+  //   32bpp view of a 64bpp allocation has u = 2 * u_64bpp + half, and both
+  //   halves decode to the same sample of two horizontally adjacent pixels in a
+  //   view of any sample count.
+  // - Horizontally adjacent pixels of a multisampled view have no constant
+  //   address stride, the pixel and sample bits are interleaved.
+  //
+  // Titles use the layout when purposedly aliasing memory, such as 5841125E
+  // drawing half-res 4x particles over full-res scenes with swizzle shaders
+  // designed around it and resolve downscaling relying on this sample grouping.
+  //
+  // With resolution scaling, the rearrangement is carried out at guest pixel
+  // granularity, while the host subpixel offset is carried along unchanged.
+  uint2_xe pixel = pixel_index / resolution_scale;
+  uint2_xe subpixel = pixel_index - pixel * resolution_scale;
+  uint2_xe guest_sample;
+  if (msaa_samples >= kXenosMsaaSamples_4X) {
+    uint2_xe sample_offset =
+        (uint_x2_xe(pixel_sample_index) >> uint2_xe(0u, 1u)) & 1u;
+    guest_sample = ((pixel & ~1u) << 1u) | (pixel & 1u) | (sample_offset << 1u);
+  } else if (msaa_samples == kXenosMsaaSamples_2X) {
+    guest_sample.x = (pixel.x & ~2u) | ((pixel_sample_index & 1u) << 1u);
+    guest_sample.y = ((pixel.y & ~1u) << 1u) | (pixel.y & 1u) | (pixel.x & 2u);
+  } else {
+    guest_sample = pixel;
+  }
+  uint2_xe rt_sample_index = guest_sample * resolution_scale + subpixel;
+  // For now, while the actual storage of 64bpp render targets in comparison to
+  // 32bpp is not known, storing 40x16 64bpp samples per tile for simplicity of
+  // addressing in different scenarios.
+  uint2_xe tile_size_at_32bpp = uint2_xe(80u, 16u) * resolution_scale;
+  uint2_xe tile_size_samples =
+      tile_size_at_32bpp >> uint2_xe(format_ints_log2, 0u);
+  uint2_xe tile_offset_xy = rt_sample_index / tile_size_samples;
+  base_tiles += tile_offset_xy.y * pitch_tiles + tile_offset_xy.x;
+  rt_sample_index -= tile_offset_xy * tile_size_samples;
+  if (is_depth) {
+    uint tile_width_half = tile_size_samples.x >> 1u;
+    rt_sample_index.x =
+        uint(int(rt_sample_index.x) +
+             ((rt_sample_index.x >= tile_width_half) ? -int(tile_width_half)
+                                                     : int(tile_width_half)));
+  }
+  uint address =
+      base_tiles * (tile_size_at_32bpp.x * tile_size_at_32bpp.y) +
+      ((rt_sample_index.y * tile_size_samples.x + rt_sample_index.x) <<
+       format_ints_log2);
+  if (wrap) {
+    // EDRAM addressing is periodic (modulo the EDRAM size).
+    address %= tile_size_at_32bpp.x * tile_size_at_32bpp.y * 2048u;
+  }
+  return address << 2;
+}
+
+#endif  // XENIA_GPU_SHADERS_EDRAM_XESLI_

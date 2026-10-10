@@ -1,0 +1,75 @@
+# XenonRecomp config for Dragon Age: Origins (X360, title 454108C0, XDK 2.0.8276)
+[main]
+file_path = "../game/default.xex"
+out_directory_path = "../ppc"
+switch_table_file_path = "DAO_switch_tables.toml"
+
+# Optimizations stay off until the recompilation runs correctly.
+skip_lr = false
+skip_msr = false
+ctr_as_local = false
+xer_as_local = false
+reserved_as_local = false
+cr_as_local = false
+non_argument_as_local = false
+non_volatile_as_local = false
+
+# AUTO-FUNCTIONS (scripts/fix_functions.py)
+functions = [
+    { address = 0x821F62B8, size = 0xD8 },
+    { address = 0x8221E370, size = 0x1AC },
+    { address = 0x82300108, size = 0xB0 },
+    { address = 0x8253FF48, size = 0xA0 },
+    { address = 0x8256D5E8, size = 0x11C },
+    { address = 0x825FE238, size = 0x60 },
+    { address = 0x825FFF80, size = 0x80 },
+    { address = 0x82602738, size = 0x248 },
+    { address = 0x82615540, size = 0x80 },
+    { address = 0x8267A508, size = 0x9C },
+    { address = 0x8269B1F8, size = 0xDC },
+    { address = 0x8271D4A8, size = 0x810 },
+    { address = 0x8271FAB0, size = 0x188 },
+    { address = 0x82720740, size = 0x188 },
+    { address = 0x82721A88, size = 0x318 },
+    { address = 0x82722718, size = 0x108 },
+    { address = 0x82724028, size = 0xDC },
+    { address = 0x82725AB8, size = 0x8C4 },
+    { address = 0x827517B0, size = 0x11C },
+    { address = 0x8276F2F0, size = 0x150 },
+    { address = 0x829CA750, size = 0xA0 },
+    { address = 0x82A25818, size = 0x100 },
+    { address = 0x82A37100, size = 0xD8 },
+    { address = 0x82A90CC8, size = 0x44 },
+    { address = 0x82A90D10, size = 0x44 },
+    { address = 0x82D373B8, size = 0x110 },
+    { address = 0x82D5E548, size = 0x114 },
+    { address = 0x82E1BC08, size = 0x80 },
+    { address = 0x82F17508, size = 0x68 },
+    { address = 0x82F17570, size = 0x64 },
+    { address = 0x82F175D8, size = 0x5C },
+    { address = 0x82F17638, size = 0x198 },
+    { address = 0x82F177D0, size = 0x16C },
+]
+# END AUTO-FUNCTIONS
+
+# Found by byte pattern (scripts/find_helpers.py), one hit each.
+restgprlr_14_address = 0x829CA1E0
+savegprlr_14_address = 0x829CA190
+restfpr_14_address = 0x829CED4C
+savefpr_14_address = 0x829CED00
+restvmx_14_address = 0x83116168
+savevmx_14_address = 0x83115ED0
+restvmx_64_address = 0x831161FC
+savevmx_64_address = 0x83115F64
+
+# longjmp calls RtlUnwind; setjmp follows it (stores f14.. into the jmp_buf).
+longjmp_address = 0x83116400
+setjmp_address = 0x83116840
+
+# Data that sits between functions: exception-handler records (handler, scope data).
+invalid_instructions = [
+    { data = 0x00000000, size = 4 }, # padding
+    { data = 0x829D3630, size = 8 }, # __CxxFrameHandler record
+    { data = 0x8312A1A4, size = 8 }, # __C_specific_handler record
+    { data = 0x00485645, size = 0x13C }, # data block at the end of .text (0x8312AA48-0x8312AB84)
+]

@@ -1,0 +1,37 @@
+/**
+ ******************************************************************************
+ * Xenia : Xbox 360 Emulator Research Project                                 *
+ ******************************************************************************
+ * Copyright 2025. All rights reserved.                                       *
+ * Released under the BSD license - see LICENSE in the root for more details. *
+ ******************************************************************************
+ */
+
+#ifndef XENIA_GPU_SHADERS_XENOS_DRAW_GLSLI_
+#define XENIA_GPU_SHADERS_XENOS_DRAW_GLSLI_
+
+// Tessellation constants for Vulkan tessellation shaders.
+// This is a separate constant buffer dedicated to tessellation, not part of
+// the main system constants, to avoid changing the existing SystemConstants
+// layout.
+//
+// Binding: set 1 (kDescriptorSetConstants), binding 6 (after the existing
+// constant buffers:
+//   0 = System, 1 = FloatVertex, 2 = FloatPixel, 3 = BoolLoop, 4 = Fetch,
+//   5 = ClipPlanes, 6 = Tessellation)
+
+layout(std140, set = 1, binding = 6) uniform XeTessellationConstants {
+  // Tessellation factor range: .x = min, .y = max.
+  // 1.0 is added on the CPU according to Xbox 360 tessellation documentation.
+  // For fractional_even partitioning, minimum factor must be >= 2.0.
+  vec2 xe_tessellation_factor_range;
+  // Padding to align next member to 8 bytes (std140 rules).
+  vec2 xe_tessellation_padding0;
+
+  // Vertex/index processing parameters.
+  uint xe_vertex_index_endian;
+  uint xe_vertex_index_offset;
+  uvec2 xe_vertex_index_min_max;
+};
+
+#endif  // XENIA_GPU_SHADERS_XENOS_DRAW_GLSLI_
