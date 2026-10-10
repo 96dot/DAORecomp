@@ -19,8 +19,8 @@
 #include "xenia/ui/virtual_key.h"
 #include "xenia/ui/windowed_app_context_win.h"
 
-#include <Dbt.h>
-#include <ShellScalingApi.h>
+#include <dbt.h>
+#include <shellscalingapi.h>
 #include <dwmapi.h>
 
 namespace xe {

@@ -16,7 +16,7 @@
 #include "xenia/ui/windowed_app_context.h"
 
 // For per-monitor DPI awareness v1.
-#include <ShellScalingApi.h>
+#include <shellscalingapi.h>
 
 namespace xe {
 namespace ui {

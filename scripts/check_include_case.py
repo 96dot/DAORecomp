@@ -2,6 +2,9 @@
 a build failure on Linux (case-sensitive). Run after install.py has fetched tools/.
 
 usage: check_include_case.py [winsysroot]   (default: tools/winsysroot)
+
+Windows SDK headers are only checked reliably on Linux: xwin names the files
+differently there (and adds lowercase symlinks), so the CI run is the one to trust.
 """
 import os
 import re

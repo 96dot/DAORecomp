@@ -21,7 +21,7 @@
 
 #include "xenia/ui/dxgi_include_win.h"
 
-#include <ShellScalingApi.h>
+#include <shellscalingapi.h>
 
 namespace xe {
 namespace ui {
