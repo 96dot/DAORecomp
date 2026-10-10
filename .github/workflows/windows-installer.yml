@@ -28,4 +28,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/DAORecomp-Installer.exe --generate-notes
+        shell: bash
+        # v0.x tags are marked as pre-releases.
+        run: |
+          flags=""
+          [[ "${{ github.ref_name }}" == v0.* ]] && flags="--prerelease"
+          gh release create "${{ github.ref_name }}" dist/DAORecomp-Installer.exe --generate-notes $flags
