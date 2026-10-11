@@ -111,7 +111,8 @@ namespace dao::kernel
         const int32_t previous = signaled;
         signaled = true;
         SyncGuest();
-        NotifyDispatcher(*this);
+        if (!previous)
+            NotifyDispatcher(*this);
         return previous;
     }
 
@@ -154,7 +155,8 @@ namespace dao::kernel
             return -1;
         count += adjustment;
         SyncGuest();
-        NotifyDispatcher(*this);
+        if (adjustment > 0)
+            NotifyDispatcher(*this);
         return previous;
     }
 
@@ -213,7 +215,8 @@ namespace dao::kernel
         if (recursion == 0)
             owner = nullptr;
         SyncGuest();
-        NotifyDispatcher(*this);
+        if (!owner)
+            NotifyDispatcher(*this);
         return previous;
     }
 
@@ -452,10 +455,24 @@ namespace dao::kernel
         object->SyncGuest();
     }
 
+    // Objects the header maps drop are destroyed after s_headerMutex is released
+    // (~KernelObject locks it).
+    static ObjectRef TakeOwnedLocked(uint32_t header)
+    {
+        ObjectRef owned;
+        if (auto it = s_headerOwned.find(header); it != s_headerOwned.end())
+        {
+            owned = std::move(it->second);
+            s_headerOwned.erase(it);
+        }
+        return owned;
+    }
+
     void BindGuestHeader(const ObjectRef& object, uint32_t header)
     {
+        ObjectRef doomed;
         std::lock_guard lock(s_headerMutex);
-        s_headerOwned.erase(header);
+        doomed = TakeOwnedLocked(header);
         BindLocked(object, header);
     }
 
@@ -464,6 +481,7 @@ namespace dao::kernel
         if (!header)
             return nullptr;
 
+        ObjectRef doomed;
         std::lock_guard lock(s_headerMutex);
         auto* h = Header(header);
         auto it = s_headers.find(header);
@@ -498,14 +516,15 @@ namespace dao::kernel
         }
 
         BindLocked(object, header);
-        s_headerOwned[header] = object;
+        doomed = std::exchange(s_headerOwned[header], object);
         return object;
     }
 
     void ReleaseGuestHeader(uint32_t header)
     {
+        ObjectRef doomed;
         std::lock_guard lock(s_headerMutex);
-        s_headerOwned.erase(header);
+        doomed = TakeOwnedLocked(header);
         s_headers.erase(header);
     }
 
@@ -537,11 +556,11 @@ namespace dao::kernel
             {
                 if (registered)
                     return;
-                registered = true;
                 for (const auto& object : objects)
                     AddWaiter(*object);
                 if (apcThread)
                     AddWaiter(*apcThread);
+                registered = true;
             }
 
             void Remove()
@@ -608,16 +627,13 @@ namespace dao::kernel
             }
             else if (t_waiter.cv.wait_until(lock, deadline) == std::cv_status::timeout)
             {
-                // One last check happens on the next loop iteration only if signaled;
-                // otherwise report the timeout.
-                bool any = false;
+                // Satisfied at the deadline: taken on the next pass.
+                bool satisfied = waitAll;
                 for (const auto& object : objects)
-                    any = any || object->IsSignaled(self);
-                if (!any || waitAll)
-                {
-                    if (!waitAll || !any)
-                        return X_STATUS_TIMEOUT;
-                }
+                    satisfied = waitAll ? satisfied && object->IsSignaled(self)
+                                        : satisfied || object->IsSignaled(self);
+                if (!satisfied)
+                    return X_STATUS_TIMEOUT;
             }
         }
     }
