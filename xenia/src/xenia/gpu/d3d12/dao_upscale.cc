@@ -9,13 +9,13 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <emmintrin.h>
 #include <memory>
 #include <mutex>
 #include <span>
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "xenia/base/cvar.h"
@@ -117,6 +117,113 @@ void FfxMessage(uint32_t type, const wchar_t* message) {
     XELOGW("FSR: {}", text);
   }
 }
+
+// Sum of the floats, in doubles (8 at a time, in an order of its own).
+double SumFloats(const uint32_t* values, size_t count) {
+  const float* floats = reinterpret_cast<const float*>(values);
+  __m128d sums[4] = {_mm_setzero_pd(), _mm_setzero_pd(), _mm_setzero_pd(),
+                     _mm_setzero_pd()};
+  size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    const __m128 low = _mm_loadu_ps(floats + i);
+    const __m128 high = _mm_loadu_ps(floats + i + 4);
+    sums[0] = _mm_add_pd(sums[0], _mm_cvtps_pd(low));
+    sums[1] = _mm_add_pd(sums[1], _mm_cvtps_pd(_mm_movehl_ps(low, low)));
+    sums[2] = _mm_add_pd(sums[2], _mm_cvtps_pd(high));
+    sums[3] = _mm_add_pd(sums[3], _mm_cvtps_pd(_mm_movehl_ps(high, high)));
+  }
+  const __m128d sum = _mm_add_pd(_mm_add_pd(sums[0], sums[1]),
+                                 _mm_add_pd(sums[2], sums[3]));
+  double total = _mm_cvtsd_f64(sum) + _mm_cvtsd_f64(_mm_unpackhi_pd(sum, sum));
+  for (; i < count; ++i) {
+    total += double(floats[i]);
+  }
+  return total;
+}
+
+float HorizontalSum(__m128 v) {
+  const __m128 pairs = _mm_add_ps(v, _mm_movehl_ps(v, v));
+  return _mm_cvtss_f32(
+      _mm_add_ss(pairs, _mm_shuffle_ps(pairs, pairs, _MM_SHUFFLE(1, 1, 1, 1))));
+}
+
+// Sum of the absolute differences of the floats; stops (with the sum so far)
+// once it's not under `limit`, checked every 16 floats.
+float FloatDistance(const uint32_t* a, const uint32_t* b, size_t count,
+                    float limit) {
+  const float* fa = reinterpret_cast<const float*>(a);
+  const float* fb = reinterpret_cast<const float*>(b);
+  const __m128 abs_mask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
+  auto difference = [&](size_t i) {
+    return _mm_and_ps(abs_mask,
+                      _mm_sub_ps(_mm_loadu_ps(fa + i), _mm_loadu_ps(fb + i)));
+  };
+  __m128 sum = _mm_setzero_ps();
+  size_t i = 0;
+  for (; i + 16 <= count; i += 16) {
+    sum = _mm_add_ps(sum, _mm_add_ps(_mm_add_ps(difference(i),
+                                                difference(i + 4)),
+                                     _mm_add_ps(difference(i + 8),
+                                                difference(i + 12))));
+    const float total = HorizontalSum(sum);
+    if (!(total < limit)) {
+      return total;
+    }
+  }
+  for (; i + 4 <= count; i += 4) {
+    sum = _mm_add_ps(sum, difference(i));
+  }
+  float total = HorizontalSum(sum);
+  for (; i < count; ++i) {
+    total += std::abs(fa[i] - fb[i]);
+  }
+  return total;
+}
+
+// A set of 64-bit hashes, cleared without freeing (open addressing).
+class HashSet {
+ public:
+  // Whether `hash` wasn't in the set yet.
+  bool insert(uint64_t hash) {
+    // 0 marks free slots.
+    hash |= uint64_t(hash == 0);
+    if ((size_ + 1) * 2 > slots_.size()) {
+      Grow();
+    }
+    const size_t mask = slots_.size() - 1;
+    for (size_t i = size_t(hash) & mask;; i = (i + 1) & mask) {
+      if (slots_[i] == hash) {
+        return false;
+      }
+      if (!slots_[i]) {
+        slots_[i] = hash;
+        ++size_;
+        return true;
+      }
+    }
+  }
+  void clear() {
+    if (size_) {
+      std::fill(slots_.begin(), slots_.end(), 0);
+      size_ = 0;
+    }
+  }
+
+ private:
+  void Grow() {
+    std::vector<uint64_t> old = std::move(slots_);
+    slots_.assign(std::max<size_t>(old.size() * 2, 1024), 0);
+    size_ = 0;
+    for (uint64_t hash : old) {
+      if (hash) {
+        insert(hash);
+      }
+    }
+  }
+
+  std::vector<uint64_t> slots_;
+  size_t size_ = 0;
+};
 
 }  // namespace
 
@@ -390,8 +497,13 @@ class DaoUpscalerImpl {
   std::vector<uint32_t> motion_constant_data_[2];
   uint32_t motion_frame_ = 0;
   // The previous frame's draws, in order of key, then constants_sum.
-  std::vector<const MotionDraw*> previous_motion_draws_;
-  std::unordered_set<uint64_t> motion_seen_;
+  struct MotionCandidate {
+    uint64_t key;
+    double constants_sum;
+    const MotionDraw* draw;
+  };
+  std::vector<MotionCandidate> previous_motion_draws_;
+  HashSet motion_seen_;
   // The constants of the current draw (kept to reuse the allocation).
   std::vector<uint32_t> motion_constants_;
   uint32_t stream_out_used_ = 0;
@@ -1237,30 +1349,30 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   const uint64_t constants_hash =
       XXH3_64bits(constants.data(), constants.size() * sizeof(uint32_t));
   // Drawn again for the second tile.
-  if (!motion_seen_.insert(key ^ (constants_hash * 0x9E3779B97F4A7C15ull))
-           .second) {
+  if (!motion_seen_.insert(key ^ (constants_hash * 0x9E3779B97F4A7C15ull))) {
     return;
   }
 
   // The previous frame's draw of it: the one with the closest constants (sum
   // of absolute differences). Searched from the closest constants_sum
   // outwards, until the difference of the sums alone is too much.
-  double constants_sum = 0.0;
-  for (uint32_t value : constants) {
-    constants_sum += double(std::bit_cast<float>(value));
-  }
+  double constants_sum = SumFloats(constants.data(), constants.size());
   if (!std::isfinite(constants_sum)) {
     constants_sum = INFINITY;
   }
   const MotionDraw* previous = nullptr;
   const auto first = std::lower_bound(
       previous_motion_draws_.begin(), previous_motion_draws_.end(), key,
-      [](const MotionDraw* draw, uint64_t key) { return draw->key < key; });
+      [](const MotionCandidate& candidate, uint64_t key) {
+        return candidate.key < key;
+      });
   const auto last = std::upper_bound(
       first, previous_motion_draws_.end(), key,
-      [](uint64_t key, const MotionDraw* draw) { return key < draw->key; });
+      [](uint64_t key, const MotionCandidate& candidate) {
+        return key < candidate.key;
+      });
   if (first != last) {
-    const std::span<const MotionDraw* const> candidates(first, last);
+    const std::span<const MotionCandidate> candidates(first, last);
     const uint32_t* previous_constants =
         motion_constant_data_[motion_frame_ ^ 1].data();
     float best_distance = INFINITY;
@@ -1276,17 +1388,9 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
         best_distance = 0.0f;
         return;
       }
-      const uint32_t* candidate_constants =
-          previous_constants + candidate.constants_offset;
-      float distance = 0.0f;
-      for (size_t i = 0; i < constants.size(); ++i) {
-        distance += std::abs(std::bit_cast<float>(constants[i]) -
-                             std::bit_cast<float>(candidate_constants[i]));
-        // Checked every 16 floats (4 registers).
-        if ((i & 15) == 15 && !(distance < best_distance)) {
-          return;
-        }
-      }
+      const float distance = FloatDistance(
+          constants.data(), previous_constants + candidate.constants_offset,
+          constants.size(), best_distance);
       if (distance < best_distance) {
         best_distance = distance;
         previous = &candidate;
@@ -1294,9 +1398,9 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     };
     if (constants_sum == INFINITY) {
       // Only the same constants (the distance to any others isn't finite).
-      for (const MotionDraw* candidate : candidates) {
-        if (candidate->constants_hash == constants_hash) {
-          try_candidate(*candidate);
+      for (const MotionCandidate& candidate : candidates) {
+        if (candidate.draw->constants_hash == constants_hash) {
+          try_candidate(*candidate.draw);
           if (previous) {
             break;
           }
@@ -1305,14 +1409,15 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     } else {
       size_t above = size_t(
           std::lower_bound(candidates.begin(), candidates.end(), constants_sum,
-                           [](const MotionDraw* draw, double sum) {
-                             return draw->constants_sum < sum;
+                           [](const MotionCandidate& candidate,
+                              double sum) {
+                             return candidate.constants_sum < sum;
                            }) -
           candidates.begin());
       size_t below = above;
       // With some slack for the rounding of the float distances.
-      auto out_of_reach = [&](const MotionDraw* candidate) {
-        return std::abs(candidate->constants_sum - constants_sum) >
+      auto out_of_reach = [&](const MotionCandidate& candidate) {
+        return std::abs(candidate.constants_sum - constants_sum) >
                double(best_distance) * 1.001 + 1e-3;
       };
       while (best_distance > 0.0f) {
@@ -1323,12 +1428,12 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
           break;
         }
         // The nearer sum first.
-        if (up && (!down || candidates[above]->constants_sum - constants_sum <=
+        if (up && (!down || candidates[above].constants_sum - constants_sum <=
                                 constants_sum -
-                                    candidates[below - 1]->constants_sum)) {
-          try_candidate(*candidates[above++]);
+                                    candidates[below - 1].constants_sum)) {
+          try_candidate(*candidates[above++].draw);
         } else {
-          try_candidate(*candidates[--below]);
+          try_candidate(*candidates[--below].draw);
         }
       }
     }
@@ -2026,12 +2131,12 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   // reading them are executed at this swap).
   previous_motion_draws_.clear();
   for (const MotionDraw& draw : motion_draws) {
-    previous_motion_draws_.push_back(&draw);
+    previous_motion_draws_.push_back({draw.key, draw.constants_sum, &draw});
   }
   std::sort(previous_motion_draws_.begin(), previous_motion_draws_.end(),
-            [](const MotionDraw* a, const MotionDraw* b) {
-              return a->key != b->key ? a->key < b->key
-                                      : a->constants_sum < b->constants_sum;
+            [](const MotionCandidate& a, const MotionCandidate& b) {
+              return a.key != b.key ? a.key < b.key
+                                    : a.constants_sum < b.constants_sum;
             });
   motion_frame_ ^= 1;
   motion_draws_[motion_frame_].clear();
