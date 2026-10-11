@@ -21,7 +21,11 @@ set(DAO_XENIA_THIRD_PARTY ${DAO_TOOLS_ROOT}/xenia-canary/third_party)
 set(DAO_PPC_DIR ${CMAKE_SOURCE_DIR}/ppc CACHE PATH "XenonRecomp output directory")
 
 # Same baseline as UnleashedRecomp: AVX-capable x86-64.
-add_compile_options(-march=sandybridge)
+set(DAO_MARCH "sandybridge" CACHE STRING "Target CPU (-march), e.g. x86-64-v3")
+add_compile_options(-march=${DAO_MARCH})
+# No fused multiply-adds where the code has none (the same float results on
+# every target).
+add_compile_options(/clang:-ffp-contract=off)
 
 # Xenia's GPU/UI/base (vendored, patched). Comes first so its fmt and xxhash
 # targets are the ones XenonUtils picks up.

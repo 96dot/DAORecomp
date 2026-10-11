@@ -12,6 +12,7 @@
 /tools/
 /thirdparty/
 /build/
+/build-*/
 /xenia/third_party
 
 # Local leftovers
