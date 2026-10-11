@@ -103,9 +103,9 @@ namespace dao::kernel
     // Samples a guest thread's host stack every millisecond for `milliseconds` and
     // writes one "host stack:" line per sample to `out` (see scripts/profile.py).
     void ProfileThread(uint32_t threadId, int milliseconds, const std::filesystem::path& out);
-    // Up to `count` return addresses from `context` (unwound through .pdata), as
-    // " <offset from the exe base>" each, for scripts/symbolize.py. Stops early,
-    // without failing, if the stack can't be read.
+    // Up to `count` return addresses from `context` (unwound in place through
+    // .pdata), as " <offset from the exe base>" each, for scripts/symbolize.py.
+    // Stops early, without failing, if the stack can't be read.
     std::string UnwindHostStack(CONTEXT& context, int count);
     void ForEachThread(const std::function<void(GuestThread&)>& fn);
 

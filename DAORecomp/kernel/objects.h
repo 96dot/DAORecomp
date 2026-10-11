@@ -164,8 +164,12 @@ namespace dao::kernel
     uint32_t WaitSingle(const ObjectRef& object, const int64_t* timeout, bool alertable);
     uint32_t DelayExecution(const int64_t* timeout, bool alertable);
     // Sleeps for about `microseconds` (Sleep can't go below a millisecond), for
-    // waiting on something without keeping a core busy.
+    // waiting on something without keeping a core busy; yields instead if no
+    // waitable timer is available.
     void ShortSleep(uint32_t microseconds);
+    // How long the game's busy-wait loops sleep between their checks: short
+    // next to a frame, so the waits end about as soon as when spinning.
+    constexpr uint32_t kSpinSleepMicroseconds = 100;
 
     // 100 ns system time (FILETIME epoch) and conversions.
     uint64_t SystemTime100ns();

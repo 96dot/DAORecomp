@@ -1,13 +1,14 @@
 // DAO: motion vectors for FSR. Each scene draw's vertex shader was run again
 // with stream output and without jitter (dao_upscale.cc), giving the
 // clip-space position of every vertex now; the position one frame ago is what
-// the matching draw of the previous frame wrote. This pass draws those triangles again into
-// the motion vector target, keeping only the pixels where they are the visible
-// surface in the scene depth. The scene depth is also in the depth buffer, so
-// the depth test can reject most of the hidden pixels before the pixel shader
-// (conservatively: the vertex shader moves the triangles towards the camera by
-// a bit more than the tolerance, and the slope-scaled depth bias by twice the
-// larger of the x and y slopes, while the pixel shader allows their sum).
+// the matching draw of the previous frame wrote. This pass draws those
+// triangles again into the motion vector target, keeping only the pixels where
+// they are the visible surface in the scene depth. The scene depth is also in
+// the depth buffer, so the depth test can reject most of the hidden pixels
+// before the pixel shader (conservatively: the vertex shader moves the
+// triangles towards the camera by a bit more than the tolerance, and the
+// slope-scaled depth bias by twice the larger of the x and y slopes, while the
+// pixel shader allows their sum).
 ByteAddressBuffer dao_mv_positions : register(t0);
 ByteAddressBuffer dao_mv_previous_positions : register(t1);
 Texture2D<float> dao_mv_scene_depth : register(t2);

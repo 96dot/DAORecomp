@@ -1175,8 +1175,8 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   }
   // Same shaders, vertex and index data, size and primitive type (and strip
   // cuts): the same object, with its positions written the same way.
-  const bool strip_cuts =
-      description.strip_cut_index != PipelineCache::PipelineStripCutIndex::kNone;
+  const bool strip_cuts = description.strip_cut_index !=
+                          PipelineCache::PipelineStripCutIndex::kNone;
   uint64_t key_data[5] = {
       vertex_shader.ucode_data_hash(), motion_pixel_shader_,
       indexed ? regs.values[XE_GPU_REG_VGT_DMA_BASE] : 0, 0,
