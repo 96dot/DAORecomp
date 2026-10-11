@@ -5,8 +5,8 @@
 // and served in place of the override path, above the disc and the mods. The
 // engine reads loose files in packages/core/override before its archives.
 #include "stdafx.h"
-#include "ui/graphics_menu.h"
 #include "ui/erf.h"
+#include "ui/graphics_menu.h"
 #include "ui/graphics_tab_as.h"
 #include "kernel/vfs.h"
 
@@ -26,7 +26,8 @@ namespace dao::ui
         constexpr uint16_t kHeaderSprite = 387;
         constexpr std::string_view kHeaderLabel = "LabelGameplay_mc";
         constexpr std::string_view kHeaderExport = "DAORecomp_SectionHeader";
-        // Far more than the movie (about 330 KB unpacked); bounds what's read.
+        // Far more than the movie (about 330 KB unpacked); bounds what's read and
+        // what it unpacks to.
         constexpr uint32_t kMaxMovieSize = 64u << 20;
         // What a movie may unpack to beyond its header's length, which is only a
         // hint (the game's unpack to a few KB more).
@@ -40,11 +41,6 @@ namespace dao::ui
         uint16_t Read16(std::span<const uint8_t> data, size_t at)
         {
             return uint16_t(data[at] | data[at + 1] << 8);
-        }
-
-        uint32_t Read32(std::span<const uint8_t> data, size_t at)
-        {
-            return data[at] | data[at + 1] << 8 | data[at + 2] << 16 | uint32_t(data[at + 3]) << 24;
         }
 
         void Append16(std::vector<uint8_t>& out, uint16_t value)
@@ -104,7 +100,7 @@ namespace dao::ui
             {
                 if (at + 6 > data.size())
                     return std::nullopt;
-                tag.bodySize = Read32(data, at + 2);
+                tag.bodySize = ReadLE32(data, at + 2);
                 tag.headerSize = 6;
             }
             if (tag.bodySize > data.size() - at - tag.headerSize)
@@ -130,12 +126,12 @@ namespace dao::ui
                 error = "not a Scaleform movie";
                 return std::nullopt;
             }
-            const uint32_t size = Read32(file, 4);
+            const uint32_t size = ReadLE32(file, 4);
             std::vector<uint8_t> unpacked;
             std::span<const uint8_t> movie = file;
             if (file[0] == 'C')
             {
-                const uint32_t hint = std::min(size - std::min<uint32_t>(size, 8), kMaxMovieSize);
+                const uint32_t hint = std::min(size - std::min<uint32_t>(size, 8), kMaxMovieSize - kMovieSizeSlack);
                 auto body = Inflate(file.subspan(8), hint, kMovieSizeSlack);
                 if (!body)
                 {

@@ -82,8 +82,10 @@ saves, logs, the shader cache, and the Options menu it generates) and `mods/`.
 
 - **Windows:** run `DAORecomp.exe` in the install folder. The launcher opens first
   (hold Shift while starting to show it when it is turned off). It is drawn with the
-  title screen and menu art from your copy of the game (`guiexport.erf`), and works
-  with a mouse, the keyboard or a gamepad.
+  title screen and menu art from your copy of the game (`guiexport.erf`, read at
+  startup; none of it is shipped), falling back to plain shapes without it, and uses
+  Windows' serif fonts (Palatino Linotype, Georgia or Times New Roman). It works with
+  a mouse, the keyboard or a gamepad.
 - **Linux:** the program is a Windows executable; run it with Wine or Proton.
   - Steam: *Add a Non-Steam Game* → `DAORecomp.exe`, then in its properties force a
     Proton version (Proton includes vkd3d-proton for Direct3D 12).
@@ -130,7 +132,8 @@ start, so this happens once per place.
     kind of draw and per shader pair, every 300 frames (`GT` lines; slows rendering).
   - `DAO_DRED=1`: when the GPU device is lost, the operations it was running and the
     memory it faulted on (Direct3D 12 DRED).
-  - `DAO_LAUNCHER_SCREENSHOTS=<folder>`: saves each launcher view as a BMP and quits.
+  - `DAO_LAUNCHER_SCREENSHOTS=<folder>`: saves each launcher view (the title screen,
+    the four Configure tabs, Mods) as `launcher_0.bmp` to `launcher_5.bmp` and quits.
 
 Never commit game files or anything generated from them (`game/`, `ppc/`, `analysis/`,
 built executables); `.gitignore` excludes them.
