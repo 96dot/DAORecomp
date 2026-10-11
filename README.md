@@ -184,7 +184,10 @@ start, so this happens once per place.
   updated executable, and the analysis scripts take `DAO_VARIANT=tu6`.
 - `scripts/stfs.py` lists and extracts Xbox 360 packages (`info`/`extract`); the
   installer uses it. `DAORecomp/content/stfs.cpp` is the same reader for the launcher
-  (which has no Python): keep the two in step.
+  (which has no Python): keep the two in step. `scripts/test_stfs.py` tests both on
+  packages it makes (pass `build/DAORecomp/DAORecomp.exe` for the C++ one; CI runs the
+  Python one), and `scripts/check_constants.py` checks that the IDs and the title
+  update's hash in `installer/deps.py` match the program's.
 - `scripts/` also has the development tools used to analyse the game and build the
   shaders (`build_xenia_shaders.py` needs FXC from the Windows SDK and xenia-canary's
   FidelityFX-CAS/FSR submodules; the compiled shaders are committed).
@@ -208,6 +211,8 @@ start, so this happens once per place.
   - `DAO_LAUNCHER_DROP=<path>|<path>...`: with `DAO_LAUNCHER_SCREENSHOTS`, adds those
     as if dropped on the window (tests adding mods and installing packages).
   - `DAO_BUILD=disc`: runs the disc's build even when Title Update 6 is installed.
+  - `DAO_EXTRACT_PACKAGE=<package>|<new folder>`: extracts an Xbox 360 package as the
+    launcher does, prints the outcome and quits (used by `scripts/test_stfs.py`).
   - `DAO_CONVERT_MOD=<mod folder>`: converts that PC mod as the launcher's Convert does,
     logs the outcome to `userdata/dao.log` and quits (tests the converter).
   - `DAO_TEST_KEYBOARD=<seconds>`: shows the on-screen keyboard that long after the

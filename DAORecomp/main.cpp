@@ -7,6 +7,7 @@
 #include "gpu/xenia_host.h"
 #include "apu/audio_output.h"
 #include "input/input.h"
+#include "content/stfs.h"
 #include "launcher/launcher.h"
 #include "mods/mods.h"
 #include "mods/convert/convert.h"
@@ -210,6 +211,27 @@ int main(int argc, char** argv)
             LOGI("Convert: {}", note);
         LOGI("Convert: {} files, {}", result.files, result.converted ? "done" : "nothing changed");
         return result.converted ? 0 : 1;
+    }
+
+    // DAO_EXTRACT_PACKAGE=<package>|<new folder>: extracts an Xbox 360 package as the
+    // launcher does and exits (scripts/test_stfs.py tests the reader with it).
+    if (const wchar_t* spec = _wgetenv(L"DAO_EXTRACT_PACKAGE"))
+    {
+        const std::wstring_view text(spec);
+        const size_t bar = text.find(L'|');
+        std::string error = bar == text.npos ? "no folder given" : "";
+        if (error.empty())
+        {
+            const auto package = dao::content::StfsPackage::Open(fs::path(text.substr(0, bar)), error);
+            const fs::path into(text.substr(bar + 1));
+            std::error_code ec;
+            if (package && !fs::create_directory(into, ec))
+                error = "can't create the folder";
+            else if (package)
+                package->Extract(into, {}, error);
+        }
+        LOGI("Package: {}", error.empty() ? "ok" : error);
+        return error.empty() ? 0 : 1;
     }
 
     if (dao::launcher::ShouldShow(argc, argv, userRoot) &&
