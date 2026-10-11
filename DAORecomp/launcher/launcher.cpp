@@ -59,8 +59,9 @@ namespace dao::launcher
 
         // The title screen (startmenu2.gfx). Its background is a clip at kSceneX,
         // kSceneY on the stage, scaled by kSceneScale; the game shows it kSceneDrop
-        // lower (its title-safe anchoring). Positions are on the stage unless they're
-        // in the clip.
+        // lower (its title-safe anchoring), so the scene's layers are all drawn that
+        // much lower, but not the logo or the menu. Positions are on the stage unless
+        // they're in the clip.
         constexpr float kSceneScale = 2.0f / 3.0f, kSceneX = 0.1f, kSceneY = -40.2f, kSceneDrop = 13.0f;
         // The clouds: a strip of tiles (a, b, c, a; positions in the clip) scrolling
         // left, wrapping every kCloudLoop pixels in 900 s. Over them cloud2 is
@@ -145,8 +146,9 @@ namespace dao::launcher
         constexpr Layer kLogo = { "startmenu2_I11A", 642.9f, 109.0f };
         constexpr const char* kOrigins = "startmenu2_I10F";
         constexpr float kOriginsRight = 1178.8f, kOriginsY = 212.0f;
-        // Without the logo's art: the title's size.
-        constexpr float kTitleTextSize = 64.0f;
+        // Without the logo's art: the title's size, its top below the logo's, and the
+        // subtitle's size relative to it.
+        constexpr float kTitleTextSize = 64.0f, kTitleDrop = 20.0f, kSubtitleScale = 0.45f;
         // The menu: items right-aligned at kMenuRight, clickable from kMenuHitLeft; the
         // game's highlight bars (rolled over, pressed) behind the selected item, their
         // left end at kMenuBarX and middle at the item's.
@@ -154,6 +156,8 @@ namespace dao::launcher
         constexpr const char* kMenuBarDown = "startmenu2_I101";
         constexpr float kMenuBarX = 766.0f, kMenuBarHalfHeight = 31.0f, kMenuHitLeft = 846.0f;
         constexpr float kMenuRight = 1170.0f, kMenuTop = 385.0f, kMenuStep = 34.0f, kMenuTextSize = 24.0f;
+        // Without the bars' art: a band fading in from the left, this high and dark.
+        constexpr float kMenuBandHalfHeight = 14.0f, kMenuBandOpacity = 0.8f;
 
         // The textures made from the game's art for the scene's blending, by name.
         constexpr const char* kGlowWhite = "glow (white)";
@@ -164,6 +168,8 @@ namespace dao::launcher
         // The Options screen (optionsmenu.gfx).
         constexpr const char* kPanelBackground = "OptionsMenu_I200";
         constexpr float kPanelBackgroundAlpha = 0.92f;
+        // How much the title screen behind it is darkened.
+        constexpr float kPanelSceneDim = 0.45f;
         constexpr Layer kHeaderBar = { "OptionsMenu_I1D6", 486.6f, 38.5f };
         constexpr Layer kHeaderFlourish = { "OptionsMenu_I1DE", 466.6f, 23.0f, 0.3f };
         constexpr float kHeaderTitleX = 1000.0f, kHeaderTitleY = 71.5f, kHeaderTitleSize = 34.0f;
@@ -172,7 +178,7 @@ namespace dao::launcher
         constexpr const char* kTabBar = "OptionsMenu_I1F7";
         constexpr float kTabBarRight = 547.3f, kTabBarHalfHeight = 31.0f, kTabTop = 89.0f, kTabStep = 34.0f,
                         kTabTextX = 258.0f, kTabTextSize = 22.0f;
-        constexpr float kBumperGap = 40.0f, kBumperSize = 26.0f, kBumperStep = 62.0f;
+        constexpr float kBumperGap = 40.0f, kBumperSize = 26.0f, kBumperStep = 62.0f, kBumperOpacity = 0.8f;
         constexpr const char* kSectionBar = "OptionsMenu_I17E";
         // The footer: a bar stretched under the button hints.
         constexpr const char* kFooterBar = "OptionsMenu_I203";
@@ -437,10 +443,10 @@ namespace dao::launcher
             const float size = kTitleTextSize * layout.fit;
             const char* title = "DRAGON AGE";
             const ImVec2 extent = font->CalcTextSizeA(size, FLT_MAX, 0, title);
-            const ImVec2 at = layout.Right(kOriginsRight, kLogo.y + 20.0f);
+            const ImVec2 at = layout.Right(kOriginsRight, kLogo.y + kTitleDrop);
             ShadowText(draw, st, font, size, ImVec2(at.x - extent.x, at.y), kText, title);
             const char* subtitle = "O R I G I N S";
-            const float subtitleSize = size * 0.45f;
+            const float subtitleSize = size * kSubtitleScale;
             const ImVec2 subtitleExtent = font->CalcTextSizeA(subtitleSize, FLT_MAX, 0, subtitle);
             ShadowText(draw, st, font, subtitleSize, ImVec2(at.x - subtitleExtent.x, at.y + size), kText, subtitle);
         }
@@ -487,10 +493,12 @@ namespace dao::launcher
                 if (const Texture* art = Art(st, down ? kMenuBarDown : kMenuBar))
                     DrawSprite(draw, *art, bar, layout.fit, shown * st.fade);
                 else
-                    draw->AddRectFilledMultiColor(ImVec2(bar.x, layout.Y(centerY - 14.0f)),
-                        ImVec2(layout.pos.x + layout.size.x, layout.Y(centerY + 14.0f)), IM_COL32_BLACK_TRANS,
-                        WithAlpha(IM_COL32_BLACK, 0.8f * shown * st.fade),
-                        WithAlpha(IM_COL32_BLACK, 0.8f * shown * st.fade), IM_COL32_BLACK_TRANS);
+                {
+                    const ImU32 dark = WithAlpha(IM_COL32_BLACK, kMenuBandOpacity * shown * st.fade);
+                    draw->AddRectFilledMultiColor(ImVec2(bar.x, layout.Y(centerY - kMenuBandHalfHeight)),
+                        ImVec2(layout.pos.x + layout.size.x, layout.Y(centerY + kMenuBandHalfHeight)),
+                        IM_COL32_BLACK_TRANS, dark, dark, IM_COL32_BLACK_TRANS);
+                }
             }
             ImFont* font = st.menuFont;
             const float size = kMenuTextSize * layout.fit;
@@ -565,16 +573,19 @@ namespace dao::launcher
         void Section(const char* title)
         {
             const State& st = *g_state;
-            ImGui::Dummy(ImVec2(0, 6 * st.scale));
+            // Space above; the bar's height (in lines) and its text's inset; without the
+            // bar's art, the width of its gold fade.
+            constexpr float kSpaceAbove = 6.0f, kBarLines = 1.6f, kInset = 10.0f, kFallbackWidth = 360.0f;
+            ImGui::Dummy(ImVec2(0, kSpaceAbove * st.scale));
             const ImVec2 at = ImGui::GetCursorScreenPos();
             ImFont* font = st.headingFont;
-            const float height = font->FontSize * 1.6f, inset = 10.0f * st.scale;
+            const float height = font->FontSize * kBarLines, inset = kInset * st.scale;
             ImDrawList* draw = ImGui::GetWindowDrawList();
             if (const Texture* bar = Art(st, kSectionBar))
                 DrawStretched(draw, *bar, ImVec2(at.x - inset, at.y),
                     ImVec2(at.x - inset + bar->width * height / bar->height, at.y + height), st.fade);
             else
-                draw->AddRectFilledMultiColor(at, ImVec2(at.x + 360 * st.scale, at.y + height),
+                draw->AddRectFilledMultiColor(at, ImVec2(at.x + kFallbackWidth * st.scale, at.y + height),
                     WithAlpha(kGold, 0.6f * st.fade), IM_COL32_BLACK_TRANS, IM_COL32_BLACK_TRANS,
                     WithAlpha(kGold, 0.6f * st.fade));
             ShadowText(draw, st, font, font->FontSize, ImVec2(at.x + inset, at.y + (height - font->FontSize) * 0.5f),
@@ -1023,10 +1034,10 @@ namespace dao::launcher
             const float bumper = kBumperSize * layout.fit;
             const ImVec2 bumpers = layout.Left(kTabTextX, kTabTop + kTabStep * kConfigureTabs + kBumperGap);
             if (const Texture* lb = Art(st, kButtonLB))
-                DrawSprite(draw, *lb, bumpers, bumper / lb->height, 0.8f * st.fade);
+                DrawSprite(draw, *lb, bumpers, bumper / lb->height, kBumperOpacity * st.fade);
             if (const Texture* rb = Art(st, kButtonRB))
                 DrawSprite(draw, *rb, ImVec2(bumpers.x + kBumperStep * layout.fit, bumpers.y), bumper / rb->height,
-                    0.8f * st.fade);
+                    kBumperOpacity * st.fade);
 
             ShowContents(st, layout, kConfigureLeft, kTabs[st.configureTab].contents, st.configureTab != previous);
         }
@@ -1143,11 +1154,13 @@ namespace dao::launcher
                      kButtonRB })
                 names.push_back(name);
             std::ranges::sort(names);
-            names.erase(std::unique(names.begin(), names.end()), names.end());
+            const auto duplicates = std::ranges::unique(names);
+            names.erase(duplicates.begin(), duplicates.end());
             return names;
         }
 
-        // The warm overlay: a vertical gradient over the stage, multiplied in.
+        // The warm overlay: a vertical gradient over the stage, multiplied in. Smooth,
+        // so a few rows scaled up bilinearly do.
         void AddWarmOverlay(State& st, SDL_Renderer* renderer)
         {
             constexpr int kRows = 128;
@@ -1164,7 +1177,8 @@ namespace dao::launcher
             AddTexture(st, renderer, kWarmOverlay, 1, kRows, warm.data(), SDL_BLENDMODE_MUL);
         }
 
-        // The vignette: black, its alpha rising from the inner circle to the outer.
+        // The vignette: black, its alpha rising from the inner circle to the outer. At a
+        // tenth of its size in the clip, scaled up bilinearly.
         void AddVignetteMask(State& st, SDL_Renderer* renderer)
         {
             constexpr int kWidth = 192, kHeight = 120;
@@ -1250,9 +1264,12 @@ namespace dao::launcher
             return true;
         }
 
+        // The window: 16:9 like the game's screens, at the display's scale; resizable
+        // down to a size the menus still fit.
+        constexpr float kWindowWidth = 1120.0f, kWindowHeight = 630.0f, kMinWidth = 800.0f, kMinHeight = 450.0f;
         const float scale = std::max(1.0f, SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay()));
-        SDL_Window* window = SDL_CreateWindow("Dragon Age: Origins - Launcher", int(1120 * scale), int(630 * scale),
-            SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        SDL_Window* window = SDL_CreateWindow("Dragon Age: Origins - Launcher", int(kWindowWidth * scale),
+            int(kWindowHeight * scale), SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
         SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
         if (!renderer)
         {
@@ -1262,7 +1279,7 @@ namespace dao::launcher
             SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
             return true;
         }
-        SDL_SetWindowMinimumSize(window, int(800 * scale), int(450 * scale));
+        SDL_SetWindowMinimumSize(window, int(kMinWidth * scale), int(kMinHeight * scale));
         SDL_SetRenderVSync(renderer, 1);
 
         IMGUI_CHECKVERSION();
@@ -1379,7 +1396,7 @@ namespace dao::launcher
             st.fade = st.screenshotDir.empty()
                 ? std::clamp(float(ImGui::GetTime() - st.viewStart) / kFadeSeconds, 0.0f, 1.0f)
                 : 1.0f;
-            DrawScene(st, layout, view == View::Main ? 0.0f : 0.45f);
+            DrawScene(st, layout, view == View::Main ? 0.0f : kPanelSceneDim);
             switch (view)
             {
             case View::Main:

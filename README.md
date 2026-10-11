@@ -85,7 +85,7 @@ saves, logs, the shader cache, and the Options menu it generates) and `mods/`.
   title screen and menu art from your copy of the game (`guiexport.erf`, read at
   startup; none of it is shipped), falling back to plain shapes without it, and uses
   Windows' serif fonts (Palatino Linotype, Georgia or Times New Roman). It works with
-  a mouse, the keyboard or a gamepad.
+  a mouse, the keyboard or a gamepad (Start plays).
 - **Linux:** the program is a Windows executable; run it with Wine or Proton.
   - Steam: *Add a Non-Steam Game* → `DAORecomp.exe`, then in its properties force a
     Proton version (Proton includes vkd3d-proton for Direct3D 12).
