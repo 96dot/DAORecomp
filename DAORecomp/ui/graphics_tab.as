@@ -9,6 +9,8 @@
 //   ExternalCommands.GetNumber("DAORecomp.Pending.<Key>")  1 if it needs a restart
 //   ExternalCommands.SendMessage("DAORecomp.Set <Key> <value>")
 //   ExternalCommands.SendMessage("DAORecomp.RestoreDefaults")
+//   ExternalCommands.SendMessage("DAORecomp.OpenMods")  ends the game for the
+//       launcher's Mods page (returns only if the launcher can't be started)
 // The keys and their values are those of DAORecomp/ui/graphics_menu.cpp.
 
 // OptionsMenu.ms_nCurrentTab on this tab (the engine's tabs are 0 to 4).
@@ -16,6 +18,8 @@ var GRAPHICS_TAB = 64;
 // Sprite 387 of the movie (a section header bar with its label), exported under
 // this name by the runtime's patch.
 var HEADER_SYMBOL = "DAORecomp_SectionHeader";
+// The menu's push button (View EULA, Change Storage Device on the Online tab).
+var BUTTON_SYMBOL = "Btn_StorageDev";
 
 // Positions in the tab, as in the game's own tabs.
 var HEADER_X = 32;
@@ -23,17 +27,22 @@ var CHECKBOX_X = 53;
 var PICKER_X = 55.9;
 var PICKER_LABEL_X = 81;
 var SLIDER_X = 88.65;
-// Row heights: a header, a checkbox, a slider, a picker (its label above it).
+var BUTTON_X = 53;
+// Row heights: a header, a checkbox, a slider, a picker (its label above it), a button.
 var HEADER_STEP = 52;
 var TOGGLE_STEP = 33;
 var SLIDER_STEP = 64;
 var PICKER_STEP = 70;
+var BUTTON_STEP = 46;
 var PICKER_BELOW_LABEL = 19.45;
 // The game's click sounds (m_nSoundType) of checkboxes and tabs.
 var CHECKBOX_SOUND = 96;
 var TAB_SOUND = 126;
 // The sliders' steps (0 to 10), as graphics_menu.cpp's kSliderSteps.
 var SLIDER_STEPS = 10;
+// How long the engine gets to write the options committed before Manage mods
+// closes the game, in milliseconds.
+var COMMIT_WAIT = 500;
 
 function Nits(values) {
     var labels = new Array();
@@ -46,9 +55,33 @@ function Nits(values) {
 var HDR_PAPER_WHITE = [80, 100, 120, 160, 200, 250, 300, 400];
 var HDR_PEAK = [400, 600, 800, 1000, 1500, 2000, 3000, 4000];
 
-// The rows in order: a header, or a setting shown as a picker (values and their
-// labels), a checkbox (toggle) or a slider. A value not in a picker's list (from
-// config.toml, such as a resolution scale above 4) shows as the closest one.
+// Manage mods: the game closes for the launcher's Mods page, once the player
+// agrees. The menu's options (the other tabs' too) are committed first, as
+// leaving the menu does. (Defined before ROWS: as2c assigns functions in order.)
+function OpenMods() {
+    var text = "Close the game and open the launcher's Mods page?\n\n"
+        + "Any unsaved progress will be lost.";
+    Popups.ShowDialogBox(text, Localization.GetString(325483), function() {
+        ExternalCommands.SendMessageArgs("GUI.DialogBoxClosed");
+        ExternalCommands.SendMessage("ClientOptions.CommitOptions");
+        var timer = setInterval(function() {
+            clearInterval(timer);
+            ExternalCommands.SendMessage("DAORecomp.OpenMods");
+            // Still here: the launcher couldn't be started.
+            Popups.ShowDialogBox("The launcher couldn't be started (see userdata/dao.log).",
+                Localization.GetString(325483), function() {
+                    ExternalCommands.SendMessageArgs("GUI.DialogBoxClosed");
+                });
+        }, COMMIT_WAIT);
+    }, Localization.GetString(325484), function() {
+        ExternalCommands.SendMessageArgs("GUI.DialogBoxClosed");
+    });
+}
+
+// The rows in order: a header, a button (its action), or a setting shown as a
+// picker (values and their labels), a checkbox (toggle) or a slider. A value not
+// in a picker's list (from config.toml, such as a resolution scale above 4) shows
+// as the closest one.
 var ROWS = [
     { header: "Display" },
     { key: "Fullscreen", label: "Display mode", values: [0, 1], labels: ["Windowed", "Fullscreen"] },
@@ -71,7 +104,9 @@ var ROWS = [
     { header: "HDR" },
     { key: "Hdr", label: "HDR output", restart: true, toggle: true },
     { key: "HdrPaperWhite", label: "Paper white", values: HDR_PAPER_WHITE, labels: Nits(HDR_PAPER_WHITE) },
-    { key: "HdrPeak", label: "Peak brightness", values: HDR_PEAK, labels: Nits(HDR_PEAK) }
+    { key: "HdrPeak", label: "Peak brightness", values: HDR_PEAK, labels: Nits(HDR_PEAK) },
+    { header: "Mods" },
+    { button: "Manage mods", action: OpenMods }
 ];
 
 function Get(key) {
@@ -120,6 +155,16 @@ function AddHeader(group, index, text, y) {
         this.SetText(text);
     };
     MovieUtils.CreateMovie(group, HEADER_SYMBOL, "Header" + index + "_mc", props);
+}
+
+function AddButton(group, index, row, y) {
+    return Attach(group, BUTTON_SYMBOL, "Button" + index + "_mc", BUTTON_X, y, function() {
+        this.RollOver_mc.ButtonText_MC.SetText(row.button);
+        this.Disable_mc.ButtonText_MC.SetText(row.button);
+        this.OnButtonAction = row.action;
+        // Nothing to show again, but RefreshRows refreshes every row.
+        this.Refresh = function() {};
+    });
 }
 
 function AddToggle(group, row, y) {
@@ -212,6 +257,9 @@ function BuildRows(scrollable) {
         if (row.header != undefined) {
             AddHeader(group, i, row.header, y);
             y += HEADER_STEP;
+        } else if (row.button != undefined) {
+            options.push(AddButton(group, i, row, y));
+            y += BUTTON_STEP;
         } else if (row.toggle) {
             options.push(AddToggle(group, row, y + 3));
             y += TOGGLE_STEP;

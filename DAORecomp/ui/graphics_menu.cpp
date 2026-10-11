@@ -1,14 +1,15 @@
 // The host side of the Options menu's Graphics tab (graphics_tab.as): the settings
 // it shows, read and changed through the engine's Flash callbacks, applied at once
-// where they can be, and saved to config.toml when the menu commits its options.
-// Leaving the menu without committing keeps the live changes for this session; a
-// later commit saves them.
+// where they can be, and saved to config.toml when the menu commits its options
+// (or Manage mods closes the game for the launcher). Leaving the menu without
+// committing keeps the live changes for this session; a later commit saves them.
 #include "stdafx.h"
 #include "ui/graphics_menu.h"
 #include "gpu/video.h"
 #include "gpu/xenia_host.h"
 #include "kernel/function.h"
 #include "kernel/vfs.h"
+#include "program.h"
 #include "settings.h"
 
 #include <bitset>
@@ -348,12 +349,38 @@ namespace dao::ui
             LOGI("Graphics menu: settings saved");
         }
 
-        // "Set <key> <value>" or "RestoreDefaults", after "DAORecomp.".
+        // Starts the launcher on its Mods page (this game folder's) and ends the
+        // game, as closing its window does. Returns only if the launcher can't be
+        // started. Logs first: the launcher starts a new dao.log.
+        void OpenMods()
+        {
+            SaveMenuSettings();
+            const std::filesystem::path program = ProgramPath();
+            if (program.empty())
+            {
+                Warn("can't find DAORecomp.exe (error {})", GetLastError());
+                return;
+            }
+            LOGI("Graphics menu: closing for the launcher's Mods page");
+            if (!StartProgram(program, L"--mods " + QuoteArgument(kernel::VfsGameRoot())))
+            {
+                Warn("can't start the launcher (error {})", GetLastError());
+                return;
+            }
+            TerminateProcess(GetCurrentProcess(), 0);
+        }
+
+        // "Set <key> <value>", "RestoreDefaults" or "OpenMods", after "DAORecomp.".
         void HandleMessage(std::string_view message)
         {
             if (message == "RestoreDefaults")
             {
                 RestoreDefaults();
+                return;
+            }
+            if (message == "OpenMods")
+            {
+                OpenMods();
                 return;
             }
             constexpr std::string_view kSet = "Set ";

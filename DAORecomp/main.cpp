@@ -12,6 +12,7 @@
 #include "mods/convert/convert.h"
 #include "ui/graphics_menu.h"
 #include "ui/keyboard.h"
+#include "program.h"
 #include "settings.h"
 #include "text.h"
 
@@ -168,9 +169,7 @@ static fs::path FindGameRoot()
     if (const wchar_t* env = _wgetenv(L"DAO_GAME"))
         return fs::path(env);
 
-    wchar_t exePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    for (fs::path dir = fs::path(exePath).parent_path(); !dir.empty(); dir = dir.parent_path())
+    for (fs::path dir = dao::ProgramPath().parent_path(); !dir.empty(); dir = dir.parent_path())
     {
         if (fs::exists(dir / "game" / "default.xex"))
             return dir / "game";
@@ -237,7 +236,6 @@ int main(int argc, char** argv)
 
     g_processBlock = KernelAlloc(0x60);
     VfsInit(gameRoot, userRoot);
-    dao::ui::SetKeyboardGameRoot(gameRoot);
 
     if (!LoadXex(gameRoot / "default.xex"))
         return 1;

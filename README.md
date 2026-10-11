@@ -132,7 +132,8 @@ archive, folder or files on the launcher window (archives are opened with Window
 are marked as such and not loaded until converted (select one and press *Convert*); the
 launcher also warns of what it finds in a mod that may not work on this version. The
 first time the Mods page opens it explains this (`mods_warning_seen` in the
-`[launcher]` section of `userdata/config.toml` records that it was read).
+`[launcher]` section of `userdata/config.toml` records that it was read). In the game,
+*Options → Graphics → Manage mods* closes it and opens the launcher's Mods page.
 
 Shaders are compiled the first time something is drawn, and that draw is skipped
 until then, so new places can show objects popping in for a moment. Compiled shaders

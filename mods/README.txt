@@ -31,7 +31,8 @@ Optional: mods/MyMod/mod.toml describes the mod in the launcher:
   author = "You"
   description = "What it does."
 
-Enable, disable, order and delete mods in the launcher's Mods tab. Where two
+Enable, disable, order and delete mods in the launcher's Mods page (in the
+game, Options > Graphics > Manage mods closes it and opens that page). Where two
 mods change the same file, the one lower in the list usually wins (for files in
 override/, which the game finds by name, the launcher warns of it). New folders
 start enabled. Folders whose names start with "." aren't mods: the launcher
@@ -43,7 +44,7 @@ Most mods are made for the PC version, and not all of them can work on this one.
 The launcher warns of what it finds in a mod that may not work (select the mod
 to see the warnings), such as menus or sounds made for the PC, add-in areas and
 campaigns, scripts newer than the game's, whole game tables, programs and very
-large textures. It shows a notice about this the first time the Mods tab opens.
+large textures. It shows a notice about this the first time the Mods page opens.
 
 PC models, textures and archives (.msh/.mmh and other GFF files marked PC,
 .dds, PC .erf/.rim, .dazip) can't be read by this version and would crash it,

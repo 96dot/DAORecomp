@@ -9,6 +9,7 @@
 
 #include <rapidjson/document.h>
 
+#include "program.h"
 #include "version.h"
 
 namespace dao::launcher
@@ -261,24 +262,6 @@ namespace dao::launcher
             const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
             return ntdll && GetProcAddress(ntdll, "wine_get_version");
         }
-
-        // The folder DAORecomp.exe is in: the install folder.
-        fs::path ProgramFolder()
-        {
-            std::wstring path(MAX_PATH, L'\0');
-            for (;;)
-            {
-                const DWORD length = GetModuleFileNameW(nullptr, path.data(), DWORD(path.size()));
-                if (length == 0)
-                    return {};
-                if (length < path.size())
-                {
-                    path.resize(length);
-                    return fs::path(path).parent_path();
-                }
-                path.resize(path.size() * 2);
-            }
-        }
     }
 
     std::optional<std::array<int, 3>> ParseVersion(std::string_view tag)
@@ -373,7 +356,7 @@ namespace dao::launcher
         File installerLock;
     };
 
-    Updater::Updater() : shared_(std::make_shared<Shared>()), installRoot_(ProgramFolder())
+    Updater::Updater() : shared_(std::make_shared<Shared>()), installRoot_(ProgramPath().parent_path())
     {
         // Updates go into an install made by the installer (its game files are
         // what it rebuilds from), and only on Windows (under Wine/Proton the
@@ -529,17 +512,9 @@ namespace dao::launcher
         if (shared_->state != State::Ready)
             return false;
         const fs::path installer = shared_->installer;
-        // A folder ending in a backslash (a drive's root) would escape the closing quote.
-        std::wstring root = installRoot_.wstring();
-        if (root.ends_with(L'\\'))
-            root += L'.';
-        std::wstring command = L"\"" + installer.wstring() + L"\" --gui --update --dest \"" + root + L"\"";
-        STARTUPINFOW startup = {};
-        startup.cb = sizeof(startup);
-        PROCESS_INFORMATION process = {};
         // No console for it (it's a console program that opens a window).
-        if (!CreateProcessW(installer.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
-                installer.parent_path().c_str(), &startup, &process))
+        if (!StartProgram(installer, L"--gui --update --dest " + QuoteArgument(installRoot_), CREATE_NO_WINDOW,
+                installer.parent_path()))
         {
             const DWORD code = GetLastError();
             LOGW("Launcher: can't start the installer (error {})", code);
@@ -547,8 +522,6 @@ namespace dao::launcher
             shared_->state = State::Failed;
             return false;
         }
-        CloseHandle(process.hThread);
-        CloseHandle(process.hProcess);
         shared_->installerLock.reset();
         LOGI("Launcher: started the installer to update");
         return true;

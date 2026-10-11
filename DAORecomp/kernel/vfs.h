@@ -38,6 +38,7 @@ namespace dao::kernel
     // Is this host path under a read-only (disc) device?
     bool VfsIsReadOnly(const std::filesystem::path& hostPath);
 
+    const std::filesystem::path& VfsGameRoot();
     const std::filesystem::path& VfsUserRoot();
 
     struct File final : KernelObject

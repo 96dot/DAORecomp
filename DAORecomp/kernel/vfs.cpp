@@ -23,6 +23,7 @@ namespace dao::kernel
     static std::mutex s_vfsMutex;
     static std::vector<Device> s_devices;
     static std::unordered_map<std::string, std::string> s_symlinks; // lowercase "game:" -> device path
+    static fs::path s_gameRoot;
     static fs::path s_userRoot;
 
     static std::string Normalize(std::string_view path)
@@ -44,6 +45,7 @@ namespace dao::kernel
 
     void VfsInit(const fs::path& gameRoot, const fs::path& userRoot)
     {
+        s_gameRoot = gameRoot;
         s_userRoot = userRoot;
         fs::create_directories(userRoot / "hdd");
         fs::create_directories(userRoot / "cache");
@@ -279,6 +281,11 @@ namespace dao::kernel
             }
         }
         return false;
+    }
+
+    const fs::path& VfsGameRoot()
+    {
+        return s_gameRoot;
     }
 
     const fs::path& VfsUserRoot()

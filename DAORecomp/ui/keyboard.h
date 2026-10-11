@@ -6,9 +6,6 @@
 
 namespace dao::ui
 {
-    // Where the game's menu art is read from (packages/core/data/guiexport.erf).
-    void SetKeyboardGameRoot(const std::filesystem::path& gameRoot);
-
     struct KeyboardRequest
     {
         std::u16string title;

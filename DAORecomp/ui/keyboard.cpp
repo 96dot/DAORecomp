@@ -5,6 +5,7 @@
 
 #include "gpu/xenia_host.h"
 #include "input/input.h"
+#include "kernel/vfs.h"
 #include "launcher/game_art.h"
 #include "text.h"
 
@@ -171,7 +172,6 @@ namespace dao::ui
             }
         };
 
-        fs::path s_gameRoot;
         Overlay* s_overlay = nullptr;   // kept for the process's life
         std::atomic<bool> s_open{ false };
         std::atomic<bool> s_holdUntilReleased{ false };
@@ -222,7 +222,7 @@ namespace dao::ui
             // Builds the font atlas with the fonts above.
             overlay->drawer->SetPresenterAndImmediateDrawer(host.presenter, overlay->immediate.get());
 
-            launcher::LoadGameArt(s_gameRoot, kAtlases, kArtNames,
+            launcher::LoadGameArt(kernel::VfsGameRoot(), kAtlases, kArtNames,
                 [&](const std::string& name, launcher::ArtImage& image) {
                     Sprite sprite;
                     sprite.texture = overlay->immediate->CreateTexture(uint32_t(image.width), uint32_t(image.height),
@@ -617,11 +617,6 @@ namespace dao::ui
             double nextRepeat_ = 0;
             float fit_ = 1, originX_ = 0, originY_ = 0;
         };
-    }
-
-    void SetKeyboardGameRoot(const fs::path& gameRoot)
-    {
-        s_gameRoot = gameRoot;
     }
 
     std::optional<std::u16string> RunKeyboard(const KeyboardRequest& request)
