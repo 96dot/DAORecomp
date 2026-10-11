@@ -2285,13 +2285,19 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     dao_timing::GpuTiming::Get().Mark(*this, "swap start");
   }
   D3D12_SHADER_RESOURCE_VIEW_DESC dao_upscaled_srv_desc;
+  // The upscaler sharpens; at the front buffer's size it didn't scale the UI
+  // either, so the presenter's 1:1 sharpening would only add to it.
+  bool dao_sharpened = false;
   if (ID3D12Resource* dao_upscaled = DaoUpscaler::OnSwap(
           swap_texture_resource, swap_texture_srv_desc,
           uint32_t(swap_texture_desc.Width),
           uint32_t(swap_texture_desc.Height), dao_upscaled_srv_desc)) {
     swap_texture_resource = dao_upscaled;
     swap_texture_srv_desc = dao_upscaled_srv_desc;
-    swap_texture_desc = dao_upscaled->GetDesc();
+    const D3D12_RESOURCE_DESC dao_upscaled_desc = dao_upscaled->GetDesc();
+    dao_sharpened = dao_upscaled_desc.Width <= swap_texture_desc.Width &&
+                    dao_upscaled_desc.Height <= swap_texture_desc.Height;
+    swap_texture_desc = dao_upscaled_desc;
     if (dao_timed) {
       dao_timing::GpuTiming::Get().Mark(*this, "UI composite");
     }
@@ -2618,7 +2624,8 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         }
         EndSubmission(true);
         return true;
-      });
+      },
+      dao_sharpened);
 
   // End the frame even if did not present for any reason (the image refresher
   // was not called), to prevent leaking per-frame resources.

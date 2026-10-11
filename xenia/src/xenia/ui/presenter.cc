@@ -352,7 +352,8 @@ void Presenter::PaintFromUIThread(bool force_paint) {
 bool Presenter::RefreshGuestOutput(
     uint32_t frontbuffer_width, uint32_t frontbuffer_height,
     uint32_t display_aspect_ratio_x, uint32_t display_aspect_ratio_y,
-    std::function<bool(GuestOutputRefreshContext& context)> refresher) {
+    std::function<bool(GuestOutputRefreshContext& context)> refresher,
+    bool sharpened) {
   GuestOutputProperties& writable_properties =
       guest_output_properties_[guest_output_mailbox_writable_];
   writable_properties.frontbuffer_width = frontbuffer_width;
@@ -360,6 +361,7 @@ bool Presenter::RefreshGuestOutput(
   writable_properties.display_aspect_ratio_x = display_aspect_ratio_x;
   writable_properties.display_aspect_ratio_y = display_aspect_ratio_y;
   writable_properties.is_8bpc = false;
+  writable_properties.sharpened = sharpened;
   bool is_active = writable_properties.IsActive();
   if (is_active) {
     if (!RefreshGuestOutputImpl(guest_output_mailbox_writable_,
@@ -833,8 +835,17 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
   uint32_t output_width_clamped = std::min(output_width, max_rt_width);
   uint32_t output_height_clamped = std::min(output_height, max_rt_height);
 
-  if (config.GetEffect() == GuestOutputPaintConfig::Effect::kCas ||
-      config.GetEffect() == GuestOutputPaintConfig::Effect::kFsr) {
+  // DAO: an image already sharpened at the output size needs no 1:1 pass.
+  // (Within a pixel: aspect ratio fitting may round the output size.)
+  const bool sharpened_1to1 =
+      properties.sharpened && !flow.effect_count &&
+      properties.frontbuffer_width + 1 >= output_width &&
+      properties.frontbuffer_width <= output_width + 1 &&
+      properties.frontbuffer_height + 1 >= output_height &&
+      properties.frontbuffer_height <= output_height + 1;
+  if ((config.GetEffect() == GuestOutputPaintConfig::Effect::kCas ||
+       config.GetEffect() == GuestOutputPaintConfig::Effect::kFsr) &&
+      !sharpened_1to1) {
     // FidelityFX Super Resolution and Contrast Adaptive Sharpening only work
     // good for up to 2x2 upscaling due to the way they fetch texels.
     // CAS is primarily a sharpening filter, not an upscaling one (its upscaling

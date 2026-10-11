@@ -318,7 +318,8 @@ class Presenter {
   bool RefreshGuestOutput(
       uint32_t frontbuffer_width, uint32_t frontbuffer_height,
       uint32_t display_aspect_ratio_x, uint32_t display_aspect_ratio_y,
-      std::function<bool(GuestOutputRefreshContext& context)> refresher);
+      std::function<bool(GuestOutputRefreshContext& context)> refresher,
+      bool sharpened = false);
   // The implementation must be callable from any thread, including from
   // multiple at the same time, and it should acquire the latest guest output
   // image via ConsumeGuestOutput.
@@ -377,6 +378,9 @@ class Presenter {
     uint32_t display_aspect_ratio_x;
     uint32_t display_aspect_ratio_y;
     bool is_8bpc;
+    // DAO: already anti-aliased and sharpened at the output size (temporal
+    // upscaling that didn't scale), so a 1:1 sharpening pass is redundant.
+    bool sharpened;
 
     GuestOutputProperties() { SetToInactive(); }
 
@@ -391,6 +395,7 @@ class Presenter {
       display_aspect_ratio_x = 0;
       display_aspect_ratio_y = 0;
       is_8bpc = false;
+      sharpened = false;
     }
   };
 
