@@ -711,6 +711,11 @@ class TextureCache {
 
   // See MarkRangeAsResolved.
   std::vector<Texture*> resolve_invalidated_textures_;
+  // Whether any resolve has written to the range (4 KB pages, never cleared).
+  bool IsRangeEverResolved(uint32_t start, uint32_t length) const;
+  uint64_t current_submission_index() const {
+    return current_submission_index_;
+  }
 
   // Whether the mips of a scaled resolve texture must be generated on the host
   // (the guest did not resolve them into scaled memory itself).
@@ -747,6 +752,9 @@ class TextureCache {
   static const LoadShaderInfo load_shader_info_[kLoadShaderCount];
 
   xe::global_critical_region global_critical_region_;
+  // 4 KB pages any resolve has written to (IsRangeEverResolved).
+  std::vector<uint64_t> ever_resolved_pages_ =
+      std::vector<uint64_t>(SharedMemory::kBufferSize >> (12 + 6));
   // Whether a MarkRangeAsResolved is collecting the textures it invalidates.
   // Only GPU writes are collected (from the thread doing the resolve).
   bool collecting_resolve_invalidated_ = false;

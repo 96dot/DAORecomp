@@ -870,6 +870,9 @@ class D3D12TextureCache final : public TextureCache {
     uint32_t fill[2];
     uint32_t channels;
   };
+  // Whether resolves may write the texture directly (as a UAV, the base level
+  // at the base address, not in a packed mip tail).
+  bool IsResolveWritable(const TextureKey& key) const;
   Microsoft::WRL::ComPtr<ID3D12RootSignature> resolve_texture_root_signature_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> resolve_texture_pipeline_;
   std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, kLoadShaderCount>

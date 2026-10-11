@@ -1452,13 +1452,12 @@ std::unique_ptr<TextureCache::Texture> D3D12TextureCache::CreateTexture(
   desc.SampleDesc.Quality = 0;
   desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
   // Untiling through a buffer instead of using unordered access because copying
-  // is not done that often. Textures that resolves may write directly
-  // (WriteResolvedTextures) are UAVs.
+  // is not done that often. Textures of resolved memory that resolves may write
+  // directly (WriteResolvedTextures) are UAVs.
   desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-  if (resolve_texture_pipeline_ &&
-      key.dimension == xenos::DataDimension::k2DOrStacked && key.tiled &&
-      !key.depth_or_array_size_minus_1 && !key.mip_max_level &&
-      key.format == xenos::TextureFormat::k_8_8_8_8 && !key.signed_separate) {
+  if (IsResolveWritable(key) &&
+      IsRangeEverResolved(key.base_page << 12,
+                          key.GetGuestLayout().base.level_data_extent_bytes)) {
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
   }
   const ui::d3d12::D3D12Provider& provider =
@@ -1477,6 +1476,15 @@ std::unique_ptr<TextureCache::Texture> D3D12TextureCache::CreateTexture(
       new D3D12Texture(*this, key, resource.Get(), resource_state));
 }
 
+bool D3D12TextureCache::IsResolveWritable(const TextureKey& key) const {
+  return resolve_texture_pipeline_ &&
+         key.dimension == xenos::DataDimension::k2DOrStacked && key.tiled &&
+         !key.depth_or_array_size_minus_1 && !key.mip_max_level &&
+         key.format == xenos::TextureFormat::k_8_8_8_8 &&
+         !key.signed_separate &&
+         (!key.packed_mips || std::min(key.GetWidth(), key.GetHeight()) > 16);
+}
+
 bool D3D12TextureCache::PrepareResolvedTextures(const ResolvedArea& area) {
   std::vector<Texture*>& textures = resolve_invalidated_textures_;
   const uint32_t pitch = area.dest_pitch_div_32 << 5;
@@ -1485,19 +1493,19 @@ bool D3D12TextureCache::PrepareResolvedTextures(const ResolvedArea& area) {
     textures.clear();
     return false;
   }
-  // The same texels the untiling would load: of the base level at the base
-  // address (not packed into a mip tail), into a texture created as a UAV.
+  // The same texels the untiling would load, into a texture created as a UAV.
+  // Textures not used lately (other views of the memory) are left outdated
+  // rather than kept alive and written by every resolve.
+  const uint64_t used_since = current_submission_index() - std::min(
+      current_submission_index(), uint64_t(2));
   auto described = [&](const Texture* texture) {
     const TextureKey& key = texture->key();
-    return key.base_page == ((area.dest_base >> 12) & 0x1FFFF) &&
-           key.dimension == xenos::DataDimension::k2DOrStacked && key.tiled &&
-           !key.depth_or_array_size_minus_1 && !key.mip_max_level &&
+    return IsResolveWritable(key) &&
+           key.base_page == ((area.dest_base >> 12) & 0x1FFFF) &&
            key.pitch == area.dest_pitch_div_32 &&
-           key.format == xenos::TextureFormat::k_8_8_8_8 &&
-           !key.signed_separate && bool(key.scaled_resolve) == area.scaled &&
-           (!key.packed_mips ||
-            std::min(key.GetWidth(), key.GetHeight()) > 16) &&
+           bool(key.scaled_resolve) == area.scaled &&
            area.dest_x < key.GetWidth() && area.dest_y < key.GetHeight() &&
+           texture->last_usage_submission_index() >= used_since &&
            (static_cast<const D3D12Texture*>(texture)->resource()->GetDesc().Flags &
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
   };

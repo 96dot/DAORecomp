@@ -275,6 +275,11 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled,
   }
   start_unscaled &= 0x1FFFFFFF;
   length_unscaled = std::min(length_unscaled, 0x20000000 - start_unscaled);
+  for (uint32_t page = start_unscaled >> 12,
+                page_last = (start_unscaled + length_unscaled - 1) >> 12;
+       page <= page_last; ++page) {
+    ever_resolved_pages_[page >> 6] |= UINT64_C(1) << (page & 63);
+  }
 
   if (IsDrawResolutionScaled()) {
     uint32_t page_first = start_unscaled >> 12;
@@ -1109,6 +1114,21 @@ void TextureCache::UpdateTexturesTotalHostMemoryUsage(uint64_t add,
                     uint32_t((textures_total_host_memory_usage_ +
                               ((UINT32_C(1) << 20) - 1)) >>
                              20));
+}
+
+bool TextureCache::IsRangeEverResolved(uint32_t start, uint32_t length) const {
+  start &= 0x1FFFFFFF;
+  length = std::min(length, 0x20000000 - start);
+  if (!length) {
+    return false;
+  }
+  for (uint32_t page = start >> 12, page_last = (start + length - 1) >> 12;
+       page <= page_last; ++page) {
+    if (ever_resolved_pages_[page >> 6] & (UINT64_C(1) << (page & 63))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool TextureCache::IsRangeScaledResolved(uint32_t start_unscaled,
