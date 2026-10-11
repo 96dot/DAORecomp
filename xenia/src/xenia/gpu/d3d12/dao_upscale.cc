@@ -23,6 +23,7 @@
 #include "xenia/base/threading.h"
 #include "xenia/base/xxhash.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
+#include "xenia/gpu/d3d12/dao_gpu_timing.h"
 #include "xenia/gpu/d3d12/d3d12_render_target_cache.h"
 #include "xenia/gpu/d3d12/pipeline_cache.h"
 #include "xenia/gpu/dxbc_shader_translator.h"
@@ -58,8 +59,10 @@ namespace shaders {
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_upscale_copy_color_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_upscale_copy_depth_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_upscale_copy_depth_ms_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_upscale_mv_depth_ps.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_upscale_mv_ps.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_upscale_mv_vs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_5_1/fullscreen_cw_vs.h"
 }  // namespace shaders
 
 namespace {
@@ -75,6 +78,10 @@ constexpr uint32_t kStreamOutCounterCount = 4096;
 constexpr uint32_t kStreamOutCounterSize = kStreamOutCounterCount * 16;
 constexpr uint32_t kStreamOutBufferSize =
     kStreamOutDataSize + kStreamOutCounterSize;
+
+// The depth difference from the scene within which a motion vector pass pixel
+// is the visible surface (kDaoMvDepthTolerance in dao_upscale_mv.hlsli).
+constexpr float kMotionDepthTolerance = 2e-5f;
 
 // A texture owned by the upscaler, with its tracked state.
 struct Texture {
@@ -149,6 +156,7 @@ class DaoUpscalerImpl {
     float jitter[2];
     float z_min;
     float z_max;
+    float depth_tolerance;
   };
   // A scene draw given motion vectors.
   struct MotionDraw {
@@ -188,6 +196,8 @@ class DaoUpscalerImpl {
     const std::deque<MotionDraw>* draws;
     D3D12_GPU_DESCRIPTOR_HANDLE positions;
     D3D12_GPU_DESCRIPTOR_HANDLE depth;
+    // With the scene depth in the depth buffer too.
+    bool depth_test;
     uint32_t width;
     uint32_t height;
   };
@@ -271,6 +281,7 @@ class DaoUpscalerImpl {
   Texture color_;
   Texture depth_;
   Texture motion_vectors_;
+  Texture motion_depth_;
   // Display resolution.
   Texture upscaled_;
   Texture composite_;
@@ -304,8 +315,12 @@ class DaoUpscalerImpl {
   // Motion vectors.
   bool motion_available_ = false;
   ComPtr<ID3D12RootSignature> motion_root_signature_;
-  ComPtr<ID3D12PipelineState> motion_pipeline_;
+  // Without a depth test, and with one for nearer being less and greater.
+  ComPtr<ID3D12PipelineState> motion_pipelines_[3];
+  // Copies the scene depth into the depth buffer.
+  ComPtr<ID3D12PipelineState> motion_depth_pipeline_;
   ComPtr<ID3D12DescriptorHeap> motion_rtv_heap_;
+  ComPtr<ID3D12DescriptorHeap> motion_dsv_heap_;
   ComPtr<ID3D12Resource> stream_out_buffer_;
   ComPtr<ID3D12Resource> stream_out_zeros_;
   D3D12_RESOURCE_STATES stream_out_state_ = D3D12_RESOURCE_STATE_COPY_DEST;
@@ -508,9 +523,40 @@ bool DaoUpscalerImpl::InitializeMotion() {
   desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
   desc.NumRenderTargets = 1;
   desc.RTVFormats[0] = DXGI_FORMAT_R16G16_FLOAT;
+  desc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
   desc.SampleDesc.Count = 1;
   if (FAILED(device->CreateGraphicsPipelineState(
-          &desc, IID_PPV_ARGS(&motion_pipeline_)))) {
+          &desc, IID_PPV_ARGS(&motion_pipelines_[0])))) {
+    return false;
+  }
+  // The depth test rejecting what is behind the scene depth, after moving the
+  // triangles towards the camera by twice their slope (the pixel shader allows
+  // for the sum of the x and y slopes). Not clipped by the moved depth, but
+  // clamped to the viewport's range.
+  desc.DepthStencilState.DepthEnable = TRUE;
+  desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+  desc.RasterizerState.DepthClipEnable = FALSE;
+  for (uint32_t i = 1; i < 3; ++i) {
+    const bool nearer_less = i == 1;
+    desc.DepthStencilState.DepthFunc = nearer_less
+                                           ? D3D12_COMPARISON_FUNC_LESS_EQUAL
+                                           : D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+    desc.RasterizerState.SlopeScaledDepthBias = nearer_less ? -2.0f : 2.0f;
+    if (FAILED(device->CreateGraphicsPipelineState(
+            &desc, IID_PPV_ARGS(&motion_pipelines_[i])))) {
+      return false;
+    }
+  }
+  desc.VS.pShaderBytecode = shaders::fullscreen_cw_vs;
+  desc.VS.BytecodeLength = sizeof(shaders::fullscreen_cw_vs);
+  desc.PS.pShaderBytecode = shaders::dao_upscale_mv_depth_ps;
+  desc.PS.BytecodeLength = sizeof(shaders::dao_upscale_mv_depth_ps);
+  desc.BlendState.RenderTarget[0].RenderTargetWriteMask = 0;
+  desc.RasterizerState.SlopeScaledDepthBias = 0.0f;
+  desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+  desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+  if (FAILED(device->CreateGraphicsPipelineState(
+          &desc, IID_PPV_ARGS(&motion_depth_pipeline_)))) {
     return false;
   }
 
@@ -519,6 +565,11 @@ bool DaoUpscalerImpl::InitializeMotion() {
   heap_desc.NumDescriptors = 1;
   if (FAILED(device->CreateDescriptorHeap(&heap_desc,
                                           IID_PPV_ARGS(&motion_rtv_heap_)))) {
+    return false;
+  }
+  heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+  if (FAILED(device->CreateDescriptorHeap(&heap_desc,
+                                          IID_PPV_ARGS(&motion_dsv_heap_)))) {
     return false;
   }
 
@@ -732,18 +783,25 @@ bool DaoUpscalerImpl::EnsureTexture(Texture& texture, DXGI_FORMAT format,
   desc.MipLevels = 1;
   desc.Format = format;
   desc.SampleDesc.Count = 1;
-  desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | extra_flags;
+  // Depth buffers can't have unordered access.
+  const bool depth =
+      (extra_flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) != 0;
+  desc.Flags =
+      depth ? extra_flags
+            : D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | extra_flags;
+  const D3D12_RESOURCE_STATES state =
+      depth ? D3D12_RESOURCE_STATE_DEPTH_WRITE
+            : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
   // Zeroed (motion vectors are zero until something writes them).
   if (FAILED(provider.GetDevice()->CreateCommittedResource(
           &ui::d3d12::util::kHeapPropertiesDefault, D3D12_HEAP_FLAG_NONE,
-          &desc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
-          IID_PPV_ARGS(&texture.resource)))) {
+          &desc, state, nullptr, IID_PPV_ARGS(&texture.resource)))) {
     XELOGE("FSR: failed to create the {} texture ({}x{})", name, width,
            height);
     texture = {};
     return false;
   }
-  texture.state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+  texture.state = state;
   texture.format = format;
   texture.width = width;
   texture.height = height;
@@ -858,6 +916,20 @@ void DaoUpscalerImpl::OnDraw(const RegisterFile& regs,
       }
       motion.z_min = viewport_info.z_min;
       motion.z_max = viewport_info.z_max;
+      // Towards the camera, for the motion vector pass's depth test (none if
+      // the draw's isn't less or greater).
+      switch (depth_control.zfunc) {
+        case xenos::CompareFunction::kLess:
+        case xenos::CompareFunction::kLessEqual:
+          motion.depth_tolerance = -kMotionDepthTolerance;
+          break;
+        case xenos::CompareFunction::kGreater:
+        case xenos::CompareFunction::kGreaterEqual:
+          motion.depth_tolerance = kMotionDepthTolerance;
+          break;
+        default:
+          motion.depth_tolerance = 0.0f;
+      }
     }
     return;
   }
@@ -1425,6 +1497,18 @@ void DaoUpscalerImpl::RecordMotionPass(uint32_t width, uint32_t height) {
     motion_pass_.draws = &draws;
     motion_pass_.positions = descriptors[0].second;
     motion_pass_.depth = descriptors[1].second;
+    if (EnsureTexture(motion_depth_, DXGI_FORMAT_D32_FLOAT, width, height,
+                      "motion vector depth",
+                      D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)) {
+      D3D12_DEPTH_STENCIL_VIEW_DESC dsv = {};
+      dsv.Format = motion_depth_.format;
+      dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+      device->CreateDepthStencilView(
+          motion_depth_.resource.Get(), &dsv,
+          motion_dsv_heap_->GetCPUDescriptorHandleForHeapStart());
+      Transition(motion_depth_, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+      motion_pass_.depth_test = true;
+    }
     CloseStreamOut();
     TransitionStreamOut(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     Transition(depth_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
@@ -1442,7 +1526,10 @@ void DaoUpscalerImpl::ExecuteMotionPass(
   DaoUpscalerImpl& self = *pass.self;
   const D3D12_CPU_DESCRIPTOR_HANDLE rtv =
       self.motion_rtv_heap_->GetCPUDescriptorHandleForHeapStart();
-  command_list->OMSetRenderTargets(1, &rtv, TRUE, nullptr);
+  const D3D12_CPU_DESCRIPTOR_HANDLE dsv =
+      self.motion_dsv_heap_->GetCPUDescriptorHandleForHeapStart();
+  command_list->OMSetRenderTargets(1, &rtv, TRUE,
+                                   pass.depth_test ? &dsv : nullptr);
   const float zero[4] = {};
   command_list->ClearRenderTargetView(rtv, zero, 0, nullptr);
   if (!pass.draws) {
@@ -1454,13 +1541,27 @@ void DaoUpscalerImpl::ExecuteMotionPass(
   command_list->RSSetViewports(1, &viewport);
   command_list->RSSetScissorRects(1, &scissor);
   command_list->SetGraphicsRootSignature(self.motion_root_signature_.Get());
-  command_list->SetPipelineState(self.motion_pipeline_.Get());
   command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   command_list->SetGraphicsRootDescriptorTable(1, pass.positions);
   command_list->SetGraphicsRootDescriptorTable(2, pass.depth);
+  if (pass.depth_test) {
+    command_list->SetPipelineState(self.motion_depth_pipeline_.Get());
+    command_list->DrawInstanced(3, 1, 0, 0);
+  }
+  ID3D12PipelineState* current_pipeline = nullptr;
   for (const MotionDraw& draw : *pass.draws) {
     if (!draw.output_vertex_count) {
       continue;
+    }
+    ID3D12PipelineState* pipeline = self.motion_pipelines_[0].Get();
+    if (pass.depth_test && draw.motion.depth_tolerance != 0.0f) {
+      pipeline =
+          self.motion_pipelines_[draw.motion.depth_tolerance < 0.0f ? 1 : 2]
+              .Get();
+    }
+    if (pipeline != current_pipeline) {
+      command_list->SetPipelineState(pipeline);
+      current_pipeline = pipeline;
     }
     command_list->SetGraphicsRoot32BitConstants(
         0, sizeof(MotionConstants) / sizeof(uint32_t), &draw.motion, 0);
@@ -1704,6 +1805,9 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   // executed.
   if (motion_available_) {
     RecordMotionPass(render_width, render_height);
+    if (dao_timing::GpuTiming::Enabled()) {
+      dao_timing::GpuTiming::Get().Mark(cp_, "motion vectors");
+    }
   }
   Transition(color_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(depth_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -1737,6 +1841,9 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   dispatch_params_.self = this;
   cp_.GetDeferredCommandList().DaoCallback(ExecuteDispatch, &dispatch_params_);
   InvalidateCommandProcessorState();
+  if (dao_timing::GpuTiming::Enabled()) {
+    dao_timing::GpuTiming::Get().Mark(cp_, "FSR");
+  }
 
   // Composite the UI.
   ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
