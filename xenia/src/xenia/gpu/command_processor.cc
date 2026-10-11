@@ -330,6 +330,9 @@ void CommandProcessor::CallInThread(std::function<void()> fn) {
     fn();
   } else {
     pending_fns_.push(std::move(fn));
+    lock.unlock();
+    // Ends the wait for commands (otherwise only ended by a timeout).
+    write_ptr_index_event_->Set();
   }
 }
 
@@ -370,14 +373,18 @@ void CommandProcessor::WorkerThreadMain() {
     if (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index) {
       SCOPE_profile_cpu_i("gpu", "xe::gpu::CommandProcessor::Stall");
       // We've run out of commands to execute.
-      // We spin here waiting for new ones, as the overhead of waiting on our
-      // event is too high.
+      // A few yields for commands written right after, then the event (set
+      // with the write pointer, a function to call, and on shutdown): a longer
+      // spin takes power from the GPU on handhelds, and the wait wakes in
+      // tens of microseconds.
       PrepareForWait();
       uint32_t loop_count = 0;
       do {
-        // If we spin around too much, revert to a "low-power" state.
-        if (loop_count > 500) {
-          constexpr int wait_time_ms = 2;
+        if (loop_count > 32) {
+          // Strict ZPD may be owed a query result, polled in PrepareForWait.
+          const int wait_time_ms =
+              zpd_mode_ == ZPDMode::kStrict && zpd_awaited_report_count_ ? 2
+                                                                          : 100;
           xe::threading::Wait(write_ptr_index_event_.get(), true,
                               std::chrono::milliseconds(wait_time_ms));
           // Strict ZPD may still owe the guest a report it's spinning on with
