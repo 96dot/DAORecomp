@@ -240,6 +240,12 @@ class DaoUpscalerImpl {
 
   bool Initialize();
   bool single_sample_scene() const { return single_sample_scene_; }
+  // Whether the frame has a 3D scene. Single-sampled, the multisampled draws
+  // alone (the game's clears) aren't one unless a depth tile was taken.
+  bool HasScene() const {
+    return scene_draws_ && (!single_sample_scene_ ||
+                            single_sample_scene_drawn_ || depth_tiles_);
+  }
   void OnDraw(const RegisterFile& regs, draw_util::ViewportInfo& viewport_info,
               reg::RB_DEPTHCONTROL depth_control, uint32_t color_mask,
               uint64_t pixel_shader_hash, uint32_t pixel_shader_texture_mask,
@@ -1914,7 +1920,7 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
     reason = "off";
   } else if (size_changed) {
     reason = "render size changed";
-  } else if (!scene_draws_) {
+  } else if (!HasScene()) {
     reason = "no 3D scene";
   } else if (!depth_tiles_) {
     reason = "no scene depth";
@@ -2061,7 +2067,7 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   // If a 3D scene couldn't be upscaled, stop jittering it for a while (a few
   // jittered frames shown as they are look like a small shake).
   const bool enabled = cvars::dao_temporal_upscaler != "off";
-  if (scene_draws_ && !upscaled && jitter_active_) {
+  if (HasScene() && !upscaled && jitter_active_) {
     if (++fail_streak_ >= 3) {
       jitter_cooldown_ = 300;
       fail_streak_ = 0;
@@ -2072,7 +2078,11 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   if (jitter_cooldown_) {
     --jitter_cooldown_;
   }
-  jitter_active_ = enabled && !jitter_cooldown_;
+  // No retries once FSR couldn't be loaded or created.
+  jitter_active_ = enabled && !jitter_cooldown_ && !ffx_failed_;
+  // The game's 2xMSAA while the scene isn't antialiased here.
+  DaoUpscaler::single_sample_scene_.store(
+      single_sample_scene_ && jitter_active_, std::memory_order_relaxed);
 
   // Next frame's jitter.
   jitter_[0] = jitter_[1] = 0.0f;

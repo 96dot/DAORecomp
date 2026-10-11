@@ -58,7 +58,8 @@ class DaoUpscaler {
 
   // Whether the game should render its 3D scenes in one tile without its
   // 2xMSAA: the upscaler antialiases them (from the jitter), so the second
-  // tile and the multisampling would only cost GPU time. Any thread.
+  // tile and the multisampling would only cost GPU time. False again if FSR
+  // fails (for good, or for a while). Any thread.
   static bool WantsSingleSampleScene();
 
   // Before a draw's system constants are computed: jitters scene draws by
@@ -87,6 +88,7 @@ class DaoUpscaler {
       D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out);
 
  private:
+  friend class DaoUpscalerImpl;
   static DaoUpscalerImpl* impl_;
   static std::atomic<bool> single_sample_scene_;
 };
