@@ -110,6 +110,10 @@ namespace dao
         s.vsync = video["vsync"].value_or(s.vsync);
         s.unlockFrameRate = video["unlock_frame_rate"].value_or(s.unlockFrameRate);
         s.fullscreen = video["fullscreen"].value_or(s.fullscreen);
+        s.anisotropicFiltering = video["anisotropic_filtering"].value_or(s.anisotropicFiltering);
+        if (s.anisotropicFiltering != 2 && s.anisotropicFiltering != 4 && s.anisotropicFiltering != 8 &&
+            s.anisotropicFiltering != 16)
+            s.anisotropicFiltering = 0;
         s.hdr = video["hdr"].value_or(s.hdr);
         s.hdrPaperWhite = std::clamp(video["hdr_paper_white"].value_or(s.hdrPaperWhite), 80.0f, 1000.0f);
         s.hdrPeak = std::clamp(video["hdr_peak"].value_or(s.hdrPeak), s.hdrPaperWhite, 10000.0f);
@@ -176,6 +180,8 @@ unlock_frame_rate = {}
 hdr = {}
 hdr_paper_white = {}
 hdr_peak = {}
+# Anisotropic texture filtering: 0 (the game's own), 2, 4, 8 or 16.
+anisotropic_filtering = {}
 fullscreen = {}
 window_width = {}
 window_height = {}
@@ -185,7 +191,8 @@ window_height = {}
 )",
             s.showLauncher, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
             TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.vsync, s.unlockFrameRate,
-            s.hdr, s.hdrPaperWhite, s.hdrPeak, s.fullscreen, s.windowWidth, s.windowHeight);
+            s.hdr, s.hdrPaperWhite, s.hdrPeak, s.anisotropicFiltering, s.fullscreen, s.windowWidth,
+            s.windowHeight);
         for (const auto& [id, enabled] : s.patches)
             out += fmt::format("{} = {}\n", id, enabled);
 
@@ -233,6 +240,10 @@ window_height = {}
         SetXeniaCvar("present_hdr", toml::value<bool>(s.hdr));
         SetXeniaCvar("present_hdr_paper_white", toml::value<double>(s.hdrPaperWhite));
         SetXeniaCvar("present_hdr_peak", toml::value<double>(s.hdrPeak));
+        // Xenia's levels: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x; -1 = the game's own.
+        if (s.anisotropicFiltering)
+            SetXeniaCvar("anisotropic_override",
+                toml::value<int64_t>(1 + std::countr_zero(unsigned(s.anisotropicFiltering))));
         try
         {
             const toml::table table = toml::parse_file((userRoot / "config.toml").string());

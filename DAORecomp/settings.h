@@ -40,6 +40,8 @@ namespace dao
         bool hdr = false;
         float hdrPaperWhite = 200.0f; // nits
         float hdrPeak = 1000.0f;      // nits
+        // Anisotropic texture filtering: 0 = the game's own, else 2, 4, 8 or 16.
+        int anisotropicFiltering = 0;
         bool fullscreen = false;
         int windowWidth = 1280;
         int windowHeight = 720;
