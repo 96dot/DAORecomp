@@ -234,6 +234,13 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   ID3D12RootSignature* resolve_copy_native_root_signature_ = nullptr;
   ID3D12PipelineState* resolve_copy_native_pipelines_[size_t(
       draw_util::ResolveCopyShaderIndex::kCount)] = {};
+  // Plain resolve copies straight from a render target (GetResolvedArea), like
+  // the resolve copy ones, but parameter 2 is a descriptor table with the
+  // render target's SRV.
+  ID3D12RootSignature* resolve_direct_root_signature_ = nullptr;
+  ID3D12PipelineState* resolve_direct_pipeline_ = nullptr;
+  ID3D12RootSignature* resolve_direct_native_root_signature_ = nullptr;
+  ID3D12PipelineState* resolve_direct_native_pipeline_ = nullptr;
 
   // For traces.
   ID3D12Resource* edram_snapshot_download_buffer_ = nullptr;

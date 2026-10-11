@@ -1,0 +1,68 @@
+// DAO: a resolve copy straight from a single-sampled k_8_8_8_8 host render
+// target, instead of from the EDRAM buffer the render target would be dumped
+// to first: the same bytes as resolve_fast_32bpp_1x2xmsaa. The EDRAM base in
+// the constants is relative to the render target's base, which the render
+// target is laid out like the EDRAM from.
+
+#include "endian.xesli"
+#include "resolve.xesli"
+
+byte_buffer_align16_wo_declare_xe(xe_resolve_dest, set=1, binding=0, u0, space0)
+#define LOCAL_SIZE_X_XE 8
+#define LOCAL_SIZE_Y_XE 8
+#define LOCAL_SIZE_Z_XE 1
+entry_bindings_begin_compute_xe
+  XE_RESOLVE_PUSH_CONST_BINDING
+  entry_binding_next_xe
+  byte_buffer_wo_binding_xe(xe_resolve_dest, buffer(1))
+  entry_binding_next_xe
+  texture_xe(texture_2d_xe, xe_resolve_source, set=0, binding=0, t0, space0,
+             texture(0))
+entry_bindings_end_inputs_begin_compute_xe
+  entry_in_global_thread_id_xe
+entry_inputs_end_code_begin_compute_xe
+{
+  // 1 thread = 8 host pixels.
+  XeResolveInfo resolve_info = XeResolveGetInfo(pass_push_consts_xe);
+  // Group height can't cross resolve granularity, Y overflow check not needed.
+  dont_flatten_xe
+  if (in_global_thread_id_xe.x >= resolve_info.width_div_8_scaled) {
+    return;
+  }
+  uint2_xe pixel_index = in_global_thread_id_xe.xy << uint2_xe(3u, 0u);
+  uint2_xe source_origin =
+      uint2_xe(resolve_info.edram_base_tiles %
+                   resolve_info.edram_pitch_tiles * 80u,
+               resolve_info.edram_base_tiles /
+                   resolve_info.edram_pitch_tiles * 16u) *
+          resolve_info.resolution_scale +
+      resolve_info.edram_offset_scaled;
+  // The half-pixel offset fill: the first columns / rows copy the next one.
+  int source_y = int(source_origin.y +
+                     max(pixel_index.y,
+                         resolve_info.half_pixel_offset_fill_source.y));
+  uint pixels[8];
+  for (uint i = 0u; i < 8u; ++i) {
+    int source_x = int(source_origin.x +
+                       max(pixel_index.x + i,
+                           resolve_info.half_pixel_offset_fill_source.x));
+    uint4_xe bytes = uint4_xe(
+        saturate(texel_fetch_2d_xe(xe_resolve_source,
+                                   int2_xe(source_x, source_y), 0)) *
+            255.0f +
+        0.5f);
+    pixels[i] = bytes.r | (bytes.g << 8u) | (bytes.b << 16u) | (bytes.a << 24u);
+  }
+  uint4_xe pixels_0123 = uint4_xe(pixels[0], pixels[1], pixels[2], pixels[3]);
+  uint4_xe pixels_4567 = uint4_xe(pixels[4], pixels[5], pixels[6], pixels[7]);
+  XeResolveSwap8PixelsRedBlue32bpp(resolve_info, pixels_0123, pixels_4567);
+  uint dest_address = XeResolveDestPixelAddress(resolve_info, pixel_index, 2u);
+  byte_buffer_align16_store16_xe(
+      xe_resolve_dest, dest_address,
+      XeEndianSwap32(pixels_0123, resolve_info.dest_endian_128));
+  dest_address += XeResolveLocalXAddressXor(4u, 2u);
+  byte_buffer_align16_store16_xe(
+      xe_resolve_dest, dest_address,
+      XeEndianSwap32(pixels_4567, resolve_info.dest_endian_128));
+}
+entry_code_end_compute_xe

@@ -88,6 +88,8 @@ namespace shaders {
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/resolve_clear_64bpp_scaled_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/resolve_dxt3aas1111_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/resolve_fast_32bpp_1x2xmsaa_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_resolve_direct_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_resolve_direct_scaled_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/resolve_fast_32bpp_1x2xmsaa_scaled_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/resolve_fast_32bpp_4xmsaa_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/resolve_fast_32bpp_4xmsaa_scaled_cs.h"
@@ -469,6 +471,54 @@ bool D3D12RenderTargetCache::Initialize() {
     resolve_copy_pipeline->SetName(
         reinterpret_cast<LPCWSTR>(resolve_copy_pipeline_name.c_str()));
     resolve_copy_pipelines_[i] = resolve_copy_pipeline;
+  }
+
+  // Resolve copies straight from render targets: the source is an SRV table.
+  if (cvars::dao_resolve_to_textures) {
+    D3D12_DESCRIPTOR_RANGE resolve_direct_source_range = {};
+    resolve_direct_source_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    resolve_direct_source_range.NumDescriptors = 1;
+    resolve_copy_root_parameters[2].ParameterType =
+        D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    resolve_copy_root_parameters[2].DescriptorTable.NumDescriptorRanges = 1;
+    resolve_copy_root_parameters[2].DescriptorTable.pDescriptorRanges =
+        &resolve_direct_source_range;
+    resolve_copy_root_parameters[0].Constants.Num32BitValues =
+        (draw_resolution_scaled
+             ? sizeof(draw_util::ResolveCopyShaderConstants::DestRelative)
+             : sizeof(draw_util::ResolveCopyShaderConstants)) /
+        sizeof(uint32_t);
+    resolve_direct_root_signature_ = ui::d3d12::util::CreateRootSignature(
+        provider, resolve_copy_root_signature_desc);
+    if (resolve_direct_root_signature_) {
+      resolve_direct_pipeline_ = ui::d3d12::util::CreateComputePipeline(
+          device,
+          draw_resolution_scaled ? shaders::dao_resolve_direct_scaled_cs
+                                 : shaders::dao_resolve_direct_cs,
+          draw_resolution_scaled ? sizeof(shaders::dao_resolve_direct_scaled_cs)
+                                 : sizeof(shaders::dao_resolve_direct_cs),
+          resolve_direct_root_signature_);
+    }
+    if (draw_resolution_scaled) {
+      resolve_copy_root_parameters[0].Constants.Num32BitValues =
+          sizeof(draw_util::ResolveCopyShaderConstants) / sizeof(uint32_t);
+      resolve_direct_native_root_signature_ =
+          ui::d3d12::util::CreateRootSignature(
+              provider, resolve_copy_root_signature_desc);
+      if (resolve_direct_native_root_signature_) {
+        resolve_direct_native_pipeline_ =
+            ui::d3d12::util::CreateComputePipeline(
+                device, shaders::dao_resolve_direct_cs,
+                sizeof(shaders::dao_resolve_direct_cs),
+                resolve_direct_native_root_signature_);
+      }
+    }
+    if (!resolve_direct_pipeline_ ||
+        (draw_resolution_scaled && !resolve_direct_native_pipeline_)) {
+      XELOGE(
+          "D3D12RenderTargetCache: Failed to create the direct resolve copy "
+          "pipelines");
+    }
   }
 
   // Using the cvar on emulator initialization so used pipelines are consistent
@@ -1190,6 +1240,10 @@ void D3D12RenderTargetCache::Shutdown(bool from_destructor) {
     ui::d3d12::util::ReleaseAndNull(resolve_copy_pipelines_[i]);
   }
   ui::d3d12::util::ReleaseAndNull(resolve_copy_root_signature_);
+  ui::d3d12::util::ReleaseAndNull(resolve_direct_native_pipeline_);
+  ui::d3d12::util::ReleaseAndNull(resolve_direct_native_root_signature_);
+  ui::d3d12::util::ReleaseAndNull(resolve_direct_pipeline_);
+  ui::d3d12::util::ReleaseAndNull(resolve_direct_root_signature_);
 
   edram_snapshot_restore_pool_.reset();
   ui::d3d12::util::ReleaseAndNull(edram_snapshot_download_buffer_);
@@ -1418,14 +1472,6 @@ bool D3D12RenderTargetCache::Resolve(const Memory& memory,
   // Copying.
   bool copied = false;
   if (resolve_info.copy_dest_extent_length) {
-    if (GetPath() == Path::kHostRenderTargets) {
-      // Dump the current contents of the render targets owning the affected
-      // range to edram_buffer_.
-      // TODO(Triang3l): Direct host render target -> shared memory resolve
-      // shaders for non-converting cases.
-      DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch,
-                        copy_native);
-    }
     bool copy_dest_scaled = draw_resolution_scaled && !copy_native;
 
     draw_util::ResolveCopyShaderConstants copy_shader_constants;
@@ -1435,6 +1481,42 @@ bool D3D12RenderTargetCache::Resolve(const Memory& memory,
         copy_native ? 1 : draw_resolution_scale_y(), copy_shader_constants,
         copy_group_count_x, copy_group_count_y);
     assert_true(copy_group_count_x && copy_group_count_y);
+
+    // A plain copy of one render target is done straight from it rather than
+    // from its dump to edram_buffer_, and the textures of the resolved memory
+    // are written from it too.
+    D3D12TextureCache::ResolvedArea resolved_area;
+    D3D12RenderTarget* resolved_area_source = nullptr;
+    bool copy_direct = false;
+    ui::d3d12::util::DescriptorCpuGpuHandlePair copy_direct_source;
+    if (GetPath() == Path::kHostRenderTargets) {
+      GetResolveCopyRectanglesToDump(dump_base, dump_row_length_used,
+                                     dump_rows, dump_pitch, dump_rectangles_);
+      resolved_area_source = GetResolvedArea(
+          resolve_info, copy_shader, copy_dest_scaled, dump_base,
+          dump_row_length_used, dump_rows, dump_pitch, resolved_area);
+      if (resolved_area_source &&
+          (copy_native ? resolve_direct_native_pipeline_
+                       : resolve_direct_pipeline_) &&
+          command_processor_.RequestOneUseSingleViewDescriptors(
+              1, &copy_direct_source)) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC source_srv_desc = {};
+        source_srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        source_srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        source_srv_desc.Shader4ComponentMapping =
+            D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        source_srv_desc.Texture2D.MipLevels = 1;
+        command_processor_.GetD3D12Provider().GetDevice()->CreateShaderResourceView(
+            resolved_area_source->resource(), &source_srv_desc,
+            copy_direct_source.first);
+        copy_direct = true;
+      } else {
+        // Dump the current contents of the render targets owning the affected
+        // range to edram_buffer_.
+        DumpRenderTargets(dump_base, dump_row_length_used, dump_rows,
+                          dump_pitch, copy_native);
+      }
+    }
     if (copy_shader != draw_util::ResolveCopyShaderIndex::kUnknown) {
       const draw_util::ResolveCopyShaderInfo& copy_shader_info =
           draw_util::resolve_copy_shader_info[size_t(copy_shader)];
@@ -1459,14 +1541,27 @@ bool D3D12RenderTargetCache::Resolve(const Memory& memory,
                                        resolve_info.copy_dest_extent_length);
       }
       if (copy_dest_committed) {
-        command_list.D3DSetComputeRootSignature(
-            copy_native ? resolve_copy_native_root_signature_
-                        : resolve_copy_root_signature_);
-
         // Source.
-        TransitionEdramBuffer(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        command_list.D3DSetComputeRootShaderResourceView(
-            2, edram_buffer_gpu_address_);
+        if (copy_direct) {
+          command_list.D3DSetComputeRootSignature(
+              copy_native ? resolve_direct_native_root_signature_
+                          : resolve_direct_root_signature_);
+          TransitionRenderTarget(*resolved_area_source,
+                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+          command_list.D3DSetComputeRootDescriptorTable(
+              2, copy_direct_source.second);
+          // The EDRAM base relative to the render target's.
+          copy_shader_constants.dest_relative.edram_info.base_tiles =
+              resolve_info.color_edram_info.base_tiles -
+              resolved_area_source->key().base_tiles;
+        } else {
+          command_list.D3DSetComputeRootSignature(
+              copy_native ? resolve_copy_native_root_signature_
+                          : resolve_copy_root_signature_);
+          TransitionEdramBuffer(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+          command_list.D3DSetComputeRootShaderResourceView(
+              2, edram_buffer_gpu_address_);
+        }
 
         // Destination and constants.
         if (copy_dest_scaled) {
@@ -1489,9 +1584,16 @@ bool D3D12RenderTargetCache::Resolve(const Memory& memory,
         }
 
         // Dispatch the resolve.
-        command_processor_.SetExternalPipeline(
-            copy_native ? resolve_copy_native_pipelines_[size_t(copy_shader)]
-                        : resolve_copy_pipelines_[size_t(copy_shader)]);
+        if (copy_direct) {
+          command_processor_.SetExternalPipeline(
+              copy_native ? resolve_direct_native_pipeline_
+                          : resolve_direct_pipeline_);
+        } else {
+          command_processor_.SetExternalPipeline(
+              copy_native
+                  ? resolve_copy_native_pipelines_[size_t(copy_shader)]
+                  : resolve_copy_pipelines_[size_t(copy_shader)]);
+        }
         command_processor_.SubmitBarriers();
         command_list.D3DDispatch(copy_group_count_x, copy_group_count_y, 1);
 
@@ -1504,10 +1606,6 @@ bool D3D12RenderTargetCache::Resolve(const Memory& memory,
 
         // Invalidate textures and mark the range as scaled if needed. The
         // textures of a plain copy are written from the render target.
-        D3D12TextureCache::ResolvedArea resolved_area;
-        D3D12RenderTarget* resolved_area_source = GetResolvedArea(
-            resolve_info, copy_shader, copy_dest_scaled, dump_base,
-            dump_row_length_used, dump_rows, dump_pitch, resolved_area);
         texture_cache.MarkRangeAsResolved(resolve_info.copy_dest_extent_start,
                                           resolve_info.copy_dest_extent_length,
                                           copy_dest_scaled,
