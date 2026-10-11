@@ -245,12 +245,17 @@ namespace dao::imp
 // 8-11) and the immediate-present threshold (low byte); the flip is queued for
 // vblank (last flip + interval). The game presents its 3D scenes with interval 2,
 // i.e. at 30 fps; clamping the interval to 1 lets them flip on every vblank.
+// A late flip (its vblank passed) waits for the next vblank unless less of the
+// current one has passed than the threshold (percent): with the threshold at 100,
+// late frames are shown right away instead of dropping to the next vblank (no
+// tearing here: the host presents with its own vsync), so a frame taking a bit
+// longer than a vblank costs that bit rather than a whole vblank.
 extern "C" PPC_FUNC(__imp__sub_82CD4218);
 PPC_FUNC(sub_82CD4218)
 {
     const uint32_t interval = (ctx.r3.u32 >> 8) & 0xF;
-    if (interval > 1 && dao::gpu::FrameRateUnlocked())
-        ctx.r3.u64 = (ctx.r3.u64 & ~uint64_t(0xF00)) | 0x100;
+    if (interval >= 1 && dao::gpu::FrameRateUnlocked())
+        ctx.r3.u64 = (ctx.r3.u64 & ~uint64_t(0xFFF)) | 0x100 | 100;
     __imp__sub_82CD4218(ctx, base);
 }
 
