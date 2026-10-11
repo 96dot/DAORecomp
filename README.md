@@ -6,6 +6,8 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
 - rendering at up to 4K (and higher), with FSR 1 / CAS scaling of the whole image
 - temporal upscaling and anti-aliasing with AMD FSR 4 (RDNA 4) or FSR 3.1, using
   motion vectors generated for the game's 3D scenes
+- HDR output: on an HDR display the 3D scenes are rendered in HDR (the game's
+  tonemapping redone without compressing its highlights), upscaled by FSR in HDR
 - 60 fps (the original is locked to 30)
 - SDL3 input, including DualSense and other controllers
 - a launcher for settings, mods (file overrides, with a converter for PC mods) and
