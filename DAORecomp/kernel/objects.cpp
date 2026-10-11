@@ -573,8 +573,9 @@ namespace dao::kernel
 
     void ShortSleep(uint32_t microseconds)
     {
-        // On Windows a high resolution waitable timer (NtDelayExecution, like
-        // Sleep, is only as fine as the timer resolution, 1 ms here). Wine
+        // On Windows, a high resolution waitable timer: NtDelayExecution, like
+        // Sleep, is only as fine as the timer resolution (1 ms, set with
+        // timeBeginPeriod in main.cpp). Wine
         // (Proton, so the Steam Deck) is the other way round: its timers go
         // through wineserver, in milliseconds, while a non-alertable
         // NtDelayExecution sleeps in the process to the microsecond.

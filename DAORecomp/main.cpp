@@ -101,8 +101,8 @@ static LONG CALLBACK CrashHandler(EXCEPTION_POINTERS* info)
 }
 
 // Names an unnamed thread by where it started, "<module>+<offset>" (the
-// driver's and the system's threads have no names).
-static std::string ThreadStartName(HANDLE thread)
+// driver's and the system's threads have no names); `module` gets the module.
+static std::string ThreadStartName(HANDLE thread, HMODULE& module)
 {
     using QueryFn = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
     static const auto query = reinterpret_cast<QueryFn>(
@@ -111,13 +111,12 @@ static std::string ThreadStartName(HANDLE thread)
     void* start = nullptr;
     if (!query || query(thread, kThreadQuerySetWin32StartAddress, &start, sizeof(start), nullptr) < 0 || !start)
         return {};
-    HMODULE module = nullptr;
     wchar_t path[MAX_PATH] = {};
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
             static_cast<LPCWSTR>(start), &module) ||
         !GetModuleFileNameW(module, path, MAX_PATH))
-        return fmt::format("{}", start);
-    const std::wstring file = std::filesystem::path(path).filename().wstring();
+        return "?";
+    const std::wstring file = fs::path(path).filename().wstring();
     return fmt::format("{}+{:X}", std::string(file.begin(), file.end()),
         reinterpret_cast<uintptr_t>(start) - reinterpret_cast<uintptr_t>(module));
 }
@@ -366,7 +365,10 @@ int main(int argc, char** argv)
     }
 
     // DAO_THREAD_STATS=<seconds>: log the swap rate and every busy host thread's CPU
-    // use over each interval (finds what limits the frame rate).
+    // use over each interval (finds what limits the frame rate). Unnamed threads are
+    // named by their start address, and our own ones over 10% get a few host stack
+    // samples, for scripts/symbolize.py (others, the driver's, are left alone:
+    // suspended in the loader, they would block the stack walk).
     if (const char* stats = getenv("DAO_THREAD_STATS"))
     {
         const int seconds = std::max(1, atoi(stats));
@@ -383,11 +385,15 @@ int main(int argc, char** argv)
                 HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
                 THREADENTRY32 entry{ sizeof(entry) };
                 std::vector<std::pair<double, std::string>> busy;
+                std::vector<std::string> samples;
                 for (BOOL ok = Thread32First(snapshot, &entry); ok; ok = Thread32Next(snapshot, &entry))
                 {
                     if (entry.th32OwnerProcessID != GetCurrentProcessId())
                         continue;
+                    // The full query right is for the start address.
                     HANDLE thread = OpenThread(THREAD_QUERY_INFORMATION, FALSE, entry.th32ThreadID);
+                    if (!thread)
+                        thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ThreadID);
                     if (!thread)
                         continue;
                     FILETIME create, exit, kernel, user;
@@ -406,15 +412,16 @@ int main(int argc, char** argv)
                                 name = std::string(wide, wide + wcslen(wide));
                             else
                             {
-                                if (std::string start = ThreadStartName(thread); !start.empty())
+                                HMODULE module = nullptr;
+                                if (std::string start = ThreadStartName(thread, module); !start.empty())
                                     name += " " + start;
-                                // Where a busy unnamed thread spends its time,
-                                // for scripts/symbolize.py.
-                                if (percent >= 10.0)
+                                // Three samples, a few milliseconds apart.
+                                if (percent >= 10.0 && module == GetModuleHandleW(nullptr) &&
+                                    entry.th32ThreadID != GetCurrentThreadId())
                                     for (int i = 0; i < 3; i++)
                                     {
-                                        LOGI("  {} host stack:{}", name,
-                                            SampleHostStack(entry.th32ThreadID, 24));
+                                        samples.push_back(fmt::format("  {} host stack:{}", name,
+                                            SampleHostStack(entry.th32ThreadID, 24)));
                                         Sleep(3);
                                     }
                             }
@@ -429,6 +436,8 @@ int main(int argc, char** argv)
                 for (auto& [percent, name] : busy)
                     line += fmt::format(" {} {:.0f}%,", name, percent);
                 LOGI("{}", line);
+                for (const std::string& sample : samples)
+                    LOGI("{}", sample);
             }
         }).detach();
     }

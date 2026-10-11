@@ -3,6 +3,10 @@ instead of the Xenia emulator: no kernel/CPU modules, interrupts and guest
 threads go through xenia/dao_host.h, memory is DAORecomp's (see xenia/memory.h).
 
 Idempotent: each replacement is skipped if its result is already present.
+
+Historical: the vendored tree has since been edited in place (the upscaler,
+HDR, GPU timing, the frame limiter...), so this no longer reproduces it or
+applies cleanly to it, and isn't part of the build. Don't run it on the tree.
 """
 import pathlib
 import sys

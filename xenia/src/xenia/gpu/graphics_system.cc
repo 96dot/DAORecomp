@@ -161,7 +161,7 @@ X_STATUS GraphicsSystem::Setup(Memory* memory,
                 }
                 next_vblank_deadline += period;
                 if (next_vblank_deadline > now) {
-                  threading::NanoSleep(
+                  xe::threading::NanoSleep(
                       std::chrono::duration_cast<std::chrono::nanoseconds>(
                           next_vblank_deadline - now)
                           .count());
@@ -170,7 +170,7 @@ X_STATUS GraphicsSystem::Setup(Memory* memory,
                   // missed beats up rather than running the guest fast
                   // through what was a real freeze.
                   next_vblank_deadline = now + period;
-                  threading::NanoSleep(period.count());
+                  xe::threading::NanoSleep(period.count());
                 }
                 // Otherwise loop straight round without sleeping, delivering
                 // the missed beats until the guest has had as many as real
@@ -373,8 +373,9 @@ void GraphicsSystem::Pause() {
 }
 
 void GraphicsSystem::Resume() {
-  paused_ = false;
+  // The reset first, so the vblank thread can't see the pause end without it.
   vblank_deadline_reset_ = true;
+  paused_ = false;
 
   command_processor_->Resume();
 }
