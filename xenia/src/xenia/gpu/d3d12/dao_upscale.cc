@@ -397,6 +397,11 @@ class DaoUpscalerImpl {
                             const CopyConstants& constants);
   void CaptureHudless();
   bool InitializeMotion();
+  // The stream output buffers (2 x 96 MB), created at the first motion capture
+  // rather than with the rest, so they take no memory with the temporal
+  // upscaler off. False if they couldn't be created.
+  bool EnsureStreamOutBuffers();
+  bool stream_out_buffers_failed_ = false;
   // Null until created (or if that failed).
   ID3D12PipelineState* GetStreamOutPipeline(
       const PipelineCache::Pipeline& pipeline);
@@ -770,32 +775,51 @@ bool DaoUpscalerImpl::InitializeMotion() {
     return false;
   }
 
+  return true;
+}
+
+bool DaoUpscalerImpl::EnsureStreamOutBuffers() {
+  if (stream_out_zeros_) {
+    return true;
+  }
+  if (stream_out_buffers_failed_) {
+    return false;
+  }
+  ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
+  ComPtr<ID3D12Resource> buffers[2], zeros;
   D3D12_RESOURCE_DESC buffer_desc;
   ui::d3d12::util::FillBufferResourceDesc(buffer_desc, kStreamOutBufferSize,
                                           D3D12_RESOURCE_FLAG_NONE);
-  for (ComPtr<ID3D12Resource>& buffer : stream_out_buffers_) {
-    if (FAILED(device->CreateCommittedResource(
-            &ui::d3d12::util::kHeapPropertiesDefault, D3D12_HEAP_FLAG_NONE,
-            &buffer_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-            IID_PPV_ARGS(&buffer)))) {
-      return false;
-    }
+  bool created = true;
+  for (ComPtr<ID3D12Resource>& buffer : buffers) {
+    created = created && SUCCEEDED(device->CreateCommittedResource(
+                             &ui::d3d12::util::kHeapPropertiesDefault,
+                             D3D12_HEAP_FLAG_NONE, &buffer_desc,
+                             D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                             IID_PPV_ARGS(&buffer)));
   }
   ui::d3d12::util::FillBufferResourceDesc(buffer_desc, kStreamOutCounterSize,
                                           D3D12_RESOURCE_FLAG_NONE);
-  if (FAILED(device->CreateCommittedResource(
-          &ui::d3d12::util::kHeapPropertiesUpload, D3D12_HEAP_FLAG_NONE,
-          &buffer_desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-          IID_PPV_ARGS(&stream_out_zeros_)))) {
-    return false;
-  }
   void* mapping;
   D3D12_RANGE read_range = {};
-  if (FAILED(stream_out_zeros_->Map(0, &read_range, &mapping))) {
+  created = created &&
+            SUCCEEDED(device->CreateCommittedResource(
+                &ui::d3d12::util::kHeapPropertiesUpload, D3D12_HEAP_FLAG_NONE,
+                &buffer_desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                IID_PPV_ARGS(&zeros))) &&
+            SUCCEEDED(zeros->Map(0, &read_range, &mapping));
+  if (!created) {
+    XELOGE("FSR: failed to create the motion vector stream output buffers");
+    stream_out_buffers_failed_ = true;
     return false;
   }
   std::memset(mapping, 0, kStreamOutCounterSize);
-  stream_out_zeros_->Unmap(0, nullptr);
+  zeros->Unmap(0, nullptr);
+  for (uint32_t i = 0; i < 2; ++i) {
+    stream_out_buffers_[i] = std::move(buffers[i]);
+    stream_out_states_[i] = D3D12_RESOURCE_STATE_COPY_DEST;
+  }
+  stream_out_zeros_ = std::move(zeros);
   return true;
 }
 
@@ -1481,7 +1505,8 @@ bool DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     offset = (offset + 255) & ~uint32_t(255);
   }
   const uint32_t new_counters = own_buffers || new_append_buffer ? 1 : 0;
-  if (!stream_out_pipeline || output_vertex_count > (1u << 20) ||
+  if (!stream_out_pipeline || !EnsureStreamOutBuffers() ||
+      output_vertex_count > (1u << 20) ||
       offset + uint64_t(own_buffers ? own_size : output_size) >
           kStreamOutDataSize ||
       stream_out_counters_used_ + new_counters > kStreamOutCounterCount) {
