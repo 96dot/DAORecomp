@@ -108,7 +108,8 @@ namespace dao::gpu
             SetThreadDescription(GetCurrentThread(), L"UI");
             // DAO_BACKGROUND=1 (automated tests): open behind the active window,
             // leaving it focused.
-            const HWND foregroundWindow = getenv("DAO_BACKGROUND") ? GetForegroundWindow() : nullptr;
+            const char* background = getenv("DAO_BACKGROUND");
+            const HWND foregroundWindow = background && atoi(background) ? GetForegroundWindow() : nullptr;
             s_appContext = std::make_unique<xe::ui::Win32WindowedAppContext>(GetModuleHandleW(nullptr), SW_SHOWDEFAULT);
             if (!s_appContext->Initialize())
             {

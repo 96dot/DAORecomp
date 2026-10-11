@@ -696,8 +696,14 @@ void DaoUpscalerImpl::DestroyContext() {
   if (!context_) {
     return;
   }
-  // The context's resources may still be in use by submitted frames.
-  cp_.AwaitAllQueueOperationsCompletion();
+  // The context's resources may still be in use by submitted frames: awaited.
+  // Not the open submission, which hasn't used it (its dispatches are recorded
+  // at swaps, which end their submissions) and which this may be called in the
+  // middle of: ending it would drop the rest of the frame's commands.
+  const uint64_t current_submission = cp_.GetCurrentSubmission();
+  if (current_submission > 1) {
+    cp_.CheckSubmissionCompletion(current_submission - 1);
+  }
   ffx_destroy_(&context_, nullptr);
   context_ = nullptr;
 }
