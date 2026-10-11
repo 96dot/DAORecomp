@@ -7,6 +7,7 @@
 #include "vfs.h"
 
 #include "input/input.h"
+#include "ui/keyboard.h"
 
 namespace dao::imp
 {
@@ -482,7 +483,10 @@ namespace dao::imp
         dao::input::PadState host;
         if (!dao::input::GetState(user == 0xFF ? 0 : user, host))
             return X_ERROR_DEVICE_NOT_CONNECTED;
-        if (state)
+        // Nothing pressed while the on-screen keyboard has the controller.
+        if (state && dao::ui::KeyboardHoldsInput())
+            state->packetNumber = host.packetNumber;
+        else if (state)
         {
             state->packetNumber = host.packetNumber;
             state->gamepad.buttons = host.buttons;
@@ -553,6 +557,25 @@ namespace dao::imp
         const uint32_t handle = CreateHandle(listener);
         LOGI("XamNotifyCreateListener({:#x}) -> {:08X}", mask, handle);
         return handle;
+    }
+
+    // A notification for every listener of its area (the id's top bits).
+    static void Broadcast(uint32_t id, uint32_t param)
+    {
+        std::vector<std::shared_ptr<NotifyListener>> listeners;
+        {
+            std::lock_guard lock(s_listenersMutex);
+            for (const auto& weak : s_listeners)
+            {
+                if (auto listener = weak.lock())
+                    listeners.push_back(std::move(listener));
+            }
+        }
+        for (const auto& listener : listeners)
+        {
+            if (listener->mask & (1ull << (id >> 25)))
+                Enqueue(*listener, id, param);
+        }
     }
 
     bool XNotifyGetNext(uint32_t handle, uint32_t matchId, u32* idOut, u32* paramOut)
@@ -880,18 +903,45 @@ namespace dao::imp
         return 0;
     }
 
-    // XamShowKeyboardUI(user, flags, default, title, desc, buffer, length, overlapped)
+    // XamShowKeyboardUI(user, flags, default, title, desc, buffer, length, overlapped):
+    // the on-screen keyboard (ui/keyboard.cpp). With an overlapped, it completes when
+    // the player is done (ERROR_CANCELLED if they cancelled), the system UI shown
+    // meanwhile as the console's is (XN_SYS_UI).
     uint32_t XamShowKeyboardUI(uint32_t user, uint32_t flags, const u16* defaultText, const u16* title,
         const u16* description, u16* buffer, uint32_t length, uint32_t overlapped)
     {
-        if (buffer && length)
-        {
-            uint32_t i = 0;
-            for (; defaultText && defaultText[i] != 0 && i + 1 < length; i++)
-                buffer[i] = defaultText[i];
-            buffer[i] = 0;
-        }
-        return Finish(overlapped, X_ERROR_SUCCESS);
+        if (!buffer || !length)
+            return X_ERROR_INVALID_PARAMETER;
+        constexpr size_t kMaxGuestText = 1024;
+        auto read = [](const u16* text) {
+            std::u16string out;
+            for (size_t i = 0; text && i < kMaxGuestText && text[i] != 0; i++)
+                out += char16_t(uint16_t(text[i]));
+            return out;
+        };
+        const dao::ui::KeyboardRequest request{ read(title), read(description), read(defaultText), length - 1 };
+        auto run = [request, buffer, length]() -> uint32_t {
+            constexpr uint32_t kSystemUi = 0x00000009;   // XN_SYS_UI: param 1 shown, 0 hidden
+            Broadcast(kSystemUi, 1);
+            const auto text = dao::ui::RunKeyboard(request);
+            if (text)
+            {
+                const size_t count = std::min<size_t>(text->size(), length - 1);
+                for (size_t i = 0; i < count; i++)
+                    buffer[i] = uint16_t((*text)[i]);
+                buffer[count] = 0;
+            }
+            Broadcast(kSystemUi, 0);
+            return text ? X_ERROR_SUCCESS : X_ERROR_CANCELLED;
+        };
+        if (!overlapped)
+            return run();
+        std::thread([run, overlapped] {
+            SetThreadDescription(GetCurrentThread(), L"Keyboard");
+            const uint32_t result = run();
+            CompleteOverlapped(overlapped, result, result ? 0x80070000 | result : 0, 0);
+        }).detach();
+        return X_ERROR_IO_PENDING;
     }
 
     uint32_t XamShowAchievementsUI(uint32_t user, uint32_t unk) { return X_ERROR_SUCCESS; }

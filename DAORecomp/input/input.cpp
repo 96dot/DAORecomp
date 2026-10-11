@@ -50,6 +50,8 @@ namespace dao::input
         std::mutex s_mutex;
         PadState s_state;       // merged, guarded by s_mutex
         std::atomic<uint32_t> s_rumble{ 0 }; // left << 16 | right
+        // While text is typed (the on-screen keyboard), keys aren't buttons.
+        std::atomic<bool> s_textEntry{ false };
         std::vector<ScriptEvent> s_script;
         std::chrono::steady_clock::time_point s_start;
 
@@ -166,7 +168,7 @@ namespace dao::input
 
         uint32_t KeyboardButtons()
         {
-            if (!GameWindowFocused())
+            if (s_textEntry.load(std::memory_order_relaxed) || !GameWindowFocused())
                 return 0;
             static constexpr std::pair<int, uint32_t> kKeys[] = {
                 { VK_RETURN, kStart }, { VK_TAB, kBack }, { VK_SPACE, kA }, { VK_ESCAPE, kB },
@@ -334,6 +336,11 @@ namespace dao::input
         std::lock_guard lock(s_mutex);
         out = s_state;
         return true;
+    }
+
+    void SetTextEntry(bool on)
+    {
+        s_textEntry.store(on, std::memory_order_relaxed);
     }
 
     void SetRumble(uint32_t user, uint16_t leftMotor, uint16_t rightMotor)

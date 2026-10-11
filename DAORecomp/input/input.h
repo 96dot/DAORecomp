@@ -20,6 +20,10 @@ namespace dao::input
     // False when no controller is connected for `user`.
     bool GetState(uint32_t user, PadState& out);
 
+    // While on, the keyboard types text (into the on-screen keyboard) instead of
+    // pressing the virtual controller's buttons.
+    void SetTextEntry(bool on);
+
     // XInput semantics: the motors keep these speeds until changed.
     void SetRumble(uint32_t user, uint16_t leftMotor, uint16_t rightMotor);
 }

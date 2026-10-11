@@ -10,6 +10,7 @@
 #include "launcher/launcher.h"
 #include "mods/mods.h"
 #include "ui/graphics_menu.h"
+#include "ui/keyboard.h"
 #include "settings.h"
 #include "text.h"
 
@@ -220,6 +221,7 @@ int main(int argc, char** argv)
 
     g_processBlock = KernelAlloc(0x60);
     VfsInit(gameRoot, userRoot);
+    dao::ui::SetKeyboardGameRoot(gameRoot);
 
     if (!LoadXex(gameRoot / "default.xex"))
         return 1;
@@ -242,6 +244,18 @@ int main(int argc, char** argv)
     const char* gpuMode = getenv("DAO_GPU");
     if (!(gpuMode && strcmp(gpuMode, "null") == 0))
         dao::gpu::InitializeXeniaGraphics(userRoot);
+
+    // DAO_TEST_KEYBOARD=<seconds>: shows the on-screen keyboard that long after start
+    // (to test it without reaching character creation) and logs the outcome.
+    if (const char* keyboard = getenv("DAO_TEST_KEYBOARD"))
+    {
+        const int seconds = std::max(1, atoi(keyboard));
+        std::thread([seconds] {
+            std::this_thread::sleep_for(std::chrono::seconds(seconds));
+            const auto text = dao::ui::RunKeyboard({ u"Name", u"Enter a name for your character.", u"Aedan", 15 });
+            LOGI("Keyboard test: {}", text ? dao::WideToUtf8(std::wstring(text->begin(), text->end())) : "cancelled");
+        }).detach();
+    }
 
     // DAO_DUMP_AFTER=<seconds>: periodically log what every guest thread is doing.
     if (const char* dump = getenv("DAO_DUMP_AFTER"))

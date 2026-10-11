@@ -206,6 +206,13 @@ namespace dao::gpu
         return s_graphics != nullptr;
     }
 
+    XeniaWindow GetXeniaWindow()
+    {
+        if (!s_graphics || !s_graphics->presenter())
+            return {};
+        return { s_window.get(), s_appContext.get(), s_graphics->presenter(), s_graphics->provider() };
+    }
+
     void XeniaSetFullscreen(bool fullscreen)
     {
         if (!s_window)

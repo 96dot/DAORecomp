@@ -5,8 +5,27 @@
 
 #include "settings.h"
 
+namespace xe::ui
+{
+    class GraphicsProvider;
+    class Presenter;
+    class Window;
+    class WindowedAppContext;
+}
+
 namespace dao::gpu
 {
+    // The game window's parts, for overlays drawn over the game (ui/keyboard.cpp);
+    // all null before InitializeXeniaGraphics succeeds. Used on the UI thread.
+    struct XeniaWindow
+    {
+        xe::ui::Window* window = nullptr;
+        xe::ui::WindowedAppContext* appContext = nullptr;
+        xe::ui::Presenter* presenter = nullptr;
+        xe::ui::GraphicsProvider* provider = nullptr;
+    };
+    XeniaWindow GetXeniaWindow();
+
     // Creates the window and the D3D12 graphics system. Returns false if Direct3D 12
     // is unavailable (the runtime then falls back to the null command processor).
     bool InitializeXeniaGraphics(const std::filesystem::path& userRoot);
