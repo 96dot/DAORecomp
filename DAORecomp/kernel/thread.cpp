@@ -166,8 +166,45 @@ namespace dao::kernel
         }
     }
 
-    // Suspends a host thread and returns up to `count` return addresses (as offsets
-    // from the exe base, for lookup in DAORecomp.map) by unwinding through .pdata.
+    // Fills `offsets` with up to `count` return addresses from `context`; returns
+    // how many. No C++ objects here: the unwinding is guarded with SEH (a
+    // corrupted stack can fault).
+    static int UnwindOffsets(CONTEXT& context, uint64_t* offsets, int count)
+    {
+        const auto exeBase = reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr));
+        int n = 0;
+        __try
+        {
+            while (n < count && context.Rip)
+            {
+                offsets[n++] = context.Rip - exeBase;
+                DWORD64 imageBase;
+                auto* entry = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
+                if (!entry)
+                    break;
+                void* handlerData;
+                DWORD64 establisher;
+                RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, entry, &context, &handlerData,
+                    &establisher, nullptr);
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        return n;
+    }
+
+    std::string UnwindHostStack(CONTEXT& context, int count)
+    {
+        uint64_t offsets[64];
+        const int n = UnwindOffsets(context, offsets, std::min(count, int(std::size(offsets))));
+        std::string out;
+        for (int i = 0; i < n; i++)
+            out += fmt::format(" {:X}", offsets[i]);
+        return out;
+    }
+
+    // Suspends a host thread and returns its stack (see UnwindHostStack).
     static std::string SampleHostStack(uint32_t hostThreadId, int count)
     {
         HANDLE handle = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, hostThreadId);
@@ -179,21 +216,7 @@ namespace dao::kernel
             CONTEXT context{};
             context.ContextFlags = CONTEXT_FULL;
             if (GetThreadContext(handle, &context))
-            {
-                const auto exeBase = reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr));
-                for (int i = 0; i < count && context.Rip; i++)
-                {
-                    out += fmt::format(" {:X}", context.Rip - exeBase);
-                    DWORD64 imageBase;
-                    auto* entry = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
-                    if (!entry)
-                        break;
-                    void* handlerData;
-                    DWORD64 establisher;
-                    RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, entry, &context, &handlerData,
-                        &establisher, nullptr);
-                }
-            }
+                out = UnwindHostStack(context, count);
             ResumeThread(handle);
         }
         ::CloseHandle(handle);

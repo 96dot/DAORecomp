@@ -244,8 +244,8 @@ class DaoUpscalerImpl {
   ID3D12PipelineState* GetStreamOutPipeline(
       const PipelineCache::Pipeline& pipeline);
   void StreamOutPipelineThread();
-  // Of the buffer of this frame (or the previous one).
-  void TransitionStreamOut(D3D12_RESOURCE_STATES state, bool previous = false);
+  // Of stream_out_buffers_[buffer].
+  void TransitionStreamOut(uint32_t buffer, D3D12_RESOURCE_STATES state);
   void CaptureMotion(const Shader& vertex_shader, bool indexed,
                      uint32_t host_vertex_count);
   static void ExecuteStreamOut(void* context,
@@ -367,6 +367,7 @@ class DaoUpscalerImpl {
   uint64_t stream_out_append_submission_ = UINT64_MAX;
   // Whether draws since the last CloseStreamOut bound stream output buffers.
   bool stream_out_bound_ = false;
+  uint32_t motion_matched_ = 0;
   uint32_t motion_unmatched_ = 0;
   uint32_t motion_skipped_ = 0;
   bool motion_logged_ = false;
@@ -1097,12 +1098,11 @@ void DaoUpscalerImpl::StreamOutPipelineThread() {
   }
 }
 
-void DaoUpscalerImpl::TransitionStreamOut(D3D12_RESOURCE_STATES state,
-                                          bool previous) {
-  const uint32_t index = motion_frame_ ^ uint32_t(previous);
-  cp_.PushTransitionBarrier(stream_out_buffers_[index].Get(),
-                            stream_out_states_[index], state);
-  stream_out_states_[index] = state;
+void DaoUpscalerImpl::TransitionStreamOut(uint32_t buffer,
+                                          D3D12_RESOURCE_STATES state) {
+  cp_.PushTransitionBarrier(stream_out_buffers_[buffer].Get(),
+                            stream_out_states_[buffer], state);
+  stream_out_states_[buffer] = state;
 }
 
 void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
@@ -1173,10 +1173,15 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
       constants.insert(constants.end(), source, source + 4);
     }
   }
-  // Same shaders, vertex and index data and size: the same object.
-  uint64_t key_data[5] = {vertex_shader.ucode_data_hash(), motion_pixel_shader_,
-                          indexed ? regs.values[XE_GPU_REG_VGT_DMA_BASE] : 0,
-                          0, host_vertex_count};
+  // Same shaders, vertex and index data, size and primitive type (and strip
+  // cuts): the same object, with its positions written the same way.
+  const bool strip_cuts =
+      description.strip_cut_index != PipelineCache::PipelineStripCutIndex::kNone;
+  uint64_t key_data[5] = {
+      vertex_shader.ucode_data_hash(), motion_pixel_shader_,
+      indexed ? regs.values[XE_GPU_REG_VGT_DMA_BASE] : 0, 0,
+      host_vertex_count | (uint64_t(cp_.primitive_topology_) << 32) |
+          (uint64_t(strip_cuts) << 40)};
   if (!vertex_shader.vertex_bindings().empty()) {
     key_data[3] =
         regs.GetVertexFetch(vertex_shader.vertex_bindings()[0].fetch_constant)
@@ -1207,9 +1212,10 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     const std::vector<const MotionDraw*>& candidates = found->second;
     float best_distance = INFINITY;
     // Takes the candidate if it's the closest so far (stops summing past the
-    // closest).
+    // closest), among those that wrote positions.
     auto try_candidate = [&](const MotionDraw& candidate) {
-      if (candidate.constants.size() != constants.size()) {
+      if (candidate.constants.size() != constants.size() ||
+          !candidate.output_vertex_count) {
         return;
       }
       if (candidate.constants_hash == constants_hash) {
@@ -1236,7 +1242,9 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
       for (const MotionDraw* candidate : candidates) {
         if (candidate->constants_hash == constants_hash) {
           try_candidate(*candidate);
-          break;
+          if (previous) {
+            break;
+          }
         }
       }
     } else {
@@ -1280,22 +1288,16 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   draw.constants_sum = constants_sum;
   draw.output_vertex_count = 0;
   draw.has_motion = false;
-  // The positions are written for the next frame either way, but without
-  // the previous ones (new this frame, or they weren't written), the motion is
-  // unknown and left at zero.
-  if (previous && !previous->output_vertex_count) {
-    previous = nullptr;
-  }
-  if (!previous) {
-    ++motion_unmatched_;
-  }
+  // The positions are written for the next frame either way (unless skipped
+  // below), but without the previous ones (new this frame, or they weren't
+  // written), the motion is unknown and left at zero.
 
   // Appended to the shared stream output buffer, except for strips with cuts:
   // they write fewer triangles than counted, so where their positions end is
   // unknown, and they get buffers of their own.
   const bool own_buffers =
       cp_.primitive_topology_ == D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP &&
-      description.strip_cut_index != PipelineCache::PipelineStripCutIndex::kNone;
+      strip_cuts;
   const uint64_t submission = cp_.GetCurrentSubmission();
   const bool new_append_buffer =
       !own_buffers && stream_out_append_submission_ == UINT64_MAX;
@@ -1331,14 +1333,14 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
 
   if (!stream_out_reset_) {
     // Zero the filled-size counters, once per frame.
-    TransitionStreamOut(D3D12_RESOURCE_STATE_COPY_DEST);
+    TransitionStreamOut(motion_frame_, D3D12_RESOURCE_STATE_COPY_DEST);
     cp_.SubmitBarriers();
     cp_.GetDeferredCommandList().D3DCopyBufferRegion(
         stream_out_buffers_[motion_frame_].Get(), kStreamOutDataSize,
         stream_out_zeros_.Get(), 0, kStreamOutCounterSize);
     stream_out_reset_ = true;
   }
-  TransitionStreamOut(D3D12_RESOURCE_STATE_STREAM_OUT);
+  TransitionStreamOut(motion_frame_, D3D12_RESOURCE_STATE_STREAM_OUT);
   cp_.SubmitBarriers();
 
   draw.stream_out_pipeline = stream_out_pipeline;
@@ -1398,6 +1400,9 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     draw.motion.previous_counter = previous->motion.current_counter;
     draw.motion.previous_in_buffer = previous->motion.current_in_buffer;
     draw.has_motion = true;
+    ++motion_matched_;
+  } else {
+    ++motion_unmatched_;
   }
   if (draw.bind_stream_out) {
     stream_out_bound_ = true;
@@ -1489,11 +1494,12 @@ void DaoUpscalerImpl::RecordMotionPass(uint32_t width, uint32_t height) {
     device->CreateDepthStencilView(
         motion_depth_.resource.Get(), &dsv,
         motion_dsv_heap_->GetCPUDescriptorHandleForHeapStart());
-    // Only ever in this state (created in it); for the tracked state.
+    // Created in this state and never left: only keeps the tracked state.
     Transition(motion_depth_, D3D12_RESOURCE_STATE_DEPTH_WRITE);
     CloseStreamOut();
-    TransitionStreamOut(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    TransitionStreamOut(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, true);
+    for (uint32_t i = 0; i < 2; ++i) {
+      TransitionStreamOut(i, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
     Transition(depth_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   }
@@ -1955,7 +1961,7 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
     XELOGI(
         "FSR: motion vectors for {} draws ({} new, {} skipped), {} KB of "
         "positions",
-        motion_draws.size() - motion_unmatched_, motion_unmatched_,
+        motion_matched_, motion_unmatched_,
         motion_skipped_, stream_out_used_ >> 10);
   }
   // This frame's draws are the previous ones for the next frame (the commands
@@ -1977,6 +1983,7 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   stream_out_used_ = 0;
   stream_out_counters_used_ = 0;
   stream_out_reset_ = false;
+  motion_matched_ = 0;
   motion_unmatched_ = 0;
   motion_skipped_ = 0;
   motion_pending_ = false;

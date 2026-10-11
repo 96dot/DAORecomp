@@ -1,7 +1,7 @@
 // DAO: motion vectors for FSR. Each scene draw's vertex shader was run again
 // with stream output and without jitter (dao_upscale.cc), giving the
-// clip-space position of every vertex, now and, from the matching draw of the
-// previous frame, one frame ago. This pass draws those triangles again into
+// clip-space position of every vertex now; the position one frame ago is what
+// the matching draw of the previous frame wrote. This pass draws those triangles again into
 // the motion vector target, keeping only the pixels where they are the visible
 // surface in the scene depth. The scene depth is also in the depth buffer, so
 // the depth test can reject most of the hidden pixels before the pixel shader

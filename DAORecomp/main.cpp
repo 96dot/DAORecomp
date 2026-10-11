@@ -100,38 +100,26 @@ static LONG CALLBACK CrashHandler(EXCEPTION_POINTERS* info)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-// The calling thread's stack as exe offsets, for scripts/symbolize.py.
-static std::string CurrentHostStack()
-{
-    CONTEXT context{};
-    RtlCaptureContext(&context);
-    const auto exeBase = reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr));
-    std::string out;
-    for (int i = 0; i < 32 && context.Rip; i++)
-    {
-        out += fmt::format(" {:X}", context.Rip - exeBase);
-        DWORD64 imageBase;
-        auto* entry = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
-        if (!entry)
-            break;
-        void* handlerData;
-        DWORD64 establisher;
-        RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, entry, &context, &handlerData, &establisher,
-            nullptr);
-    }
-    return out;
-}
-
 // abort() (assertions, std::terminate) ends the process with a fast fail that
-// the exception handler doesn't see: log where it came from first.
+// the exception handler doesn't see: log where it came from first. The stack
+// goes on a line of its own, after one saying what happened, in case walking
+// it fails.
 static void AbortHandler(int)
 {
-    LOGE("abort() called, host stack:{}", CurrentHostStack());
+    LOGE("abort() called");
+    CONTEXT context{};
+    RtlCaptureContext(&context);
+    LOGE("  host stack:{}", UnwindHostStack(context, 32));
 }
 
+// Only the main thread's (MSVC's terminate handlers are per thread); other
+// threads' std::terminate calls abort() directly.
 static void TerminateHandler()
 {
-    LOGE("std::terminate called, host stack:{}", CurrentHostStack());
+    // Not again if logging throws or terminates.
+    static std::atomic<bool> entered{false};
+    if (!entered.exchange(true))
+        LOGE("std::terminate called (the abort() below logs the stack)");
     abort();
 }
 

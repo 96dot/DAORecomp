@@ -2290,9 +2290,9 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     swap_texture_resource = dao_upscaled;
     swap_texture_srv_desc = dao_upscaled_srv_desc;
     swap_texture_desc = dao_upscaled->GetDesc();
-  }
-  if (dao_timed) {
-    dao_timing::GpuTiming::Get().Mark(*this, "UI composite");
+    if (dao_timed) {
+      dao_timing::GpuTiming::Get().Mark(*this, "UI composite");
+    }
   }
 
   auto aspect = graphics_system_->GetScaledAspectRatio();
