@@ -11,6 +11,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -177,7 +178,9 @@ class DaoUpscalerImpl {
     // For finding the same draw in the next frame.
     uint64_t key;
     uint64_t constants_hash;
-    std::vector<uint32_t> constants;
+    // Where the constants are in motion_constant_data_ of the frame.
+    uint32_t constants_offset;
+    uint32_t constants_count;
     // Sum of the constants (infinity if any isn't finite): the difference of
     // two is at most the distance between their constants.
     double constants_sum;
@@ -200,10 +203,44 @@ class DaoUpscalerImpl {
     bool has_motion;
     MotionConstants motion;
   };
+  // MotionDraws in chunks kept when cleared: stable addresses (commands keep
+  // pointers to them) without an allocation for every draw.
+  class MotionDrawPool {
+   public:
+    MotionDraw& emplace_back() {
+      if (size_ == chunks_.size() * kChunkSize) {
+        chunks_.push_back(std::make_unique<MotionDraw[]>(kChunkSize));
+      }
+      MotionDraw& draw = (*this)[size_++];
+      draw = {};
+      return draw;
+    }
+    void clear() { size_ = 0; }
+    MotionDraw& operator[](size_t i) const {
+      return chunks_[i / kChunkSize][i % kChunkSize];
+    }
+    struct Iterator {
+      const MotionDrawPool* pool;
+      size_t i;
+      MotionDraw& operator*() const { return (*pool)[i]; }
+      Iterator& operator++() {
+        ++i;
+        return *this;
+      }
+      bool operator!=(const Iterator& other) const { return i != other.i; }
+    };
+    Iterator begin() const { return {this, 0}; }
+    Iterator end() const { return {this, size_}; }
+
+   private:
+    static constexpr size_t kChunkSize = 256;
+    std::vector<std::unique_ptr<MotionDraw[]>> chunks_;
+    size_t size_ = 0;
+  };
   // The motion vector pass at the swap.
   struct MotionPass {
     DaoUpscalerImpl* self;
-    const std::deque<MotionDraw>* draws;
+    const MotionDrawPool* draws;
     D3D12_GPU_DESCRIPTOR_HANDLE positions;
     D3D12_GPU_DESCRIPTOR_HANDLE previous_positions;
     D3D12_GPU_DESCRIPTOR_HANDLE depth;
@@ -348,11 +385,12 @@ class DaoUpscalerImpl {
   bool stream_out_shutdown_ = false;
   // This frame's draws and the previous frame's, alternating (a frame's draws
   // are read by its commands until they're executed after the swap).
-  std::deque<MotionDraw> motion_draws_[2];
+  MotionDrawPool motion_draws_[2];
+  // The constants of the frame's draws.
+  std::vector<uint32_t> motion_constant_data_[2];
   uint32_t motion_frame_ = 0;
-  // The previous frame's draws of each object, in order of constants_sum.
-  std::unordered_map<uint64_t, std::vector<const MotionDraw*>>
-      previous_motion_draws_;
+  // The previous frame's draws, in order of key, then constants_sum.
+  std::vector<const MotionDraw*> previous_motion_draws_;
   std::unordered_set<uint64_t> motion_seen_;
   // The constants of the current draw (kept to reuse the allocation).
   std::vector<uint32_t> motion_constants_;
@@ -1159,18 +1197,26 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   // The float constants as the vertex shader gets them.
   const RegisterFile& regs = rtc_.register_file();
   std::vector<uint32_t>& constants = motion_constants_;
-  constants.clear();
   const Shader::ConstantRegisterMap& constant_map =
       vertex_shader.constant_register_map();
+  size_t register_count = 0;
+  for (uint64_t bits : constant_map.float_bitmap) {
+    register_count += size_t(std::popcount(bits));
+  }
+  constants.resize(register_count * 4);
+  uint32_t* out = constants.data();
+  // Runs of consecutive registers at once.
   for (uint32_t i = 0; i < 4; ++i) {
     uint64_t bits = constant_map.float_bitmap[i];
     while (bits) {
       const uint32_t index = uint32_t(std::countr_zero(bits));
-      bits &= bits - 1;
-      const uint32_t* source =
-          &regs.values[XE_GPU_REG_SHADER_CONSTANT_000_X + (i << 8) +
-                       (index << 2)];
-      constants.insert(constants.end(), source, source + 4);
+      const uint32_t run = uint32_t(std::countr_one(bits >> index));
+      bits &= index + run >= 64 ? 0 : ~uint64_t(0) << (index + run);
+      std::memcpy(out,
+                  &regs.values[XE_GPU_REG_SHADER_CONSTANT_000_X + (i << 8) +
+                               (index << 2)],
+                  run * 4 * sizeof(uint32_t));
+      out += run * 4;
     }
   }
   // Same shaders, vertex and index data, size and primitive type (and strip
@@ -1207,14 +1253,21 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     constants_sum = INFINITY;
   }
   const MotionDraw* previous = nullptr;
-  auto found = previous_motion_draws_.find(key);
-  if (found != previous_motion_draws_.end()) {
-    const std::vector<const MotionDraw*>& candidates = found->second;
+  const auto first = std::lower_bound(
+      previous_motion_draws_.begin(), previous_motion_draws_.end(), key,
+      [](const MotionDraw* draw, uint64_t key) { return draw->key < key; });
+  const auto last = std::upper_bound(
+      first, previous_motion_draws_.end(), key,
+      [](uint64_t key, const MotionDraw* draw) { return key < draw->key; });
+  if (first != last) {
+    const std::span<const MotionDraw* const> candidates(first, last);
+    const uint32_t* previous_constants =
+        motion_constant_data_[motion_frame_ ^ 1].data();
     float best_distance = INFINITY;
     // Takes the candidate if it's the closest so far (stops summing past the
     // closest), among those that wrote positions.
     auto try_candidate = [&](const MotionDraw& candidate) {
-      if (candidate.constants.size() != constants.size() ||
+      if (candidate.constants_count != constants.size() ||
           !candidate.output_vertex_count) {
         return;
       }
@@ -1223,10 +1276,12 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
         best_distance = 0.0f;
         return;
       }
+      const uint32_t* candidate_constants =
+          previous_constants + candidate.constants_offset;
       float distance = 0.0f;
       for (size_t i = 0; i < constants.size(); ++i) {
         distance += std::abs(std::bit_cast<float>(constants[i]) -
-                             std::bit_cast<float>(candidate.constants[i]));
+                             std::bit_cast<float>(candidate_constants[i]));
         // Checked every 16 floats (4 registers).
         if ((i & 15) == 15 && !(distance < best_distance)) {
           return;
@@ -1279,12 +1334,15 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     }
   }
 
-  std::deque<MotionDraw>& draws = motion_draws_[motion_frame_];
-  MotionDraw& draw = draws.emplace_back();
+  MotionDraw& draw = motion_draws_[motion_frame_].emplace_back();
+  std::vector<uint32_t>& constant_data = motion_constant_data_[motion_frame_];
   draw.self = this;
   draw.key = key;
   draw.constants_hash = constants_hash;
-  draw.constants = constants;
+  draw.constants_offset = uint32_t(constant_data.size());
+  draw.constants_count = uint32_t(constants.size());
+  constant_data.insert(constant_data.end(), constants.begin(),
+                       constants.end());
   draw.constants_sum = constants_sum;
   draw.output_vertex_count = 0;
   draw.has_motion = false;
@@ -1446,7 +1504,7 @@ void DaoUpscalerImpl::ExecuteCloseStreamOut(
 }
 
 void DaoUpscalerImpl::RecordMotionPass(uint32_t width, uint32_t height) {
-  const std::deque<MotionDraw>& draws = motion_draws_[motion_frame_];
+  const MotionDrawPool& draws = motion_draws_[motion_frame_];
   ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
   D3D12_RENDER_TARGET_VIEW_DESC rtv = {};
   rtv.Format = motion_vectors_.format;
@@ -1955,7 +2013,7 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   }
 
   // Motion: how the draws were covered, once after upscaling starts.
-  std::deque<MotionDraw>& motion_draws = motion_draws_[motion_frame_];
+  const MotionDrawPool& motion_draws = motion_draws_[motion_frame_];
   if (upscaled && !motion_logged_ && !previous_motion_draws_.empty()) {
     motion_logged_ = true;
     XELOGI(
@@ -1968,16 +2026,16 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   // reading them are executed at this swap).
   previous_motion_draws_.clear();
   for (const MotionDraw& draw : motion_draws) {
-    previous_motion_draws_[draw.key].push_back(&draw);
+    previous_motion_draws_.push_back(&draw);
   }
-  for (auto& [key, candidates] : previous_motion_draws_) {
-    std::sort(candidates.begin(), candidates.end(),
-              [](const MotionDraw* a, const MotionDraw* b) {
-                return a->constants_sum < b->constants_sum;
-              });
-  }
+  std::sort(previous_motion_draws_.begin(), previous_motion_draws_.end(),
+            [](const MotionDraw* a, const MotionDraw* b) {
+              return a->key != b->key ? a->key < b->key
+                                      : a->constants_sum < b->constants_sum;
+            });
   motion_frame_ ^= 1;
   motion_draws_[motion_frame_].clear();
+  motion_constant_data_[motion_frame_].clear();
   motion_seen_.clear();
   CloseStreamOut();
   stream_out_used_ = 0;
