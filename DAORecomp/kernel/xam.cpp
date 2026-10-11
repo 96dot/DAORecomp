@@ -524,11 +524,9 @@ namespace dao::imp
 
     static void Enqueue(NotifyListener& listener, uint32_t id, uint32_t param)
     {
-        {
-            auto lock = LockDispatcher();
-            listener.queue.emplace_back(id, param);
-        }
-        NotifyDispatcher();
+        auto lock = LockDispatcher();
+        listener.queue.emplace_back(id, param);
+        NotifyDispatcher(listener);
     }
 
     uint32_t XamNotifyCreateListener(uint64_t mask, uint32_t maxVersion)

@@ -293,7 +293,7 @@ namespace dao::kernel
         {
             auto lock = LockDispatcher();
             while (suspendCount > 0)
-                WaitDispatcherChange(lock);
+                WaitDispatcherChange(lock, *this);
         }
 
         LOGI("Thread {} start {:08X}({:08X}) stack {:08X}-{:08X}", threadId, params.startAddress,
@@ -319,8 +319,8 @@ namespace dao::kernel
             terminated = true;
             SyncGuest();
             g_memory.Translate<X_DISPATCH_HEADER>(kthread)->signalState = 1;
+            NotifyDispatcher(*this);
         }
-        NotifyDispatcher();
 
         t_current = nullptr;
         t_context = nullptr;
@@ -393,8 +393,7 @@ namespace dao::kernel
         const int32_t previous = suspendCount;
         if (suspendCount > 0)
             suspendCount--;
-        lock.unlock();
-        NotifyDispatcher();
+        NotifyDispatcher(*this);
         return previous;
     }
 
@@ -403,8 +402,8 @@ namespace dao::kernel
         {
             auto lock = LockDispatcher();
             apcQueue.push_back(apc);
+            NotifyDispatcher(*this);
         }
-        NotifyDispatcher();
     }
 
     bool GuestThread::DeliverApcs()

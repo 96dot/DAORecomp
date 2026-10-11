@@ -1,6 +1,8 @@
 #pragma once
-// Kernel objects. Waitable objects share one dispatcher lock + condition variable,
-// which keeps WaitAll / WaitAny across mixed object types simple and correct.
+// Kernel objects. Waitable objects share one dispatcher lock, which keeps
+// WaitAll / WaitAny across mixed object types simple and correct. A waiting
+// thread registers on the objects it waits on, and a change to an object wakes
+// only those threads.
 //
 // Every waitable object also has a guest DISPATCHER_HEADER (either the game's own,
 // e.g. a KEVENT embedded in a struct and passed to KeSetEvent, or one we allocate
@@ -12,6 +14,7 @@
 namespace dao::kernel
 {
     struct GuestThread;
+    struct DispatchWaiter;
 
     enum class ObjectType
     {
@@ -44,13 +47,20 @@ namespace dao::kernel
 
         // Mirror state into the guest header (signal state) for code that peeks at it.
         virtual void SyncGuest() {}
+
+        // The threads waiting on the object (for a thread, also the thread itself
+        // in an alertable wait). Guarded by the dispatcher lock.
+        std::vector<DispatchWaiter*> waiters;
     };
 
     using ObjectRef = std::shared_ptr<KernelObject>;
 
     std::unique_lock<std::mutex> LockDispatcher();
-    void NotifyDispatcher(); // wake waiters; call after changing any signal state
-    void WaitDispatcherChange(std::unique_lock<std::mutex>& lock); // block until the next NotifyDispatcher
+    // Wakes the threads waiting on the object; called with the dispatcher lock
+    // held, after changing its signal state (or a thread's APCs or suspension).
+    void NotifyDispatcher(KernelObject& object);
+    // Blocks until a NotifyDispatcher on the object (or a spurious wakeup).
+    void WaitDispatcherChange(std::unique_lock<std::mutex>& lock, KernelObject& object);
 
     struct Event final : KernelObject
     {

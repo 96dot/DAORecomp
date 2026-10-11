@@ -6,21 +6,45 @@
 namespace dao::kernel
 {
     static std::mutex s_dispatchMutex;
-    static std::condition_variable s_dispatchCv;
+
+    // A thread's wakeup. Notified with the dispatcher lock held: the thread only
+    // leaves its wait, and so its registrations, with the lock.
+    struct DispatchWaiter
+    {
+        std::condition_variable cv;
+    };
+
+    static thread_local DispatchWaiter t_waiter;
+
+    static void AddWaiter(KernelObject& object)
+    {
+        object.waiters.push_back(&t_waiter);
+    }
+
+    static void RemoveWaiter(KernelObject& object)
+    {
+        auto& waiters = object.waiters;
+        const auto it = std::find(waiters.begin(), waiters.end(), &t_waiter);
+        *it = waiters.back();
+        waiters.pop_back();
+    }
 
     std::unique_lock<std::mutex> LockDispatcher()
     {
         return std::unique_lock(s_dispatchMutex);
     }
 
-    void NotifyDispatcher()
+    void NotifyDispatcher(KernelObject& object)
     {
-        s_dispatchCv.notify_all();
+        for (DispatchWaiter* waiter : object.waiters)
+            waiter->cv.notify_one();
     }
 
-    void WaitDispatcherChange(std::unique_lock<std::mutex>& lock)
+    void WaitDispatcherChange(std::unique_lock<std::mutex>& lock, KernelObject& object)
     {
-        s_dispatchCv.wait(lock);
+        AddWaiter(object);
+        t_waiter.cv.wait(lock);
+        RemoveWaiter(object);
     }
 
     // ------------------------------------------------------------------- time
@@ -87,8 +111,7 @@ namespace dao::kernel
         const int32_t previous = signaled;
         signaled = true;
         SyncGuest();
-        lock.unlock();
-        NotifyDispatcher();
+        NotifyDispatcher(*this);
         return previous;
     }
 
@@ -108,8 +131,8 @@ namespace dao::kernel
         auto lock = LockDispatcher();
         const int32_t previous = signaled;
         signaled = true;
+        NotifyDispatcher(*this);
         lock.unlock();
-        NotifyDispatcher();
         std::this_thread::yield();
         lock.lock();
         signaled = false;
@@ -131,8 +154,7 @@ namespace dao::kernel
             return -1;
         count += adjustment;
         SyncGuest();
-        lock.unlock();
-        NotifyDispatcher();
+        NotifyDispatcher(*this);
         return previous;
     }
 
@@ -191,8 +213,7 @@ namespace dao::kernel
         if (recursion == 0)
             owner = nullptr;
         SyncGuest();
-        lock.unlock();
-        NotifyDispatcher();
+        NotifyDispatcher(*this);
         return previous;
     }
 
@@ -261,6 +282,7 @@ namespace dao::kernel
                 return;
             timer->signaled = true;
             timer->SyncGuest();
+            NotifyDispatcher(*timer);
             if (timer->apcRoutine)
             {
                 if (auto thread = timer->apcThread.lock())
@@ -268,10 +290,9 @@ namespace dao::kernel
                     const uint64_t now = SystemTime100ns();
                     static_cast<GuestThread*>(thread.get())->apcQueue.push_back(
                         { timer->apcRoutine, timer->apcContext, uint32_t(now), uint32_t(now >> 32) });
+                    NotifyDispatcher(*thread);
                 }
             }
-            dispatch.unlock();
-            NotifyDispatcher();
         }
     };
 
@@ -504,10 +525,44 @@ namespace dao::kernel
         }
 
         auto lock = LockDispatcher();
+        // Registered on the objects (and for APCs) from the first block to the
+        // return, with the lock held.
+        struct Registration
+        {
+            std::span<const ObjectRef> objects;
+            GuestThread* apcThread;
+            bool registered = false;
+
+            void Add()
+            {
+                if (registered)
+                    return;
+                registered = true;
+                for (const auto& object : objects)
+                    AddWaiter(*object);
+                if (apcThread)
+                    AddWaiter(*apcThread);
+            }
+
+            void Remove()
+            {
+                if (!registered)
+                    return;
+                registered = false;
+                for (const auto& object : objects)
+                    RemoveWaiter(*object);
+                if (apcThread)
+                    RemoveWaiter(*apcThread);
+            }
+
+            ~Registration() { Remove(); }
+        } registration{ objects, alertable ? self : nullptr };
+
         for (;;)
         {
             if (alertable && self && !self->apcQueue.empty())
             {
+                registration.Remove();
                 lock.unlock();
                 self->DeliverApcs();
                 return X_STATUS_USER_APC;
@@ -546,11 +601,12 @@ namespace dao::kernel
             if (poll)
                 return X_STATUS_TIMEOUT;
 
+            registration.Add();
             if (infinite)
             {
-                s_dispatchCv.wait(lock);
+                t_waiter.cv.wait(lock);
             }
-            else if (s_dispatchCv.wait_until(lock, deadline) == std::cv_status::timeout)
+            else if (t_waiter.cv.wait_until(lock, deadline) == std::cv_status::timeout)
             {
                 // One last check happens on the next loop iteration only if signaled;
                 // otherwise report the timeout.
@@ -655,7 +711,12 @@ namespace dao::kernel
                 self->DeliverApcs();
                 return X_STATUS_USER_APC;
             }
-            if (s_dispatchCv.wait_until(lock, deadline) == std::cv_status::timeout)
+            if (self)
+                AddWaiter(*self);
+            const auto status = t_waiter.cv.wait_until(lock, deadline);
+            if (self)
+                RemoveWaiter(*self);
+            if (status == std::cv_status::timeout)
                 return X_STATUS_SUCCESS;
         }
     }
