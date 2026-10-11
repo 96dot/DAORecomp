@@ -18,13 +18,13 @@
 //
 ps_5_1
 dcl_globalFlags refactoringAllowed
-dcl_resource_texture2d (float,float,float,float) T0[1:1], space=0
+dcl_resource_texture2d (float,float,float,float) T0[2:2], space=0
 dcl_input_ps_siv linear noperspective v0.xy, position
 dcl_output oDepth
 dcl_temps 1
 ftoi r0.xy, v0.xyxx
 mov r0.zw, l(0,0,0,0)
-ld r0.x, r0.xyzw, T0[1].xyzw
+ld r0.x, r0.xyzw, T0[2].xyzw
 mov oDepth, r0.x
 ret 
 // Approximately 0 instruction slots used
@@ -32,10 +32,10 @@ ret
 
 const BYTE dao_upscale_mv_depth_ps[] =
 {
-     68,  88,  66,  67,  83, 250, 
-    102,  54,  86, 168, 165,   9, 
-    107, 103, 198, 165,  70,   4, 
-     16, 255,   1,   0,   0,   0, 
+     68,  88,  66,  67, 234, 212, 
+     64,  65, 131, 236, 247, 174, 
+    245, 200, 126, 214, 204,  17, 
+     26, 249,   1,   0,   0,   0, 
      76,   1,   0,   0,   3,   0, 
       0,   0,  44,   0,   0,   0, 
      96,   0,   0,   0, 148,   0, 
@@ -62,7 +62,7 @@ const BYTE dao_upscale_mv_depth_ps[] =
       0,   0, 106,   8,   0,   1, 
      88,  24,   0,   7,  70, 126, 
      48,   0,   0,   0,   0,   0, 
-      1,   0,   0,   0,   1,   0, 
+      2,   0,   0,   0,   2,   0, 
       0,   0,  85,  85,   0,   0, 
       0,   0,   0,   0, 100,  32, 
       0,   4,  50,  16,  16,   0, 
@@ -83,7 +83,7 @@ const BYTE dao_upscale_mv_depth_ps[] =
       0,   0,   0,   0,  70,  14, 
      16,   0,   0,   0,   0,   0, 
      70, 126,  32,   0,   0,   0, 
-      0,   0,   1,   0,   0,   0, 
+      0,   0,   2,   0,   0,   0, 
      54,   0,   0,   4,   1, 192, 
       0,   0,  10,   0,  16,   0, 
       0,   0,   0,   0,  62,   0, 

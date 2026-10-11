@@ -25,7 +25,7 @@
 ps_5_1
 dcl_globalFlags refactoringAllowed | forceEarlyDepthStencil
 dcl_constantbuffer CB0[0:0][4], immediateIndexed, space=0
-dcl_resource_texture2d (float,float,float,float) T0[1:1], space=0
+dcl_resource_texture2d (float,float,float,float) T0[2:2], space=0
 dcl_input_ps_siv linear noperspective v0.xy, position
 dcl_input_ps linear v1.xyz
 dcl_input_ps linear noperspective v2.x
@@ -33,7 +33,7 @@ dcl_output o0.xy
 dcl_temps 1
 ftoi r0.xy, v0.xyxx
 mov r0.zw, l(0,0,0,0)
-ld r0.x, r0.xyzw, T0[1].xyzw
+ld r0.x, r0.xyzw, T0[2].xyzw
 deriv_rtx_coarse r0.y, v2.x
 deriv_rty_coarse r0.z, v2.x
 add r0.y, |r0.z|, |r0.y|
@@ -55,10 +55,10 @@ ret
 
 const BYTE dao_upscale_mv_ps[] =
 {
-     68,  88,  66,  67,  90,  70, 
-    146,  86,  46, 226,  14, 117, 
-     53,  16, 109, 252, 143,  38, 
-    117,  83,   1,   0,   0,   0, 
+     68,  88,  66,  67, 239, 186, 
+    233,  15, 152, 199,  17,  86, 
+     76, 157, 107,  17, 168, 186, 
+     41,  82,   1,   0,   0,   0, 
     112,   3,   0,   0,   3,   0, 
       0,   0,  44,   0,   0,   0, 
     156,   0,   0,   0, 208,   0, 
@@ -99,8 +99,8 @@ const BYTE dao_upscale_mv_ps[] =
       0,   0,   4,   0,   0,   0, 
       0,   0,   0,   0,  88,  24, 
       0,   7,  70, 126,  48,   0, 
-      0,   0,   0,   0,   1,   0, 
-      0,   0,   1,   0,   0,   0, 
+      0,   0,   0,   0,   2,   0, 
+      0,   0,   2,   0,   0,   0, 
      85,  85,   0,   0,   0,   0, 
       0,   0, 100,  32,   0,   4, 
      50,  16,  16,   0,   0,   0, 
@@ -125,7 +125,7 @@ const BYTE dao_upscale_mv_ps[] =
      16,   0,   0,   0,   0,   0, 
      70,  14,  16,   0,   0,   0, 
       0,   0,  70, 126,  32,   0, 
-      0,   0,   0,   0,   1,   0, 
+      0,   0,   0,   0,   2,   0, 
       0,   0, 122,   0,   0,   5, 
      34,   0,  16,   0,   0,   0, 
       0,   0,  10,  16,  16,   0, 
