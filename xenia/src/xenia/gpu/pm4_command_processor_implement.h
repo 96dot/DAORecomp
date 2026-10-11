@@ -743,8 +743,9 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
       if (wait >= 0x100) {
         PrepareForWait();
         if (!cvars::vsync) {
-          // User wants it fast and dangerous.
-          // do nothing
+          // User wants it fast and dangerous: polls, but lets other threads
+          // have the core (few on handhelds).
+          xe::threading::MaybeYield();
         } else {
           xe::threading::Sleep(std::chrono::milliseconds(wait / 0x100));
           ReturnFromWait();

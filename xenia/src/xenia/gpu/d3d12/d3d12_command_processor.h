@@ -320,6 +320,7 @@ class D3D12CommandProcessor final : public CommandProcessor {
   void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
                  uint32_t frontbuffer_height) override;
 
+  void PrepareForWait() override;
   void OnPrimaryBufferEnd() override;
 
   Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,

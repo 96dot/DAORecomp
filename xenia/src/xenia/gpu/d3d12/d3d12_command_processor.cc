@@ -2628,6 +2628,16 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   EndSubmission(true);
 }
 
+void D3D12CommandProcessor::PrepareForWait() {
+  CommandProcessor::PrepareForWait();
+  // The commands before the wait run on the GPU while the command processor
+  // waits (on the guest CPU, often for most of a frame): submitted now rather
+  // than at the swap.
+  if (submission_open_ && CanEndSubmissionImmediately()) {
+    EndSubmission(false);
+  }
+}
+
 void D3D12CommandProcessor::OnPrimaryBufferEnd() {
   // Pump any completed resolves now since the guest is likely about to poll.
   PumpQueryResolves();
