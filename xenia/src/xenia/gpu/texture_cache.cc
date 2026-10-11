@@ -267,7 +267,9 @@ void TextureCache::BeginFrame() {
 
 void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled,
                                        uint32_t length_unscaled,
-                                       bool resolution_scaled) {
+                                       bool resolution_scaled,
+                                       bool collect_invalidated) {
+  resolve_invalidated_textures_.clear();
   if (length_unscaled == 0) {
     return;
   }
@@ -304,7 +306,9 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled,
 
   // Invalidate textures. Toggling individual textures between scaled and
   // unscaled also relies on invalidation through shared memory.
+  collecting_resolve_invalidated_ = collect_invalidated;
   shared_memory().RangeWrittenByGpu(start_unscaled, length_unscaled);
+  collecting_resolve_invalidated_ = false;
 }
 
 uint32_t TextureCache::GuestToHostSwizzle(uint32_t guest_swizzle,
@@ -613,8 +617,13 @@ void TextureCache::WatchCallback(const global_unique_lock_type& global_lock,
                                  bool invalidated_by_gpu) {
   Texture& texture = *static_cast<Texture*>(context);
   texture.WatchCallback(global_lock, argument != 0);
-  texture.texture_cache().texture_became_outdated_.store(
-      true, std::memory_order_release);
+  TextureCache& texture_cache = texture.texture_cache();
+  texture_cache.texture_became_outdated_.store(true, std::memory_order_release);
+  // CPU writes may come from other threads, not reading the flag.
+  if (invalidated_by_gpu && !argument &&
+      texture_cache.collecting_resolve_invalidated_) {
+    texture_cache.resolve_invalidated_textures_.push_back(&texture);
+  }
 }
 
 void TextureCache::DestroyAllTextures(bool from_destructor) {

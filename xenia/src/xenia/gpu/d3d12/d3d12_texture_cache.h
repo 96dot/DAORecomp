@@ -129,6 +129,42 @@ class D3D12TextureCache final : public TextureCache {
   void WriteSampler(SamplerParameters parameters,
                     D3D12_CPU_DESCRIPTOR_HANDLE handle) const;
 
+  // A resolve's area in a host render target, for writing it into the textures
+  // that the resolve invalidated, rather than untiling them from the resolved
+  // memory at their next use.
+  struct ResolvedArea {
+    // A k_8_8_8_8 render target, in the NON_PIXEL_SHADER_RESOURCE state for
+    // WriteResolvedTextures.
+    ID3D12Resource* source;
+    // The area's origin in the source, in guest pixels.
+    uint32_t source_x;
+    uint32_t source_y;
+    // The resolve destination: the address and pitch of a 2D tiled k_8_8_8_8
+    // texture, and the area's origin in it, in texels.
+    uint32_t dest_base;
+    uint32_t dest_pitch_div_32;
+    uint32_t dest_x;
+    uint32_t dest_y;
+    // In guest pixels.
+    uint32_t width;
+    uint32_t height;
+    // How the resolve writes the texels.
+    bool swap_red_blue;
+    xenos::Endian endian;
+    // Whether the source and the destination are at the draw resolution scale.
+    bool scaled;
+    // Scaled resolves fill the half-pixel offset gap: the first host pixel
+    // columns / rows of the area copy the next one.
+    uint32_t fill_x;
+    uint32_t fill_y;
+  };
+  // Keeps, of the textures that the last MarkRangeAsResolved collected, the
+  // ones the area fully describes, and returns whether there are any.
+  bool PrepareResolvedTextures(const ResolvedArea& area);
+  // Writes the area into the textures kept by PrepareResolvedTextures, and
+  // marks them as up to date.
+  void WriteResolvedTextures(const ResolvedArea& area);
+
   // Ensures the tiles backing the range in the buffers are allocated.
   bool EnsureScaledResolveMemoryCommitted(
       uint32_t start_unscaled, uint32_t length_unscaled,
@@ -826,6 +862,16 @@ class D3D12TextureCache final : public TextureCache {
   uint64_t host_filterable_signed_ = 0;
 
   Microsoft::WRL::ComPtr<ID3D12RootSignature> load_root_signature_;
+  // WriteResolvedTextures.
+  struct ResolveTextureConstants {
+    uint32_t source_offset[2];
+    uint32_t dest_offset[2];
+    uint32_t size[2];
+    uint32_t fill[2];
+    uint32_t channels;
+  };
+  Microsoft::WRL::ComPtr<ID3D12RootSignature> resolve_texture_root_signature_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> resolve_texture_pipeline_;
   std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, kLoadShaderCount>
       load_pipelines_;
   // Load pipelines for resolution-scaled resolve targets.

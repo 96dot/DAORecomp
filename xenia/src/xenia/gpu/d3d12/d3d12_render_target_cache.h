@@ -330,6 +330,15 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   void TransitionRenderTarget(D3D12RenderTarget& render_target,
                               D3D12_RESOURCE_STATES new_state);
 
+  // For a resolve that is a plain copy of a single-sampled k_8_8_8_8 render
+  // target owning the whole resolved area (after DumpRenderTargets for it),
+  // the area for D3D12TextureCache::PrepareResolvedTextures.
+  D3D12RenderTarget* GetResolvedArea(
+      const draw_util::ResolveInfo& resolve_info,
+      draw_util::ResolveCopyShaderIndex copy_shader, bool copy_dest_scaled,
+      uint32_t dump_base, uint32_t dump_row_length_used, uint32_t dump_rows,
+      uint32_t dump_pitch, D3D12TextureCache::ResolvedArea& area_out) const;
+
   enum TransferCBVRegister : uint32_t {
     kTransferCBVRegisterStencilMask,
     kTransferCBVRegisterAddress,

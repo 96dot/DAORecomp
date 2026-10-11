@@ -33,6 +33,10 @@
 #include "xenia/ui/d3d12/d3d12_provider.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
 
+DEFINE_bool(dao_resolve_to_textures, true,
+            "Write plain render target resolves straight into the textures of "
+            "the resolved memory, rather than untiling them at their next use.",
+            "GPU");
 DEFINE_bool(
     native_stencil_value_output_d3d12_intel, false,
     "Allow stencil reference output usage on Direct3D 12 on Intel GPUs - not "
@@ -1498,10 +1502,22 @@ bool D3D12RenderTargetCache::Resolve(const Memory& memory,
           shared_memory.MarkUAVWritesCommitNeeded();
         }
 
-        // Invalidate textures and mark the range as scaled if needed.
+        // Invalidate textures and mark the range as scaled if needed. The
+        // textures of a plain copy are written from the render target.
+        D3D12TextureCache::ResolvedArea resolved_area;
+        D3D12RenderTarget* resolved_area_source = GetResolvedArea(
+            resolve_info, copy_shader, copy_dest_scaled, dump_base,
+            dump_row_length_used, dump_rows, dump_pitch, resolved_area);
         texture_cache.MarkRangeAsResolved(resolve_info.copy_dest_extent_start,
                                           resolve_info.copy_dest_extent_length,
-                                          copy_dest_scaled);
+                                          copy_dest_scaled,
+                                          resolved_area_source != nullptr);
+        if (resolved_area_source &&
+            texture_cache.PrepareResolvedTextures(resolved_area)) {
+          TransitionRenderTarget(*resolved_area_source,
+                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+          texture_cache.WriteResolvedTextures(resolved_area);
+        }
         written_address_out = resolve_info.copy_dest_extent_start;
         written_length_out = resolve_info.copy_dest_extent_length;
         if (written_scaled_out) {
@@ -6482,6 +6498,91 @@ ID3D12PipelineState* D3D12RenderTargetCache::GetOrCreateDumpPipeline(
   // again.
   dump_pipelines_.emplace(key, pipeline);
   return pipeline;
+}
+
+D3D12RenderTargetCache::D3D12RenderTarget*
+D3D12RenderTargetCache::GetResolvedArea(
+    const draw_util::ResolveInfo& resolve_info,
+    draw_util::ResolveCopyShaderIndex copy_shader, bool copy_dest_scaled,
+    uint32_t dump_base, uint32_t dump_row_length_used, uint32_t dump_rows,
+    uint32_t dump_pitch, D3D12TextureCache::ResolvedArea& area_out) const {
+  if (!cvars::dao_resolve_to_textures || GetPath() != Path::kHostRenderTargets ||
+      copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA ||
+      resolve_info.IsCopyingDepth() || dump_rectangles_.size() != 1) {
+    return nullptr;
+  }
+  const draw_util::ResolveEdramInfo edram_info = resolve_info.color_edram_info;
+  const reg::RB_COPY_DEST_INFO dest_info = resolve_info.copy_dest_info;
+  if (edram_info.msaa_samples != xenos::MsaaSamples::k1X ||
+      xenos::ColorRenderTargetFormat(edram_info.format) !=
+          xenos::ColorRenderTargetFormat::k_8_8_8_8 ||
+      dest_info.copy_dest_array ||
+      xenos::ColorFormat(dest_info.copy_dest_format) !=
+          xenos::ColorFormat::k_8_8_8_8 ||
+      uint32_t(dest_info.copy_dest_endian) > uint32_t(xenos::Endian::k16in32)) {
+    return nullptr;
+  }
+  // The render target owns the whole area, without EDRAM wrapping.
+  const ResolveCopyDumpRectangle& rectangle = dump_rectangles_.front();
+  if (rectangle.row_first || rectangle.rows != dump_rows ||
+      rectangle.row_first_start ||
+      rectangle.row_last_end != dump_row_length_used ||
+      dump_base + (dump_rows - 1) * dump_pitch + dump_row_length_used >
+          xenos::kEdramTileCount) {
+    return nullptr;
+  }
+  auto& render_target =
+      *static_cast<D3D12RenderTarget*>(rectangle.render_target);
+  const RenderTargetKey key = render_target.key();
+  if (key.is_depth || key.msaa_samples != xenos::MsaaSamples::k1X ||
+      key.GetColorFormat() != xenos::ColorRenderTargetFormat::k_8_8_8_8 ||
+      key.next_period || key.pitch_tiles_at_32bpp != edram_info.pitch_tiles ||
+      key.base_tiles > edram_info.base_tiles ||
+      copy_dest_scaled != (IsDrawResolutionScaled() && !key.scale_native)) {
+    return nullptr;
+  }
+  // The area in the render target, laid out like the EDRAM from its base.
+  const uint32_t pitch = edram_info.pitch_tiles;
+  const uint32_t base_offset = edram_info.base_tiles - key.base_tiles;
+  const uint32_t source_x =
+      base_offset % pitch * xenos::kEdramTileWidthSamples +
+      (resolve_info.coordinate_info.edram_offset_x_div_8 << 3);
+  const uint32_t source_y =
+      base_offset / pitch * xenos::kEdramTileHeightSamples +
+      (resolve_info.coordinate_info.edram_offset_y_div_8 << 3);
+  const uint32_t width = resolve_info.coordinate_info.width_div_8 << 3;
+  const uint32_t height = resolve_info.height_div_8 << 3;
+  const uint32_t scale_x = copy_dest_scaled ? draw_resolution_scale_x() : 1;
+  const uint32_t scale_y = copy_dest_scaled ? draw_resolution_scale_y() : 1;
+  const D3D12_RESOURCE_DESC desc = render_target.resource()->GetDesc();
+  if (source_x + width > pitch * xenos::kEdramTileWidthSamples ||
+      (source_x + width) * scale_x > desc.Width ||
+      (source_y + height) * scale_y > desc.Height ||
+      resolve_info.dao_rect[0] < 0 || resolve_info.dao_rect[1] < 0 ||
+      uint32_t(resolve_info.dao_rect[2] - resolve_info.dao_rect[0]) != width ||
+      uint32_t(resolve_info.dao_rect[3] - resolve_info.dao_rect[1]) != height) {
+    return nullptr;
+  }
+  area_out.source = render_target.resource();
+  area_out.source_x = source_x;
+  area_out.source_y = source_y;
+  // A 32bpp destination's base is that of the texture (4 KB macro tiles), and
+  // the area is at the rectangle's place in it.
+  area_out.dest_base =
+      register_file()[XE_GPU_REG_RB_COPY_DEST_BASE] & 0x1FFFFFFF;
+  area_out.dest_pitch_div_32 =
+      resolve_info.copy_dest_coordinate_info.pitch_aligned_div_32;
+  area_out.dest_x = uint32_t(resolve_info.dao_rect[0]);
+  area_out.dest_y = uint32_t(resolve_info.dao_rect[1]);
+  area_out.width = width;
+  area_out.height = height;
+  area_out.swap_red_blue = dest_info.copy_dest_swap != 0;
+  area_out.endian = xenos::Endian(uint32_t(dest_info.copy_dest_endian));
+  area_out.scaled = copy_dest_scaled;
+  const bool fill = copy_dest_scaled && edram_info.fill_half_pixel_offset;
+  area_out.fill_x = fill ? scale_x >> 1 : 0;
+  area_out.fill_y = fill ? scale_y >> 1 : 0;
+  return &render_target;
 }
 
 void D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base,
