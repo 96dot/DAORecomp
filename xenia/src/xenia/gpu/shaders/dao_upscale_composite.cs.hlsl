@@ -1,6 +1,8 @@
 // DAO: puts the game's UI over the FSR-upscaled scene. The UI is drawn after
 // the image FSR receives, so it is found by comparing the final frame with that
 // image: where they differ, the final frame is scaled up bilinearly instead.
+// For HDR output the upscaled scene is linear (1 = the game's white) and the
+// result is PQ-encoded (Rec. 709 primaries, decoded by the presenter).
 Texture2D<float4> dao_upscaled : register(t0);  // Display resolution.
 Texture2D<float4> dao_final : register(t1);     // Render resolution, with UI.
 Texture2D<float4> dao_hudless : register(t2);   // Render resolution, no UI.
@@ -14,7 +16,18 @@ cbuffer DaoCompositeConstants : register(b0) {
   // Shows the motion vectors instead (red: x, green: y, 32 pixels from the
   // middle to full; gray: none).
   uint dao_show_motion;
+  // 0: SDR. 1: HDR. 2: HDR, the final frame alone (frames not upscaled; the
+  // destination is at the render size).
+  uint dao_mode;
+  float dao_paper_white;  // Nits.
+  float dao_gamma;        // Of the game's output.
 };
+
+float3 Pq(float3 linear_color) {
+  float3 y = pow(saturate(linear_color * (dao_paper_white / 10000.0)),
+                 0.1593017578125);
+  return pow((0.8359375 + 18.8515625 * y) / (1.0 + 18.6875 * y), 78.84375);
+}
 
 float UiDifference(int2 p) {
   p = clamp(p, int2(0, 0), int2(dao_render_size) - 1);
@@ -28,6 +41,11 @@ void main(uint3 id : SV_DispatchThreadID) {
     return;
   }
   float2 uv = (float2(id.xy) + 0.5) / float2(dao_dest_size);
+  if (dao_mode == 2) {
+    float3 final = saturate(dao_final.Load(int3(id.xy, 0)).rgb);
+    dao_dest[id.xy] = float4(Pq(pow(final, dao_gamma)), 1.0);
+    return;
+  }
   // The four render pixels that bilinear filtering of this pixel reads.
   int2 p = int2(floor(uv * dao_render_size - 0.5));
   float difference = max(max(UiDifference(p), UiDifference(p + int2(1, 0))),
@@ -37,6 +55,9 @@ void main(uint3 id : SV_DispatchThreadID) {
   float ui = saturate(difference * 128.0);
   float3 scene = dao_upscaled[id.xy].rgb;
   float3 final = dao_final.SampleLevel(dao_linear, uv, 0.0).rgb;
+  if (dao_mode == 1) {
+    final = pow(saturate(final), dao_gamma);
+  }
   float3 color = lerp(scene, final, ui);
   if (dao_show_motion) {
     float2 motion = dao_motion.Load(int3(int2(uv * dao_render_size), 0));
@@ -45,5 +66,5 @@ void main(uint3 id : SV_DispatchThreadID) {
                 ? float3(saturate(0.5 + motion / 32.0), gray * 0.5)
                 : gray.xxx * 0.5;
   }
-  dao_dest[id.xy] = float4(color, 1.0);
+  dao_dest[id.xy] = float4(dao_mode == 1 ? Pq(color) : color, 1.0);
 }

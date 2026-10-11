@@ -80,12 +80,15 @@ class DaoUpscaler {
   static void OnResolve(const draw_util::ResolveInfo& resolve_info);
   // At the swap, after the front buffer texture has been obtained. Returns the
   // image to present instead (at the size of the window area it's shown in)
-  // and its view, or nullptr to present the front buffer.
+  // and its view, or nullptr to present the front buffer. pq_out: the image is
+  // the game's HDR, PQ-encoded (dao_true_hdr); upscaled_out: by FSR (else the
+  // front buffer, only encoded).
   static ID3D12Resource* OnSwap(
       ID3D12Resource* frontbuffer,
       const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
       uint32_t frontbuffer_width, uint32_t frontbuffer_height,
-      D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out);
+      D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& pq_out,
+      bool& upscaled_out);
 
  private:
   friend class DaoUpscalerImpl;

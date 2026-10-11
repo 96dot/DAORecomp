@@ -211,7 +211,9 @@ vsync = {}
 # The game locks its 3D scenes to 30 fps; true lets them run at 60.
 unlock_frame_rate = {}
 # HDR output. On an HDR display, SDR white is shown at hdr_paper_white nits and
-# highlights are expanded up to hdr_peak nits. Harmless on SDR displays.
+# highlights go up to hdr_peak nits: with temporal_upscaler on, the 3D scenes
+# are rendered in HDR (the highlights the game compresses), otherwise the SDR
+# image is expanded. Harmless on SDR displays.
 hdr = {}
 hdr_paper_white = {}
 hdr_peak = {}

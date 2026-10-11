@@ -740,6 +740,8 @@ class D3D12CommandProcessor final : public CommandProcessor {
   Microsoft::WRL::ComPtr<ID3D12PipelineState> apply_gamma_pwl_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState>
       apply_gamma_pwl_fxaa_luma_pipeline_;
+  // DAO: copies a PQ (HDR) frame in place of the gamma ramp.
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> dao_pq_copy_pipeline_;
 
   struct FxaaConstants {
     uint32_t size[2];

@@ -53,6 +53,7 @@ namespace shaders {
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/apply_gamma_pwl_fxaa_luma_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/apply_gamma_table_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/apply_gamma_table_fxaa_luma_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_pq_copy_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/fxaa_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/fxaa_extreme_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/resolve_downscale_cs.h"
@@ -1365,6 +1366,14 @@ bool D3D12CommandProcessor::SetupContext() {
         "perceptual luma output");
     return false;
   }
+  *(dao_pq_copy_pipeline_.ReleaseAndGetAddressOf()) =
+      ui::d3d12::util::CreateComputePipeline(
+          device, shaders::dao_pq_copy_cs, sizeof(shaders::dao_pq_copy_cs),
+          apply_gamma_root_signature_.Get());
+  if (!dao_pq_copy_pipeline_) {
+    XELOGE("Failed to create the PQ copy compute pipeline");
+    return false;
+  }
 
   // Initialize compute pipelines for post-processing anti-aliasing.
   D3D12_ROOT_PARAMETER fxaa_root_parameters[UINT(FxaaRootParameter::kCount)];
@@ -1725,6 +1734,7 @@ void D3D12CommandProcessor::ShutdownContext() {
   fxaa_pipeline_.Reset();
   fxaa_root_signature_.Reset();
 
+  dao_pq_copy_pipeline_.Reset();
   apply_gamma_pwl_fxaa_luma_pipeline_.Reset();
   apply_gamma_pwl_pipeline_.Reset();
   apply_gamma_table_fxaa_luma_pipeline_.Reset();
@@ -2288,14 +2298,19 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   // The upscaler sharpens; at the front buffer's size it didn't scale the UI
   // either, so the presenter's 1:1 sharpening would only add to it.
   bool dao_sharpened = false;
+  // The image is the game's HDR, PQ-encoded: not for the gamma ramp.
+  bool dao_pq = false;
+  bool dao_upscaled_by_fsr = false;
   if (ID3D12Resource* dao_upscaled = DaoUpscaler::OnSwap(
           swap_texture_resource, swap_texture_srv_desc,
           uint32_t(swap_texture_desc.Width),
-          uint32_t(swap_texture_desc.Height), dao_upscaled_srv_desc)) {
+          uint32_t(swap_texture_desc.Height), dao_upscaled_srv_desc,
+          dao_pq, dao_upscaled_by_fsr)) {
     swap_texture_resource = dao_upscaled;
     swap_texture_srv_desc = dao_upscaled_srv_desc;
     const D3D12_RESOURCE_DESC dao_upscaled_desc = dao_upscaled->GetDesc();
-    dao_sharpened = dao_upscaled_desc.Width <= swap_texture_desc.Width &&
+    dao_sharpened = dao_upscaled_by_fsr &&
+                    dao_upscaled_desc.Width <= swap_texture_desc.Width &&
                     dao_upscaled_desc.Height <= swap_texture_desc.Height;
     swap_texture_desc = dao_upscaled_desc;
     if (dao_timed) {
@@ -2309,14 +2324,15 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
       uint32_t(swap_texture_desc.Width), uint32_t(swap_texture_desc.Height),
       aspect.first, aspect.second,
       [this, &swap_texture_srv_desc, frontbuffer_format, swap_texture_resource,
-       &swap_texture_desc, dao_timed](
+       &swap_texture_desc, dao_timed, dao_pq](
           ui::Presenter::GuestOutputRefreshContext& context) -> bool {
         const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
         ID3D12Device* device = provider.GetDevice();
 
         SwapPostEffect swap_post_effect = GetActualSwapPostEffect();
-        bool use_fxaa = swap_post_effect == SwapPostEffect::kFxaa ||
-                        swap_post_effect == SwapPostEffect::kFxaaExtreme;
+        bool use_fxaa = !dao_pq && (swap_post_effect == SwapPostEffect::kFxaa ||
+                                    swap_post_effect ==
+                                        SwapPostEffect::kFxaaExtreme);
         if (use_fxaa) {
           // Make sure the texture of the correct size is available for FXAA.
           if (fxaa_source_texture_) {
@@ -2510,7 +2526,9 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
             UINT(ApplyGammaRootParameter::kRamp),
             apply_gamma_descriptor_gamma_ramp.second);
         ID3D12PipelineState* apply_gamma_pipeline;
-        if (use_pwl_gamma_ramp) {
+        if (dao_pq) {
+          apply_gamma_pipeline = dao_pq_copy_pipeline_.Get();
+        } else if (use_pwl_gamma_ramp) {
           apply_gamma_pipeline = use_fxaa
                                      ? apply_gamma_pwl_fxaa_luma_pipeline_.Get()
                                      : apply_gamma_pwl_pipeline_.Get();
@@ -2625,7 +2643,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         EndSubmission(true);
         return true;
       },
-      dao_sharpened);
+      dao_sharpened, dao_pq);
 
   // End the frame even if did not present for any reason (the image refresher
   // was not called), to prevent leaking per-frame resources.

@@ -1170,12 +1170,17 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
     const bool display_hdr = paint_context_.display_hdr;
     const float paper_white =
         float(std::max(cvars::present_hdr_paper_white, 80.0));
+    // A PQ image is in nits: per scRGB unit on HDR displays, per the paper
+    // white (SDR white) on SDR ones.
+    const bool pq = guest_output_properties.pq;
     const float hdr_constants[4] = {
-        display_hdr ? paper_white / 80.0f : 1.0f,
+        pq            ? 1.0f / (display_hdr ? 80.0f : paper_white)
+        : display_hdr ? paper_white / 80.0f
+                      : 1.0f,
         display_hdr
             ? std::max(float(cvars::present_hdr_peak) / paper_white, 1.0f)
             : 1.0f,
-        float(cvars::present_hdr_gamma), 0.0f};
+        float(cvars::present_hdr_gamma), pq ? 1.0f : 0.0f};
     command_list->SetGraphicsRoot32BitConstants(1, 4, hdr_constants, 0);
     command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     command_list->DrawInstanced(3, 1, 0, 0);

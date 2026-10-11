@@ -353,7 +353,7 @@ bool Presenter::RefreshGuestOutput(
     uint32_t frontbuffer_width, uint32_t frontbuffer_height,
     uint32_t display_aspect_ratio_x, uint32_t display_aspect_ratio_y,
     std::function<bool(GuestOutputRefreshContext& context)> refresher,
-    bool sharpened) {
+    bool sharpened, bool pq) {
   GuestOutputProperties& writable_properties =
       guest_output_properties_[guest_output_mailbox_writable_];
   writable_properties.frontbuffer_width = frontbuffer_width;
@@ -362,6 +362,7 @@ bool Presenter::RefreshGuestOutput(
   writable_properties.display_aspect_ratio_y = display_aspect_ratio_y;
   writable_properties.is_8bpc = false;
   writable_properties.sharpened = sharpened;
+  writable_properties.pq = pq;
   bool is_active = writable_properties.IsActive();
   if (is_active) {
     if (!RefreshGuestOutputImpl(guest_output_mailbox_writable_,

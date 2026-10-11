@@ -319,7 +319,7 @@ class Presenter {
       uint32_t frontbuffer_width, uint32_t frontbuffer_height,
       uint32_t display_aspect_ratio_x, uint32_t display_aspect_ratio_y,
       std::function<bool(GuestOutputRefreshContext& context)> refresher,
-      bool sharpened = false);
+      bool sharpened = false, bool pq = false);
   // The implementation must be callable from any thread, including from
   // multiple at the same time, and it should acquire the latest guest output
   // image via ConsumeGuestOutput.
@@ -381,6 +381,8 @@ class Presenter {
     // DAO: already anti-aliased and sharpened at the output size (temporal
     // upscaling that didn't scale), so a 1:1 sharpening pass is redundant.
     bool sharpened;
+    // DAO: the image is the game's HDR, PQ-encoded (see dao_hdr_output.ps).
+    bool pq;
 
     GuestOutputProperties() { SetToInactive(); }
 
@@ -396,6 +398,7 @@ class Presenter {
       display_aspect_ratio_y = 0;
       is_8bpc = false;
       sharpened = false;
+      pq = false;
     }
   };
 
