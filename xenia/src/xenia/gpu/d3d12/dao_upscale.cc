@@ -296,9 +296,11 @@ class DaoUpscalerImpl {
     // Sum of the constants (infinity if any isn't finite): the difference of
     // two is at most the distance between their constants.
     double constants_sum;
-    // The draw's pipeline with stream output, and its own.
+    // The draw's pipeline with stream output.
     ID3D12PipelineState* stream_out_pipeline;
-    ID3D12PipelineState* pipeline;
+    // Whether stream_out_pipeline is bound before the draw (otherwise the
+    // previous draw left it bound).
+    bool bind_pipeline;
     // Triangle list vertices of the positions written (0 if none).
     uint32_t output_vertex_count;
     // Whether the stream output buffer is bound before the draw (otherwise
@@ -390,13 +392,15 @@ class DaoUpscalerImpl {
   void StreamOutPipelineThread();
   // Of stream_out_buffers_[buffer].
   void TransitionStreamOut(uint32_t buffer, D3D12_RESOURCE_STATES state);
-  void CaptureMotion(const Shader& vertex_shader, bool indexed,
+  // Whether the draw writes its positions.
+  bool CaptureMotion(const Shader& vertex_shader, bool indexed,
                      uint32_t host_vertex_count);
-  // Around the draw: the pipeline with stream output, then its own again.
+  // Before the draw: the pipeline with stream output and the buffer.
   static void ExecuteBeginStreamOut(void* context,
                                     ID3D12GraphicsCommandList* command_list);
-  static void ExecuteEndStreamOut(void* context,
-                                  ID3D12GraphicsCommandList* command_list);
+  // Binds the pipeline (the context).
+  static void ExecuteRestorePipeline(void* context,
+                                     ID3D12GraphicsCommandList* command_list);
   // Unbinds the stream output buffers, if bound.
   void CloseStreamOut();
   static void ExecuteCloseStreamOut(void* context,
@@ -526,8 +530,12 @@ class DaoUpscalerImpl {
   bool motion_logged_ = false;
   // From OnDraw to BeforeDraw.
   bool motion_pending_ = false;
-  // From BeforeDraw to AfterDraw: the draw writing its positions.
-  MotionDraw* streamed_draw_ = nullptr;
+  // The pipeline with stream output a draw left bound, while Xenia hasn't
+  // bound another (cp_.pipeline_binds_ is still stream_out_binds_): the next
+  // draw restores the guest one, unless it writes its positions with it too.
+  ID3D12PipelineState* stream_out_bound_pipeline_ = nullptr;
+  ID3D12PipelineState* stream_out_guest_pipeline_ = nullptr;
+  uint64_t stream_out_binds_ = 0;
   MotionConstants motion_viewport_ = {};
   uint64_t motion_pixel_shader_ = 0;
   MotionPass motion_pass_ = {};
@@ -1126,22 +1134,26 @@ void DaoUpscalerImpl::OnDraw(const RegisterFile& regs,
 void DaoUpscalerImpl::BeforeDraw(const Shader& vertex_shader, bool indexed,
                                  uint32_t host_vertex_count,
                                  bool skip_motion) {
+  if (stream_out_bound_pipeline_ && cp_.pipeline_binds_ != stream_out_binds_) {
+    stream_out_bound_pipeline_ = nullptr;
+  }
+  bool streamed = false;
   if (motion_pending_) {
     motion_pending_ = false;
     if (skip_motion) {
       ++motion_skipped_;
     } else {
-      CaptureMotion(vertex_shader, indexed, host_vertex_count);
+      streamed = CaptureMotion(vertex_shader, indexed, host_vertex_count);
     }
+  }
+  if (stream_out_bound_pipeline_ && !streamed) {
+    cp_.GetDeferredCommandList().DaoCallback(ExecuteRestorePipeline,
+                                             stream_out_guest_pipeline_);
+    stream_out_bound_pipeline_ = nullptr;
   }
 }
 
 void DaoUpscalerImpl::AfterDraw() {
-  if (streamed_draw_) {
-    cp_.GetDeferredCommandList().DaoCallback(ExecuteEndStreamOut,
-                                             streamed_draw_);
-    streamed_draw_ = nullptr;
-  }
   if (hudless_pending_) {
     hudless_pending_ = false;
     CaptureHudless();
@@ -1181,6 +1193,8 @@ ID3D12PipelineState* DaoUpscalerImpl::GetStreamOutPipeline(
 
 void DaoUpscalerImpl::StreamOutPipelineThread() {
   xe::threading::set_name("FSR stream output pipelines");
+  // Behind the frame's threads: draws go without motion until it's done.
+  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
   while (true) {
     StreamOutPipeline* entry;
     {
@@ -1225,7 +1239,7 @@ void DaoUpscalerImpl::TransitionStreamOut(uint32_t buffer,
   stream_out_states_[buffer] = state;
 }
 
-void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
+bool DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
                                     uint32_t host_vertex_count) {
   // Stream output writes triangle lists.
   uint32_t output_vertex_count;
@@ -1239,10 +1253,10 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
       break;
     default:
       ++motion_skipped_;
-      return;
+      return false;
   }
   if (!output_vertex_count) {
-    return;
+    return false;
   }
   // Opaque draws with an ordinary vertex shader.
   const auto* pipeline =
@@ -1251,7 +1265,7 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
       pipeline ? pipeline->state.load(std::memory_order_acquire) : nullptr;
   if (!pipeline_state) {
     ++motion_skipped_;
-    return;
+    return false;
   }
   const PipelineCache::PipelineRuntimeDescription& runtime =
       pipeline->description;
@@ -1270,7 +1284,7 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
       description.resolution_scale_native || !rt0.used || !rt0.write_mask ||
       (blended && !description.depth_write)) {
     ++motion_skipped_;
-    return;
+    return false;
   }
 
   // Requested even if not needed this frame, to be ready for the next.
@@ -1320,7 +1334,7 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
       XXH3_64bits(constants.data(), constants.size() * sizeof(uint32_t));
   // Drawn again for the second tile.
   if (!motion_seen_.insert(key ^ (constants_hash * 0x9E3779B97F4A7C15ull))) {
-    return;
+    return false;
   }
 
   // The previous frame's draw of it: the one with the closest constants (sum
@@ -1446,7 +1460,7 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
           kStreamOutDataSize ||
       stream_out_counters_used_ + new_counters > kStreamOutCounterCount) {
     ++motion_skipped_;
-    return;
+    return false;
   }
 
   if (!stream_out_reset_) {
@@ -1462,7 +1476,6 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   cp_.SubmitBarriers();
 
   draw.stream_out_pipeline = stream_out_pipeline;
-  draw.pipeline = pipeline_state;
   draw.output_vertex_count = output_vertex_count;
   draw.motion = motion_viewport_;
   const D3D12_GPU_VIRTUAL_ADDRESS buffer =
@@ -1519,24 +1532,33 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   if (draw.bind_stream_out) {
     stream_out_bound_ = true;
   }
-  cp_.GetDeferredCommandList().DaoCallback(ExecuteBeginStreamOut, &draw);
-  streamed_draw_ = &draw;
+  // Pipeline binds are costly with stream output (Vulkan ends and resumes
+  // transform feedback), so the pipeline stays bound for the next draw.
+  draw.bind_pipeline = stream_out_bound_pipeline_ != stream_out_pipeline;
+  if (draw.bind_pipeline || draw.bind_stream_out) {
+    cp_.GetDeferredCommandList().DaoCallback(ExecuteBeginStreamOut, &draw);
+  }
+  stream_out_bound_pipeline_ = stream_out_pipeline;
+  stream_out_guest_pipeline_ = pipeline_state;
+  stream_out_binds_ = cp_.pipeline_binds_;
+  return true;
 }
 
 void DaoUpscalerImpl::ExecuteBeginStreamOut(
     void* context, ID3D12GraphicsCommandList* command_list) {
   const MotionDraw& draw = *static_cast<const MotionDraw*>(context);
-  command_list->SetPipelineState(draw.stream_out_pipeline);
+  if (draw.bind_pipeline) {
+    command_list->SetPipelineState(draw.stream_out_pipeline);
+  }
   if (draw.bind_stream_out) {
     command_list->SOSetTargets(0, 1, &draw.stream_out_view);
   }
 }
 
-void DaoUpscalerImpl::ExecuteEndStreamOut(
+void DaoUpscalerImpl::ExecuteRestorePipeline(
     void* context, ID3D12GraphicsCommandList* command_list) {
   // The stream output buffer stays bound, unused by the other pipelines.
-  const MotionDraw& draw = *static_cast<const MotionDraw*>(context);
-  command_list->SetPipelineState(draw.pipeline);
+  command_list->SetPipelineState(static_cast<ID3D12PipelineState*>(context));
 }
 
 void DaoUpscalerImpl::CloseStreamOut() {
@@ -1818,6 +1840,7 @@ void DaoUpscalerImpl::GetDisplaySize(uint32_t render_width,
 
 void DaoUpscalerImpl::InvalidateCommandProcessorState() {
   D3D12CommandProcessor& cp = cp_;
+  ++cp.pipeline_binds_;
   cp.current_guest_pipeline_ = nullptr;
   cp.current_external_pipeline_ = nullptr;
   cp.current_graphics_root_signature_ = nullptr;

@@ -841,6 +841,8 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // (current_guest_pipeline_ is nullptr in this case).
   void* current_guest_pipeline_;
   ID3D12PipelineState* current_external_pipeline_;
+  // Pipeline binds recorded (for DaoUpscalerImpl, which leaves its own bound).
+  uint64_t pipeline_binds_ = 0;
 
   // Currently bound graphics root signature.
   ID3D12RootSignature* current_graphics_root_signature_;

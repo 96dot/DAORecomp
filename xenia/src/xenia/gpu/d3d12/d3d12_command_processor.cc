@@ -659,6 +659,7 @@ void D3D12CommandProcessor::SetExternalPipeline(ID3D12PipelineState* pipeline) {
     current_external_pipeline_ = pipeline;
     current_guest_pipeline_ = nullptr;
     deferred_command_list_.D3DSetPipelineState(pipeline);
+    ++pipeline_binds_;
   }
 }
 
@@ -2903,6 +2904,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
         reinterpret_cast<void*>(pipeline_handle));
     current_guest_pipeline_ = pipeline_handle;
     current_external_pipeline_ = nullptr;
+    ++pipeline_binds_;
   }
 
   // Get dynamic rasterizer state. Using the resolution scale of this draw,
