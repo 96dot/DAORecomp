@@ -73,18 +73,21 @@ namespace dao::ui
     {
         for (const Entry& entry : entries_)
         {
-            if (!std::ranges::equal(entry.name, name,
+            if (std::ranges::equal(entry.name, name,
                     [](char a, char b) { return tolower(uint8_t(a)) == tolower(uint8_t(b)); }))
-                continue;
-            if (entry.packedSize > maxSize || entry.size > maxSize ||
-                uint64_t(entry.offset) + entry.packedSize > fileSize_)
-                return std::nullopt;
-            auto data = ReadFileBytes(path_, entry.offset, entry.packedSize);
-            if (!data || entry.packedSize == entry.size)
-                return data;
-            return Inflate(*data, entry.size);
+                return Read(entry, maxSize);
         }
         return std::nullopt;
+    }
+
+    std::optional<std::vector<uint8_t>> ErfArchive::Read(const Entry& entry, uint32_t maxSize) const
+    {
+        if (entry.packedSize > maxSize || entry.size > maxSize || uint64_t(entry.offset) + entry.packedSize > fileSize_)
+            return std::nullopt;
+        auto data = ReadFileBytes(path_, entry.offset, entry.packedSize);
+        if (!data || entry.packedSize == entry.size)
+            return data;
+        return Inflate(*data, entry.size);
     }
 
     std::optional<std::vector<uint8_t>> ReadErfEntry(const fs::path& archive, std::string_view name, uint32_t maxSize)

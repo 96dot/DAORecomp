@@ -33,17 +33,20 @@ namespace dao::ui
         // Nothing if it isn't an ERF V2.1 archive.
         static std::optional<ErfArchive> Open(const std::filesystem::path& path);
 
-        // The (unpacked) entry `name`, if it's at most `maxSize` bytes. Names compare
-        // case-insensitively.
-        std::optional<std::vector<uint8_t>> Read(std::string_view name, uint32_t maxSize) const;
-
-    private:
         struct Entry
         {
             std::string name;
             uint32_t offset, packedSize, size;
         };
 
+        const std::vector<Entry>& Entries() const { return entries_; }
+
+        // The (unpacked) entry `name`, if it's at most `maxSize` bytes. Names compare
+        // case-insensitively.
+        std::optional<std::vector<uint8_t>> Read(std::string_view name, uint32_t maxSize) const;
+        std::optional<std::vector<uint8_t>> Read(const Entry& entry, uint32_t maxSize) const;
+
+    private:
         std::filesystem::path path_;
         uint64_t fileSize_ = 0;
         std::vector<Entry> entries_;

@@ -34,12 +34,21 @@ namespace dao::mods
     };
 
     // Each archive and folder becomes a mod; loose files together become one.
-    // Stops early (what's done stays) when `stop` is requested.
+    // Stops early (what's done stays) when `stop` is requested. The new mods are
+    // described with the game's file names (see Describe).
     InstallResult Install(const std::filesystem::path& modsRoot, const std::vector<std::filesystem::path>& dropped,
-        std::stop_token stop);
+        std::stop_token stop, const GameFiles* game = nullptr);
 
     // Whether archives can be opened here (not under Wine, which has no tar.exe).
     bool CanOpenArchives();
+
+    // Unpacks an archive into the empty folder `into` as Install does (refusing one
+    // holding links); false, and why in `error`, if it can't.
+    bool UnpackArchive(const std::filesystem::path& archive, const std::filesystem::path& into, std::stop_token stop,
+        std::string& error);
+
+    // Describes a mod in its mod.toml, if it has none, from a PC package's manifest.
+    void DescribeFromManifest(const std::filesystem::path& modFolder, const std::filesystem::path& manifestXml);
 
     // Removes what interrupted installs left in mods/ (not those still running).
     void CleanUpInstalls(const std::filesystem::path& modsRoot);

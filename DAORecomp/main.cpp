@@ -9,8 +9,9 @@
 #include "input/input.h"
 #include "launcher/launcher.h"
 #include "mods/mods.h"
-#include "ui/graphics_menu.h"
 #include "ui/keyboard.h"
+#include "mods/convert/convert.h"
+#include "ui/graphics_menu.h"
 #include "settings.h"
 #include "text.h"
 
@@ -198,7 +199,22 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (dao::launcher::ShouldShow(argc, argv, userRoot) && !dao::launcher::Run(gameRoot, userRoot))
+    // DAO_CONVERT_MOD=<mod folder>: converts a PC mod and exits (for testing the converter).
+    if (const wchar_t* folder = _wgetenv(L"DAO_CONVERT_MOD"))
+    {
+        const auto result = dao::mods::ConvertPcMod(folder, gameRoot);
+        for (const std::string& problem : result.problems)
+            LOGW("Convert: {}", problem);
+        for (const std::string& file : result.leftOut)
+            LOGW("Convert: left out {}", file);
+        for (const std::string& note : result.notes)
+            LOGI("Convert: {}", note);
+        LOGI("Convert: {} files, {}", result.files, result.converted ? "done" : "nothing changed");
+        return result.converted ? 0 : 1;
+    }
+
+    if (dao::launcher::ShouldShow(argc, argv, userRoot) &&
+        !dao::launcher::Run(gameRoot, userRoot, dao::launcher::ShowsMods(argc, argv)))
         return 0;
 
     AddVectoredExceptionHandler(0, CrashHandler);

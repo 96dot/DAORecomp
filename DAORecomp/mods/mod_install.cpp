@@ -375,7 +375,10 @@ namespace dao::mods
                 return std::nullopt;
             Manifest manifest;
             manifest.type = Attribute(xml, "<Manifest", "Type");
-            manifest.name = Attribute(xml, "<AddInItem", "Name");
+            // A package's title, else its add-in's name.
+            manifest.name = Attribute(xml, "<Title", "DefaultText");
+            if (manifest.name.empty())
+                manifest.name = Attribute(xml, "<AddInItem", "Name");
             manifest.version = ElementText(xml, "Version");
             manifest.author = Attribute(xml, "<Publisher", "DefaultText");
             manifest.description = Attribute(xml, "<Description", "DefaultText");
@@ -404,10 +407,15 @@ namespace dao::mods
         // left out, short enough.
         std::string ModName(std::string name)
         {
+            // Nexus's names: "<name>-<id>-<version>-<time>", or older ones "<name>-<id>"
+            // and "<name>-<id>-<version>" (an ID of three digits or more, so "Armor-2"
+            // stays).
             static const std::regex kNexus(R"(^(.+?)-\d+(-[0-9a-zA-Z]+)*-\d{10,}$)");
+            static const std::regex kOldNexus(R"(^(.+?)-\d{3,}(-\d+)*$)");
             std::smatch match;
             // (A file's name is short: the regex isn't run on long text.)
-            if (name.size() <= MAX_PATH && std::regex_match(name, match, kNexus))
+            if (name.size() <= MAX_PATH &&
+                (std::regex_match(name, match, kNexus) || std::regex_match(name, match, kOldNexus)))
                 name = match[1].str();
             std::string out;
             for (const char c : name)
@@ -609,8 +617,8 @@ namespace dao::mods
         // One drop (an archive, a folder or loose files) as a new mod, made in
         // `work` and then moved into mods/.
         std::optional<ModInfo> AddOne(const fs::path& modsRoot, const fs::path& work,
-            const std::vector<fs::path>& sources, std::string name, std::stop_token stop, std::vector<Line>& notes,
-            std::string& error)
+            const std::vector<fs::path>& sources, std::string name, std::stop_token stop, const GameFiles* game,
+            std::vector<Line>& notes, std::string& error)
         {
             std::error_code ec;
             const fs::path raw = work / "raw";
@@ -685,7 +693,7 @@ namespace dao::mods
                 error = fmt::format("can't make its folder in mods ({})", ec.message());
                 return std::nullopt;
             }
-            return Describe(folder);
+            return Describe(folder, game);
         }
 
         // This launcher's folder in the work folder, locked while it's there (a
@@ -720,6 +728,23 @@ namespace dao::mods
         };
     }
 
+    bool UnpackArchive(const fs::path& archive, const fs::path& into, std::stop_token stop, std::string& error)
+    {
+        if (!CanOpenArchives())
+        {
+            error = "archives can't be opened here";
+            return false;
+        }
+        if (!Extract(archive, into, stop, error))
+            return false;
+        if (const auto link = FindLink(into))
+        {
+            error = *link;
+            return false;
+        }
+        return true;
+    }
+
     bool CanOpenArchives()
     {
         static const bool available = [] {
@@ -728,6 +753,12 @@ namespace dao::mods
             return !tar.empty() && fs::exists(tar, ec);
         }();
         return available;
+    }
+
+    void DescribeFromManifest(const fs::path& modFolder, const fs::path& manifestXml)
+    {
+        if (const auto manifest = ReadManifest(manifestXml))
+            WriteModToml(modFolder, *manifest, Utf8(modFolder.filename()));
     }
 
     void CleanUpInstalls(const fs::path& modsRoot)
@@ -744,7 +775,8 @@ namespace dao::mods
         fs::remove(work, ec); // Only if empty.
     }
 
-    InstallResult Install(const fs::path& modsRoot, const std::vector<fs::path>& dropped, std::stop_token stop)
+    InstallResult Install(const fs::path& modsRoot, const std::vector<fs::path>& dropped, std::stop_token stop,
+        const GameFiles* game)
     {
         // Archives and folders are a mod each; loose files are one together.
         std::vector<std::pair<std::vector<fs::path>, std::string>> drops;
@@ -780,7 +812,7 @@ namespace dao::mods
             std::optional<ModInfo> mod;
             try
             {
-                mod = AddOne(modsRoot, dir, sources, name, stop, notes, error);
+                mod = AddOne(modsRoot, dir, sources, name, stop, game, notes, error);
             }
             catch (const fs::filesystem_error& e)
             {
@@ -799,12 +831,18 @@ namespace dao::mods
             }
             LOGI("Mods: added {} as {} ({} files)", what, mod->folder, mod->fileCount);
             if (mod->IsForPc())
-                result.lines.push_back(
-                    { fmt::format("Added \"{}\", but it's made for the PC version, so it can't be loaded.", mod->name),
-                        true });
+                result.lines.push_back({ fmt::format("Added \"{}\", but it's made for the PC version: select it and "
+                                                     "press Convert to use it.",
+                                             mod->name),
+                    true });
             else
                 result.lines.push_back({ fmt::format("Added \"{}\" ({} file{}).", mod->name, mod->fileCount,
                     mod->fileCount == 1 ? "" : "s") });
+            if (!mod->warnings.empty())
+                result.lines.push_back({ fmt::format("It has {} warning{}: select it to see {}.", mod->warnings.size(),
+                                             mod->warnings.size() == 1 ? "" : "s",
+                                             mod->warnings.size() == 1 ? "it" : "them"),
+                    true });
             result.lines.insert(result.lines.end(), notes.begin(), notes.end());
             result.mods.push_back(std::move(*mod));
         }

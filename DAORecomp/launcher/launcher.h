@@ -5,10 +5,16 @@
 
 namespace dao::launcher
 {
-    // Whether to show the launcher: --launcher forces it, --play or DAO_SKIP_LAUNCHER
-    // skips it, otherwise [launcher] show in config.toml (holding Shift shows it anyway).
+    // Whether to show the launcher: --launcher or --mods forces it, --play or
+    // DAO_SKIP_LAUNCHER skips it, otherwise [launcher] show in config.toml (holding
+    // Shift shows it anyway).
     bool ShouldShow(int argc, char** argv, const std::filesystem::path& userRoot);
 
-    // Runs the launcher; false if the player closed it instead of pressing Play.
-    bool Run(const std::filesystem::path& gameRoot, const std::filesystem::path& userRoot);
+    // Whether --mods asks for the launcher to open on its Mods page (as the game's
+    // Graphics menu does).
+    bool ShowsMods(int argc, char** argv);
+
+    // Runs the launcher, on the Mods page with `showMods`; false if the player closed
+    // it instead of pressing Play.
+    bool Run(const std::filesystem::path& gameRoot, const std::filesystem::path& userRoot, bool showMods = false);
 }

@@ -125,6 +125,7 @@ namespace dao
 
         s.showLauncher = table["launcher"]["show"].value_or(s.showLauncher);
         s.checkForUpdates = table["launcher"]["check_updates"].value_or(s.checkForUpdates);
+        s.modsWarningSeen = table["launcher"]["mods_warning_seen"].value_or(s.modsWarningSeen);
 
         const auto video = table["video"];
         s.resolutionScale = video["resolution_scale"].value_or(s.resolutionScale);
@@ -189,6 +190,8 @@ namespace dao
 show = {}
 # Look for a newer release on GitHub (github.com/96dot/DAORecomp) when the launcher opens.
 check_updates = {}
+# The warning that not every mod works was accepted (it's shown before the Mods screen).
+mods_warning_seen = {}
 
 [video]
 # Internal rendering resolution multiplier (the game renders at 1280x720):
@@ -225,7 +228,7 @@ window_height = {}
 # Code patches (true = on). Unlisted patches use their default.
 [patches]
 )",
-            s.showLauncher, s.checkForUpdates, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
+            s.showLauncher, s.checkForUpdates, s.modsWarningSeen, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
             TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.vsync, s.unlockFrameRate,
             s.hdr, s.hdrPaperWhite, s.hdrPeak, s.anisotropicFiltering, s.shadows, s.postProcessing, s.fullscreen,
             s.windowWidth, s.windowHeight);
