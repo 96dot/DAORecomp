@@ -12,7 +12,9 @@ cbuffer XeHdrConstants : register(b0) {
   float xe_hdr_peak_ratio;
   // Gamma the game's output is mastered for (2.2 for TVs).
   float xe_hdr_gamma;
-  // 1: the image is PQ-encoded; xe_hdr_scale is then per nit.
+  // 1: the image is PQ-encoded (the game's own HDR, its highlights already
+  // up to the peak); xe_hdr_scale is then per nit, and the peak ratio and
+  // gamma are unused.
   float xe_hdr_pq;
 };
 

@@ -539,6 +539,7 @@ void Presenter::AddUIDrawerFromUIThread(UIDrawer* drawer, size_t z_order) {
   }
   auto it_new =
       ui_drawers_.emplace(z_order, UIDrawerReference(drawer, drawer_last_draw));
+  has_ui_drawers_.store(true, std::memory_order_relaxed);
   // If adding to the Z layer currently being processed (for drawing, from the
   // lowest to the highest), or to layers in between the current and the
   // previously next, make sure the new drawer is executed too.
@@ -563,6 +564,7 @@ void Presenter::RemoveUIDrawerFromUIThread(UIDrawer* drawer) {
       ++ui_draw_next_iterator_;
     }
     ui_drawers_.erase(it_existing);
+    has_ui_drawers_.store(!ui_drawers_.empty(), std::memory_order_relaxed);
     HandleUIDrawersChangeFromUIThread(false);
     return;
   }

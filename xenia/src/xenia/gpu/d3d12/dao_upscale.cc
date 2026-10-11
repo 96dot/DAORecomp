@@ -51,9 +51,10 @@ DEFINE_bool(dao_motion_vectors, true,
             "comparison).",
             "GPU");
 DEFINE_bool(dao_true_hdr, true,
-            "With HDR output and temporal upscaling, the game's 3D scenes in "
-            "HDR: its tonemapping redone with the highlights it compresses, "
-            "upscaled by FSR in HDR (else its SDR image is expanded).",
+            "On an HDR display with temporal upscaling, the game's 3D scenes "
+            "in HDR: its tonemapping redone with the highlights it compresses, "
+            "upscaled by FSR in HDR. Otherwise the SDR image is expanded by "
+            "the presenter.",
             "GPU");
 DECLARE_bool(present_hdr);
 DECLARE_double(present_hdr_paper_white);
@@ -240,13 +241,29 @@ class HashSet {
 };
 
 // The game's tonemapping pass: the scene and its bloom through a color matrix
-// and a curve (see dao_hdr_tonemap.cs).
+// and a curve (see dao_hdr_tonemap.cs). Its pixel shader's microcode hash, the
+// same in the disc's executable and Title Update 6's.
 constexpr uint64_t kTonemapPixelShader = 0x20BA772900FB8AA3;
 
+// dao_upscale_composite.cs's dao_mode values.
+enum CompositeMode : uint32_t {
+  kCompositeSdr,
+  kCompositeHdr,
+  // One source (t1) to the destination at its size: PQ-encoded, or linear.
+  kCompositeEncode,
+  kCompositeLinearize,
+};
+
+// SDR white in nits; at least the scRGB unit, as in the presenter.
+float PaperWhiteNits() {
+  return float(std::max(cvars::present_hdr_paper_white, 80.0));
+}
+
 // The tonemapping pass's color matrix (rows, offset in w), which its vertex
-// shader computes from constants alone (brightness, contrast, saturation, a
-// hue rotation): that shader's microcode in order, operations paired in one
-// instruction reading the values from before it.
+// shader (microcode hash AF062EA1E2A3052F) computes from constants alone
+// (brightness, contrast, saturation, a hue rotation): that shader's microcode,
+// translated by hand, in order; operations paired in one instruction read the
+// values from before it.
 void TonemapRows(const RegisterFile& regs, float rows[3][4]) {
   struct V {
     float x, y, z, w;
@@ -509,14 +526,22 @@ class DaoUpscalerImpl {
                             const CopyConstants& constants);
   void CaptureHudless();
   void RunHdrTonemap();
-  // The front buffer alone PQ-encoded (true HDR frames FSR doesn't upscale).
-  ID3D12Resource* EncodeFrontbuffer(
-      ID3D12Resource* frontbuffer,
+  // Whether this frame is true HDR (see dao_true_hdr).
+  bool WantsTrueHdr() const;
+  // A frame not upscaled: with true HDR, the front buffer PQ-encoded into
+  // encoded_ (all true HDR frames are PQ), else nullptr (the front buffer).
+  ID3D12Resource* NotUpscaled(
+      const char* reason, ID3D12Resource* frontbuffer,
       const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
-      uint32_t width, uint32_t height, D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out);
+      D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& pq_out);
+  // The composite shader with one source, in kCompositeEncode or
+  // kCompositeLinearize mode, into dest (left readable).
+  bool ConvertImage(ID3D12Resource* source,
+                    const D3D12_SHADER_RESOURCE_VIEW_DESC& source_srv,
+                    Texture& dest, CompositeMode mode);
   void DispatchComposite(const ui::d3d12::util::DescriptorCpuGpuHandlePair*
                              descriptors,
-                         const CompositeConstants& constants);
+                         CompositeConstants constants);
   bool InitializeMotion();
   // The stream output buffers (kStreamOutBufferSize each), created at the
   // first motion capture rather than with the rest, so they take no memory with
@@ -587,7 +612,8 @@ class DaoUpscalerImpl {
   Texture composite_;
   // True HDR frames not upscaled: the front buffer PQ-encoded.
   Texture encoded_;
-  // True HDR: the scene from the game's tonemapping pass, linear.
+  // True HDR: FSR's input, linear: the game's tonemapping pass redone, or
+  // the image before the UI linearized when there's no such pass.
   Texture hdr_;
   // Size of the render resolution textures (the front buffer of the last
   // frame, the scaled 1280x720 normally).
@@ -614,9 +640,9 @@ class DaoUpscalerImpl {
   int32_t scene_depth_window_offset_[2] = {};
   bool hudless_pending_ = false;
   bool hudless_captured_ = false;
-  // True HDR this frame (dao_true_hdr with HDR output); the FSR context was
-  // created for it.
+  // True HDR this frame (WantsTrueHdr).
   bool true_hdr_ = false;
+  // The FSR context was created for true HDR (linear input).
   bool context_hdr_ = false;
   // The tonemapping pass, from OnDraw to AfterDraw; ran this frame.
   bool hdr_pending_ = false;
@@ -841,7 +867,7 @@ bool DaoUpscalerImpl::Initialize() {
     XELOGW("FSR: motion vectors unavailable");
   }
   jitter_active_ = cvars::dao_temporal_upscaler != "off";
-  true_hdr_ = jitter_active_ && cvars::present_hdr && cvars::dao_true_hdr;
+  true_hdr_ = WantsTrueHdr();
   single_sample_scene_ = jitter_active_ && cvars::dao_single_sample_scene;
   last_swap_ = std::chrono::steady_clock::now();
   return true;
@@ -1402,6 +1428,16 @@ void DaoUpscalerImpl::AfterDraw() {
   }
 }
 
+bool DaoUpscalerImpl::WantsTrueHdr() const {
+  if (cvars::dao_temporal_upscaler == "off" || ffx_failed_ ||
+      !cvars::present_hdr || !cvars::dao_true_hdr) {
+    return false;
+  }
+  // On SDR displays the presenter only linearizes; HDR here would be clipped.
+  const ui::Presenter* presenter = cp_.graphics_system_->presenter();
+  return presenter && presenter->IsDisplayHdr();
+}
+
 void DaoUpscalerImpl::RunHdrTonemap() {
   const uint32_t width = render_size_[0], height = render_size_[1];
   if (!width ||
@@ -1409,10 +1445,15 @@ void DaoUpscalerImpl::RunHdrTonemap() {
                      "HDR")) {
     return;
   }
+  // Bindless, only the destination needs one.
+  const bool bindless = cp_.bindless_resources_used_;
   ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[4];
-  if (!cp_.RequestOneUseSingleViewDescriptors(4, descriptors)) {
+  const uint32_t descriptor_count = bindless ? 1 : 4;
+  if (!cp_.RequestOneUseSingleViewDescriptors(descriptor_count, descriptors)) {
     return;
   }
+  const ui::d3d12::util::DescriptorCpuGpuHandlePair& dest_descriptor =
+      descriptors[descriptor_count - 1];
   // The pass's textures, bound for it by the texture cache: 0 the bloom, 1 the
   // scene, 2 the curve.
   const ui::d3d12::D3D12Provider& provider = cp_.GetD3D12Provider();
@@ -1422,7 +1463,7 @@ void DaoUpscalerImpl::RunHdrTonemap() {
     D3D12Shader::TextureBinding binding = {};
     binding.fetch_constant = i;
     binding.dimension = xenos::FetchOpDimension::k2D;
-    if (cp_.bindless_resources_used_) {
+    if (bindless) {
       textures[i] = provider.OffsetViewDescriptor(
           cp_.GetViewBindlessHeapGPUStart(),
           texture_cache.GetActiveTextureBindlessSRVIndex(binding));
@@ -1436,7 +1477,7 @@ void DaoUpscalerImpl::RunHdrTonemap() {
   uav.Format = hdr_.format;
   uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
   provider.GetDevice()->CreateUnorderedAccessView(
-      hdr_.resource.Get(), nullptr, &uav, descriptors[3].first);
+      hdr_.resource.Get(), nullptr, &uav, dest_descriptor.first);
   Transition(hdr_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   cp_.SubmitBarriers();
 
@@ -1444,9 +1485,9 @@ void DaoUpscalerImpl::RunHdrTonemap() {
   constants.size[0] = width;
   constants.size[1] = height;
   constants.gamma = float(cvars::present_hdr_gamma);
-  const double paper_white = std::max(cvars::present_hdr_paper_white, 80.0);
   constants.peak_ratio =
-      float(std::max(cvars::present_hdr_peak / paper_white, 1.0));
+      std::max(float(cvars::present_hdr_peak) / PaperWhiteNits(), 1.0f);
+  // In the curves' linear part: their shoulders start at about 0.45.
   constants.knee = 0.4f;
   DeferredCommandList& command_list = cp_.GetDeferredCommandList();
   command_list.D3DSetComputeRootSignature(hdr_tonemap_root_signature_.Get());
@@ -1455,9 +1496,11 @@ void DaoUpscalerImpl::RunHdrTonemap() {
   for (uint32_t i = 0; i < 3; ++i) {
     command_list.D3DSetComputeRootDescriptorTable(1 + i, textures[i]);
   }
-  command_list.D3DSetComputeRootDescriptorTable(4, descriptors[3].second);
+  command_list.D3DSetComputeRootDescriptorTable(4, dest_descriptor.second);
   cp_.SetExternalPipeline(hdr_tonemap_pipeline_.Get());
   command_list.D3DDispatch((width + 7) / 8, (height + 7) / 8, 1);
+  // If the pass is drawn again this frame, the next write must wait.
+  cp_.PushUAVBarrier(hdr_.resource.Get());
   hdr_captured_ = true;
 }
 
@@ -2203,9 +2246,9 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
     reason = "no scene depth";
   } else if (!hudless_captured_) {
     reason = "no image before the UI";
-  } else if (true_hdr_ &&
-             (!hdr_captured_ || hudless_pixel_shader_ != kTonemapPixelShader)) {
-    reason = "no HDR scene";
+  } else if (true_hdr_ && cp_.graphics_system_->presenter()->HasUIDrawers()) {
+    // Drawn in SDR over the guest output: shown by the presenter's SDR path.
+    reason = "overlay shown";
   }
   uint32_t display_width = 0, display_height = 0;
   if (!reason) {
@@ -2226,14 +2269,7 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
     }
   }
   if (reason) {
-    // True HDR frames are all PQ-encoded, upscaled or not.
-    ID3D12Resource* encoded =
-        true_hdr_ ? EncodeFrontbuffer(frontbuffer, frontbuffer_srv,
-                                      render_width, render_height, srv_out)
-                  : nullptr;
-    pq_out = encoded != nullptr;
-    EndFrame(false, reason);
-    return encoded;
+    return NotUpscaled(reason, frontbuffer, frontbuffer_srv, srv_out, pq_out);
   }
 
   // Motion vectors, then FSR, recorded into the command list when it's
@@ -2242,6 +2278,25 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
     RecordMotionPass(render_width, render_height);
     if (dao_timing::GpuTiming::Enabled()) {
       dao_timing::GpuTiming::Get().Mark(cp_, "motion vectors");
+    }
+  }
+  // True HDR without the tonemapping pass (or with a pass after it): the
+  // image before the UI, linearized.
+  if (true_hdr_ &&
+      (!hdr_captured_ || hudless_pixel_shader_ != kTonemapPixelShader)) {
+    D3D12_SHADER_RESOURCE_VIEW_DESC color_srv = {};
+    color_srv.Format = color_.format;
+    color_srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    color_srv.Shader4ComponentMapping =
+        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    color_srv.Texture2D.MipLevels = 1;
+    Transition(color_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    if (!EnsureTexture(hdr_, DXGI_FORMAT_R16G16B16A16_FLOAT, render_width,
+                       render_height, "HDR") ||
+        !ConvertImage(color_.resource.Get(), color_srv, hdr_,
+                      kCompositeLinearize)) {
+      return NotUpscaled("no HDR scene", frontbuffer, frontbuffer_srv,
+                         srv_out, pq_out);
     }
   }
   Texture& fsr_color = true_hdr_ ? hdr_ : color_;
@@ -2286,8 +2341,8 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
   ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[5];
   if (!cp_.RequestOneUseSingleViewDescriptors(5, descriptors)) {
-    EndFrame(false, "no descriptors");
-    return nullptr;
+    return NotUpscaled("no descriptors", frontbuffer, frontbuffer_srv, srv_out,
+                       pq_out);
   }
   D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
   srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -2317,7 +2372,7 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   constants.render_size[0] = float(render_width);
   constants.render_size[1] = float(render_height);
   constants.show_motion = cvars::dao_show_motion_vectors ? 1 : 0;
-  constants.mode = true_hdr_ ? 1 : 0;
+  constants.mode = true_hdr_ ? kCompositeHdr : kCompositeSdr;
   DispatchComposite(descriptors, constants);
   Transition(composite_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
@@ -2334,55 +2389,71 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
 
 void DaoUpscalerImpl::DispatchComposite(
     const ui::d3d12::util::DescriptorCpuGpuHandlePair* descriptors,
-    const CompositeConstants& constants) {
+    CompositeConstants constants) {
   cp_.SubmitBarriers();
-  CompositeConstants c = constants;
-  c.paper_white = float(std::max(cvars::present_hdr_paper_white, 80.0));
-  c.gamma = float(cvars::present_hdr_gamma);
+  constants.paper_white = PaperWhiteNits();
+  constants.gamma = float(cvars::present_hdr_gamma);
   DeferredCommandList& command_list = cp_.GetDeferredCommandList();
   command_list.D3DSetComputeRootSignature(composite_root_signature_.Get());
   command_list.D3DSetComputeRoot32BitConstants(
-      0, sizeof(c) / sizeof(uint32_t), &c, 0);
+      0, sizeof(constants) / sizeof(uint32_t), &constants, 0);
   for (uint32_t i = 0; i < 5; ++i) {
     command_list.D3DSetComputeRootDescriptorTable(1 + i,
                                                   descriptors[i].second);
   }
   cp_.SetExternalPipeline(composite_pipeline_.Get());
-  command_list.D3DDispatch((c.dest_size[0] + 7) / 8,
-                           (c.dest_size[1] + 7) / 8, 1);
+  command_list.D3DDispatch((constants.dest_size[0] + 7) / 8,
+                           (constants.dest_size[1] + 7) / 8, 1);
 }
 
-ID3D12Resource* DaoUpscalerImpl::EncodeFrontbuffer(
-    ID3D12Resource* frontbuffer,
-    const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv, uint32_t width,
-    uint32_t height, D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out) {
-  ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[5];
-  if (!EnsureTexture(encoded_, DXGI_FORMAT_R10G10B10A2_UNORM, width, height,
-                     "encoded") ||
-      !cp_.RequestOneUseSingleViewDescriptors(5, descriptors)) {
+bool DaoUpscalerImpl::ConvertImage(
+    ID3D12Resource* source, const D3D12_SHADER_RESOURCE_VIEW_DESC& source_srv,
+    Texture& dest, CompositeMode mode) {
+  // The source and destination views; the source is read as t1 only, the
+  // other tables share its view.
+  ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[2];
+  if (!cp_.RequestOneUseSingleViewDescriptors(2, descriptors)) {
+    return false;
+  }
+  ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
+  device->CreateShaderResourceView(source, &source_srv, descriptors[0].first);
+  D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
+  uav.Format = dest.format;
+  uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+  device->CreateUnorderedAccessView(dest.resource.Get(), nullptr, &uav,
+                                    descriptors[1].first);
+  const ui::d3d12::util::DescriptorCpuGpuHandlePair tables[5] = {
+      descriptors[0], descriptors[0], descriptors[0], descriptors[0],
+      descriptors[1]};
+  Transition(dest, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  CompositeConstants constants = {};
+  constants.dest_size[0] = dest.width;
+  constants.dest_size[1] = dest.height;
+  constants.render_size[0] = float(dest.width);
+  constants.render_size[1] = float(dest.height);
+  constants.mode = mode;
+  DispatchComposite(tables, constants);
+  Transition(dest, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  return true;
+}
+
+ID3D12Resource* DaoUpscalerImpl::NotUpscaled(
+    const char* reason, ID3D12Resource* frontbuffer,
+    const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
+    D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& pq_out) {
+  // With an overlay, the presenter's SDR path.
+  const bool encode = true_hdr_ &&
+                      !cp_.graphics_system_->presenter()->HasUIDrawers() &&
+                      EnsureTexture(encoded_, DXGI_FORMAT_R10G10B10A2_UNORM,
+                                    render_size_[0], render_size_[1],
+                                    "encoded") &&
+                      ConvertImage(frontbuffer, frontbuffer_srv, encoded_,
+                                   kCompositeEncode);
+  EndFrame(false, reason);
+  if (!encode) {
     return nullptr;
   }
-  // The shader reads only the front buffer (t1) in this mode; it's bound to
-  // the other sources too.
-  ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
-  for (uint32_t i = 0; i < 4; ++i) {
-    device->CreateShaderResourceView(frontbuffer, &frontbuffer_srv,
-                                     descriptors[i].first);
-  }
-  D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
-  uav.Format = encoded_.format;
-  uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-  device->CreateUnorderedAccessView(encoded_.resource.Get(), nullptr, &uav,
-                                    descriptors[4].first);
-  Transition(encoded_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  CompositeConstants constants = {};
-  constants.dest_size[0] = width;
-  constants.dest_size[1] = height;
-  constants.render_size[0] = float(width);
-  constants.render_size[1] = float(height);
-  constants.mode = 2;
-  DispatchComposite(descriptors, constants);
-  Transition(encoded_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  pq_out = true;
   srv_out = {};
   srv_out.Format = encoded_.format;
   srv_out.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -2421,7 +2492,7 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   }
   // No retries once FSR couldn't be loaded or created.
   jitter_active_ = enabled && !jitter_cooldown_ && !ffx_failed_;
-  true_hdr_ = enabled && cvars::present_hdr && cvars::dao_true_hdr;
+  true_hdr_ = WantsTrueHdr();
   // The game's 2xMSAA while the scene isn't antialiased here.
   DaoUpscaler::single_sample_scene_.store(
       single_sample_scene_ && jitter_active_, std::memory_order_relaxed);

@@ -342,10 +342,22 @@ class Presenter {
   void AddUIDrawerFromUIThread(UIDrawer* drawer, size_t z_order);
   void RemoveUIDrawerFromUIThread(UIDrawer* drawer);
 
+  // DAO: for the guest output thread (true HDR, which needs an HDR display and
+  // no UI drawn over the guest output in SDR). Any thread.
+  bool HasUIDrawers() const {
+    return has_ui_drawers_.load(std::memory_order_relaxed);
+  }
+  bool IsDisplayHdr() const {
+    return display_hdr_.load(std::memory_order_relaxed);
+  }
+
   // Requests (re)painting with the UI if there's UI to draw.
   void RequestUIPaintFromUIThread();
 
  protected:
+  // DAO: see IsDisplayHdr.
+  std::atomic<bool> display_hdr_{false};
+
   enum class PaintResult {
     kPresented,
     kPresentedSuboptimal,
@@ -981,6 +993,7 @@ class Presenter {
   // Note: All the iteration logic involving this Z ordering must be the same as
   // in input handling (in the input listeners in the Window), but in reverse.
   std::multimap<size_t, UIDrawerReference> ui_drawers_;
+  std::atomic<bool> has_ui_drawers_{false};
 
   size_t ui_draw_current_ = 0;
   size_t ui_draw_current_z_order_;

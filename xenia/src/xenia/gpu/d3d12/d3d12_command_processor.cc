@@ -2295,8 +2295,9 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     dao_timing::GpuTiming::Get().Mark(*this, "swap start");
   }
   D3D12_SHADER_RESOURCE_VIEW_DESC dao_upscaled_srv_desc;
-  // The upscaler sharpens; at the front buffer's size it didn't scale the UI
-  // either, so the presenter's 1:1 sharpening would only add to it.
+  // FSR sharpens; at the front buffer's size it didn't scale the UI either,
+  // so the presenter's 1:1 sharpening would only add to it (not for frames
+  // only PQ-encoded).
   bool dao_sharpened = false;
   // The image is the game's HDR, PQ-encoded: not for the gamma ramp.
   bool dao_pq = false;

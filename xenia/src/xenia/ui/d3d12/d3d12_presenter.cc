@@ -391,6 +391,7 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
     }
     XELOGI("D3D12Presenter: scRGB output on an {} display",
            paint_context_.display_hdr ? "HDR" : "SDR");
+    display_hdr_.store(paint_context_.display_hdr, std::memory_order_relaxed);
     D3D12_RESOURCE_DESC hdr_source_desc = {};
     hdr_source_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     hdr_source_desc.Width = paint_context_.swap_chain_width;
@@ -1170,13 +1171,15 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
     const bool display_hdr = paint_context_.display_hdr;
     const float paper_white =
         float(std::max(cvars::present_hdr_paper_white, 80.0));
-    // A PQ image is in nits: per scRGB unit on HDR displays, per the paper
-    // white (SDR white) on SDR ones.
+    // Per scRGB unit (80 nits): SDR white on HDR displays, else 1; a PQ image
+    // is in nits.
     const bool pq = guest_output_properties.pq;
+    float scale = display_hdr ? paper_white / 80.0f : 1.0f;
+    if (pq) {
+      scale = 1.0f / (display_hdr ? 80.0f : paper_white);
+    }
     const float hdr_constants[4] = {
-        pq            ? 1.0f / (display_hdr ? 80.0f : paper_white)
-        : display_hdr ? paper_white / 80.0f
-                      : 1.0f,
+        scale,
         display_hdr
             ? std::max(float(cvars::present_hdr_peak) / paper_white, 1.0f)
             : 1.0f,

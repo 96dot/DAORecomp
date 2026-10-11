@@ -213,7 +213,7 @@ unlock_frame_rate = {}
 # HDR output. On an HDR display, SDR white is shown at hdr_paper_white nits and
 # highlights go up to hdr_peak nits: with temporal_upscaler on, the 3D scenes
 # are rendered in HDR (the highlights the game compresses), otherwise the SDR
-# image is expanded. Harmless on SDR displays.
+# image is expanded. Harmless on SDR displays (the SDR image, linearized).
 hdr = {}
 hdr_paper_white = {}
 hdr_peak = {}

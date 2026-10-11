@@ -51,6 +51,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     // On the green curve (the least tinted): its linear part continued, from
     // the slope just below the knee (the same for the whole screen, so cached
     // by the texture unit), against the curve itself.
+    // 4 of the curve's entries.
     const float step = 1.0 / 64.0;
     float knee = Curve(dao_knee).g;
     float slope = max(knee - Curve(dao_knee - step).g, 0.0) / step;
@@ -59,6 +60,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     target = min(target, 1.0) +
              headroom * (1.0 - exp(-max(target - 1.0, 0.0) / headroom));
     float curve = pow(saturate(Curve(m).g), dao_gamma);
+    // (The curve above the knee is far from 0; this only avoids dividing by
+    // it.)
     color *= max(target / max(curve, 1.0 / 1024.0), 1.0);
     color *= min(dao_peak_ratio / max(color.r, max(color.g, color.b)), 1.0);
   }
