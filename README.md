@@ -111,6 +111,12 @@ start, so this happens once per place.
   FidelityFX-CAS/FSR submodules; the compiled shaders are committed).
 - `scripts/check_include_case.py` finds `#include`s whose case differs from the file on
   disk, which only breaks builds on Linux.
+- Diagnostics, set as environment variables (results in `userdata/xenia.log`):
+  - `DAO_GPU_TIMING=1`: GPU time per section of a frame and pipeline statistics per
+    kind of draw and per shader pair, every 300 frames (`GT` lines; slows rendering).
+  - `DAO_DRED=1`: when the GPU device is lost, the operations it was running and the
+    memory it faulted on (Direct3D 12 DRED).
+  - `DAO_LAUNCHER_SCREENSHOTS=<folder>`: saves each launcher view as a BMP and quits.
 
 Never commit game files or anything generated from them (`game/`, `ppc/`, `analysis/`,
 built executables); `.gitignore` excludes them.

@@ -397,11 +397,10 @@ class DaoUpscalerImpl {
                             const CopyConstants& constants);
   void CaptureHudless();
   bool InitializeMotion();
-  // The stream output buffers (2 x 96 MB), created at the first motion capture
-  // rather than with the rest, so they take no memory with the temporal
-  // upscaler off. False if they couldn't be created.
+  // The stream output buffers (kStreamOutBufferSize each), created at the
+  // first motion capture rather than with the rest, so they take no memory with
+  // the temporal upscaler off. False if they couldn't be created.
   bool EnsureStreamOutBuffers();
-  bool stream_out_buffers_failed_ = false;
   // Null until created (or if that failed).
   ID3D12PipelineState* GetStreamOutPipeline(
       const PipelineCache::Pipeline& pipeline);
@@ -508,6 +507,8 @@ class DaoUpscalerImpl {
   D3D12_RESOURCE_STATES stream_out_states_[2] = {
       D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_DEST};
   ComPtr<ID3D12Resource> stream_out_zeros_;
+  // Not retried after failing.
+  bool stream_out_buffers_failed_ = false;
   std::unordered_map<const void*, std::unique_ptr<StreamOutPipeline>>
       stream_out_pipelines_;
   // Replaced ones (rare), kept: they may still be queued for creation or used

@@ -154,12 +154,14 @@ void D3D12Provider::LogDeviceRemoved() const {
                                 ? *node->pLastBreadcrumbValue
                                 : 0;
       // Only the command lists the GPU had started but not finished.
-      if (last >= node->BreadcrumbCount) {
+      if (!last || last >= node->BreadcrumbCount) {
         continue;
       }
+      // The operations around the one the GPU stopped at, bracketed.
+      constexpr uint32_t kOpsBefore = 24, kOpsAfter = 8;
       std::string ops;
-      const uint32_t first = last > 24 ? last - 24 : 0;
-      const uint32_t end = std::min(node->BreadcrumbCount, last + 8);
+      const uint32_t first = last > kOpsBefore ? last - kOpsBefore : 0;
+      const uint32_t end = std::min(node->BreadcrumbCount, last + kOpsAfter);
       for (uint32_t i = first; i < end; ++i) {
         ops += fmt::format("{}{}{} ", i == last ? "[" : "",
                            uint32_t(node->pCommandHistory[i]),

@@ -3214,20 +3214,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
         primitive_processing_result.host_draw_vertex_count, 1, 0, 0);
     if (dao_timing::GpuTiming::Enabled()) {
       dao_timing::GpuTiming::Get().EndDrawStatistics(
-          *this,
-          fmt::format("guest {} host {} index {} vs {}{}",
-                      uint32_t(primitive_processing_result.guest_primitive_type),
-                      uint32_t(primitive_processing_result.host_primitive_type),
-                      uint32_t(primitive_processing_result.index_buffer_type),
-                      uint32_t(primitive_processing_result.host_vertex_shader_type),
-                      primitive_processing_result.host_primitive_reset_enabled
-                          ? " reset"
-                          : ""),
-          fmt::format("vs {:016X} ps {:016X}", vertex_shader->ucode_data_hash(),
-                      pixel_shader ? pixel_shader->ucode_data_hash() : 0),
-          primitive_processing_result.host_draw_vertex_count,
-          regs.Get<reg::VGT_MAX_VTX_INDX>().max_indx -
-              regs.Get<reg::VGT_MIN_VTX_INDX>().min_indx + 1);
+          *this, regs, primitive_processing_result, *vertex_shader,
+          pixel_shader);
     }
     if (predicate_buffer) {
       deferred_command_list_.D3DSetPredication(nullptr, 0,
@@ -3307,20 +3295,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
         primitive_processing_result.host_draw_vertex_count, 1, 0, 0, 0);
     if (dao_timing::GpuTiming::Enabled()) {
       dao_timing::GpuTiming::Get().EndDrawStatistics(
-          *this,
-          fmt::format("guest {} host {} index {} vs {}{}",
-                      uint32_t(primitive_processing_result.guest_primitive_type),
-                      uint32_t(primitive_processing_result.host_primitive_type),
-                      uint32_t(primitive_processing_result.index_buffer_type),
-                      uint32_t(primitive_processing_result.host_vertex_shader_type),
-                      primitive_processing_result.host_primitive_reset_enabled
-                          ? " reset"
-                          : ""),
-          fmt::format("vs {:016X} ps {:016X}", vertex_shader->ucode_data_hash(),
-                      pixel_shader ? pixel_shader->ucode_data_hash() : 0),
-          primitive_processing_result.host_draw_vertex_count,
-          regs.Get<reg::VGT_MAX_VTX_INDX>().max_indx -
-              regs.Get<reg::VGT_MIN_VTX_INDX>().min_indx + 1);
+          *this, regs, primitive_processing_result, *vertex_shader,
+          pixel_shader);
     }
     if (predicate_buffer) {
       deferred_command_list_.D3DSetPredication(nullptr, 0,

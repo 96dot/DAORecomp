@@ -873,6 +873,7 @@ class D3D12TextureCache final : public TextureCache {
   // Whether resolves may write the texture directly (as a UAV, the base level
   // at the base address, not in a packed mip tail).
   bool IsResolveWritable(const TextureKey& key) const;
+  // Whether a texture resolves can't write (created without a UAV) was logged.
   bool resolve_missed_uav_logged_ = false;
   Microsoft::WRL::ComPtr<ID3D12RootSignature> resolve_texture_root_signature_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> resolve_texture_pipeline_;

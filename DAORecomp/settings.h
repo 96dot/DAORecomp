@@ -7,6 +7,8 @@ namespace dao
     enum class Upscaler { Bilinear, Cas, Fsr };
     // Temporal upscaling and anti-aliasing of the 3D scenes (FidelityFX API).
     enum class TemporalUpscaler { Off, Auto, Fsr4, Fsr3 };
+    // Settings::anisotropicFiltering values: 0 = the game default.
+    inline constexpr int kAnisotropicLevels[] = { 0, 2, 4, 8, 16 };
 
     // A folder under mods/, in load order (later mods win over earlier ones).
     struct ModState
@@ -40,7 +42,7 @@ namespace dao
         bool hdr = false;
         float hdrPaperWhite = 200.0f; // nits
         float hdrPeak = 1000.0f;      // nits
-        // Anisotropic texture filtering: 0 = the game's own, else 2, 4, 8 or 16.
+        // Anisotropic texture filtering, one of kAnisotropicLevels.
         int anisotropicFiltering = 0;
         bool fullscreen = false;
         int windowWidth = 1280;

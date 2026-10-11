@@ -111,8 +111,7 @@ namespace dao
         s.unlockFrameRate = video["unlock_frame_rate"].value_or(s.unlockFrameRate);
         s.fullscreen = video["fullscreen"].value_or(s.fullscreen);
         s.anisotropicFiltering = video["anisotropic_filtering"].value_or(s.anisotropicFiltering);
-        if (s.anisotropicFiltering != 2 && s.anisotropicFiltering != 4 && s.anisotropicFiltering != 8 &&
-            s.anisotropicFiltering != 16)
+        if (std::ranges::find(kAnisotropicLevels, s.anisotropicFiltering) == std::end(kAnisotropicLevels))
             s.anisotropicFiltering = 0;
         s.hdr = video["hdr"].value_or(s.hdr);
         s.hdrPaperWhite = std::clamp(video["hdr_paper_white"].value_or(s.hdrPaperWhite), 80.0f, 1000.0f);
@@ -180,7 +179,7 @@ unlock_frame_rate = {}
 hdr = {}
 hdr_paper_white = {}
 hdr_peak = {}
-# Anisotropic texture filtering: 0 (the game's own), 2, 4, 8 or 16.
+# Anisotropic texture filtering: 0 (game default), 2, 4, 8 or 16.
 anisotropic_filtering = {}
 fullscreen = {}
 window_width = {}
@@ -240,7 +239,7 @@ window_height = {}
         SetXeniaCvar("present_hdr", toml::value<bool>(s.hdr));
         SetXeniaCvar("present_hdr_paper_white", toml::value<double>(s.hdrPaperWhite));
         SetXeniaCvar("present_hdr_peak", toml::value<double>(s.hdrPeak));
-        // Xenia's levels: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x; -1 = the game's own.
+        // Xenia's levels: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x; -1 = the game default.
         if (s.anisotropicFiltering)
             SetXeniaCvar("anisotropic_override",
                 toml::value<int64_t>(1 + std::countr_zero(unsigned(s.anisotropicFiltering))));

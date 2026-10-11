@@ -7,16 +7,20 @@
 // previous resolve). Its time is averaged over all the frames, its draw count
 // over the frames that have it. Marks past kMaxMarks in a frame are dropped
 // (counted in the log).
-// Each draw is also wrapped in a pipeline statistics query (which serializes
-// the draws, so the times are inflated while timing): the vertices, vertex
-// shader invocations, primitives and pixel shader invocations are logged per
-// section, per kind of draw (primitive, index buffer and vertex shader types)
-// and for the shader pairs doing the most vertex and pixel work.
+// Timing also wraps each draw in a pipeline statistics query (which serializes
+// the draws, so the times are inflated): the indices, vertex index range
+// (VGT_MIN/MAX_VTX_INDX), vertices, vertex shader invocations, primitives and
+// pixel shader invocations are logged per section, per kind of draw ("GT
+// kind": the xenos::PrimitiveType of the guest and of the host draw, the
+// PrimitiveProcessor::ProcessedIndexBufferType and the
+// Shader::HostVertexShaderType) and for the shader pairs doing the most vertex
+// ("GT vs") and pixel ("GT ps") work. Draws past kMaxDraws in a frame get no
+// statistics (counted in the log).
 #pragma once
 
 #include <algorithm>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -61,26 +65,44 @@ class GpuTiming {
         stats_heap_.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS,
         slot_ * kMaxDraws + stats_draws_);
   }
-  void EndDrawStatistics(D3D12CommandProcessor& cp, std::string kind = {},
-                         std::string shaders = {}, uint32_t indices = 0,
-                         uint32_t vertex_range = 0) {
-    if (!stats_heap_ || stats_draws_ >= kMaxDraws) {
+  void EndDrawStatistics(D3D12CommandProcessor& cp, const RegisterFile& regs,
+                         const PrimitiveProcessor::ProcessingResult& primitives,
+                         const Shader& vertex_shader,
+                         const Shader* pixel_shader) {
+    if (!stats_heap_) {
+      return;
+    }
+    if (stats_draws_ >= kMaxDraws) {
+      ++stats_dropped_;
       return;
     }
     cp.GetDeferredCommandList().D3DEndQuery(
         stats_heap_.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS,
         slot_ * kMaxDraws + stats_draws_);
-    Slot& slot = slots_[slot_];
-    slot.stats_marks.resize(stats_draws_ + 1);
-    slot.stats_marks[stats_draws_] = frame_marks_;
-    slot.stats_kinds.resize(stats_draws_ + 1);
-    slot.stats_kinds[stats_draws_] = std::move(kind);
-    slot.stats_shaders.resize(stats_draws_ + 1);
-    slot.stats_shaders[stats_draws_] = std::move(shaders);
-    slot.stats_indices.resize(stats_draws_ + 1);
-    slot.stats_indices[stats_draws_] = indices;
-    slot.stats_ranges.resize(stats_draws_ + 1);
-    slot.stats_ranges[stats_draws_] = vertex_range;
+    // Sized by the count, as a frame dropped unread leaves its draws behind.
+    std::vector<DrawStatistics>& draws = slots_[slot_].draws_statistics;
+    draws.resize(stats_draws_);
+    DrawStatistics& draw = draws.emplace_back();
+    draw.mark = frame_marks_;
+    draw.kind = fmt::format(
+        "guest {} host {} index {} vs {}{}",
+        uint32_t(primitives.guest_primitive_type),
+        uint32_t(primitives.host_primitive_type),
+        uint32_t(primitives.index_buffer_type),
+        uint32_t(primitives.host_vertex_shader_type),
+        primitives.host_primitive_reset_enabled ? " reset" : "");
+    draw.shaders = fmt::format(
+        "vs {:016X} ps {:016X}", vertex_shader.ucode_data_hash(),
+        pixel_shader ? pixel_shader->ucode_data_hash() : 0);
+    draw.indices = primitives.host_draw_vertex_count;
+    // The index range registers only apply to the guest's indexed draws.
+    const bool guest_indexed =
+        primitives.index_buffer_type != PrimitiveProcessor::kNone &&
+        primitives.index_buffer_type != PrimitiveProcessor::kHostBuiltinForAuto;
+    const uint32_t min_index = regs.Get<reg::VGT_MIN_VTX_INDX>().min_indx;
+    const uint32_t max_index = regs.Get<reg::VGT_MAX_VTX_INDX>().max_indx;
+    draw.vertex_range =
+        guest_indexed && max_index >= min_index ? max_index - min_index + 1 : 0;
     ++stats_draws_;
   }
 
@@ -144,6 +166,8 @@ class GpuTiming {
           slot_ * kMaxDraws * sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS));
     }
     slot.stats_draws = stats_draws_;
+    slot.stats_dropped = stats_dropped_;
+    stats_dropped_ = 0;
     stats_draws_ = 0;
     slot.submission = cp.GetCurrentSubmission();
     slot.marks = frame_marks_;
@@ -159,6 +183,18 @@ class GpuTiming {
   static constexpr uint32_t kMaxMarks = 512;
   static constexpr uint32_t kLogInterval = 300;
   static constexpr uint32_t kMaxDraws = 4096;
+  // Rows of the per kind and per shader pair statistics logged.
+  static constexpr size_t kLoggedTags = 14;
+
+  // A draw given pipeline statistics, for summing them.
+  struct DrawStatistics {
+    // The mark ending the draw's section.
+    uint32_t mark = 0;
+    std::string kind;
+    std::string shaders;
+    uint32_t indices = 0;
+    uint32_t vertex_range = 0;
+  };
 
   struct Slot {
     uint64_t submission = 0;
@@ -167,9 +203,8 @@ class GpuTiming {
     std::vector<std::string> labels;
     std::vector<uint32_t> draws;
     uint32_t stats_draws = 0;
-    std::vector<uint32_t> stats_marks;
-    std::vector<std::string> stats_kinds, stats_shaders;
-    std::vector<uint32_t> stats_indices, stats_ranges;
+    uint32_t stats_dropped = 0;
+    std::vector<DrawStatistics> draws_statistics;
   };
   struct TagStats {
     double draws = 0, indices = 0, range = 0, ia = 0, vs = 0, prim = 0, ps = 0;
@@ -191,7 +226,7 @@ class GpuTiming {
     std::sort(v.begin(), v.end(), [by_ps](auto& a, auto& b) {
       return by_ps ? a.second.ps > b.second.ps : a.second.vs > b.second.vs;
     });
-    for (size_t i = 0; i < v.size() && i < 14; ++i) {
+    for (size_t i = 0; i < v.size() && i < kLoggedTags; ++i) {
       const TagStats& t = v[i].second;
       XELOGI(
           "GT {}: {:6.1f} draws {:7.0f}k idx {:7.0f}k range {:7.0f}k ia {:7.0f}k vs {:7.0f}k "
@@ -259,6 +294,7 @@ class GpuTiming {
             D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
             IID_PPV_ARGS(&stats_readback_)))) {
       stats_heap_.Reset();
+      XELOGW("GT: no pipeline statistics (failed to create the query heap)");
     }
     XELOGI("GT: GPU timing enabled");
     return true;
@@ -292,15 +328,17 @@ class GpuTiming {
                     stats.size() * sizeof(stats[0]));
         const D3D12_RANGE written = {0, 0};
         stats_readback_->Unmap(0, &written);
+      } else {
+        XELOGW("GT: failed to map the pipeline statistics, logged as zero");
       }
     }
     std::vector<D3D12_QUERY_DATA_PIPELINE_STATISTICS> mark_stats(slot.marks);
     for (uint32_t i = 0; i < slot.stats_draws; ++i) {
-      const uint32_t mark = slot.stats_marks[i];
-      AddTag(kind_stats_[slot.stats_kinds[i]], stats[i], slot.stats_indices[i],
-             slot.stats_ranges[i]);
-      AddTag(shader_stats_[slot.stats_shaders[i]], stats[i],
-             slot.stats_indices[i], slot.stats_ranges[i]);
+      const DrawStatistics& draw = slot.draws_statistics[i];
+      const uint32_t mark = draw.mark;
+      AddTag(kind_stats_[draw.kind], stats[i], draw.indices, draw.vertex_range);
+      AddTag(shader_stats_[draw.shaders], stats[i], draw.indices,
+             draw.vertex_range);
       if (mark < slot.marks) {
         mark_stats[mark].IAVertices += stats[i].IAVertices;
         mark_stats[mark].VSInvocations += stats[i].VSInvocations;
@@ -308,7 +346,10 @@ class GpuTiming {
         mark_stats[mark].PSInvocations += stats[i].PSInvocations;
       }
     }
+    stats_dropped_draws_ += slot.stats_dropped;
     slot.stats_draws = 0;
+    slot.stats_dropped = 0;
+    slot.draws_statistics.clear();
     const D3D12_RANGE range = {index * kMaxMarks * sizeof(uint64_t),
                                (index * kMaxMarks + slot.marks) *
                                    sizeof(uint64_t)};
@@ -375,6 +416,11 @@ class GpuTiming {
           section.primitives / section.count / 1000.0,
           section.ps / section.count / 1000.0, label);
     }
+    if (stats_dropped_draws_) {
+      XELOGI("GT: {} draws past {} in a frame without statistics",
+             stats_dropped_draws_, kMaxDraws);
+      stats_dropped_draws_ = 0;
+    }
     LogTags("kind", kind_stats_, false);
     LogTags("vs", shader_stats_, false);
     LogTags("ps", shader_stats_, true);
@@ -391,6 +437,9 @@ class GpuTiming {
   Microsoft::WRL::ComPtr<ID3D12QueryHeap> stats_heap_;
   Microsoft::WRL::ComPtr<ID3D12Resource> stats_readback_;
   uint32_t stats_draws_ = 0;
+  // Draws past kMaxDraws in the current frame, and in the logged frames.
+  uint32_t stats_dropped_ = 0;
+  uint64_t stats_dropped_draws_ = 0;
   bool failed_ = false;
   double ticks_per_ms_ = 1.0;
   Slot slots_[kSlots];

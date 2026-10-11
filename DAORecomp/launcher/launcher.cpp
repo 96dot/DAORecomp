@@ -32,9 +32,9 @@ namespace dao::launcher
         constexpr const char* kUpscalers[] = { "Bilinear", "FidelityFX CAS", "FidelityFX FSR 1" };
         constexpr const char* kTemporalUpscalers[] = { "Off", "Auto (FSR 4 where supported, else FSR 3.1)",
             "FidelityFX FSR 4", "FidelityFX FSR 3.1" };
-        // Settings::anisotropicFiltering values and their names.
-        constexpr int kAnisotropicLevels[] = { 0, 2, 4, 8, 16 };
+        // The names of kAnisotropicLevels.
         constexpr const char* kAnisotropicNames[] = { "Game default", "2x", "4x", "8x", "16x" };
+        static_assert(std::size(kAnisotropicNames) == std::size(kAnisotropicLevels));
 
         // The PC launcher's look: sepia art on black, dark red buttons with gold edges.
         constexpr ImU32 kGold = IM_COL32(176, 142, 82, 255);
@@ -47,6 +47,8 @@ namespace dao::launcher
         constexpr ImU32 kLogo = IM_COL32(214, 206, 190, 255);
 
         enum class View { Main, Configure, Mods };
+        // Graphics, Display, Patches, Advanced.
+        constexpr int kConfigureTabs = 4;
 
         struct State
         {
@@ -67,6 +69,9 @@ namespace dao::launcher
             // DAO_LAUNCHER_SCREENSHOTS=<dir>: show each view, save it as BMP, quit.
             fs::path screenshotDir;
             int screenshotFrame = 0;
+            // Whether Escape and the gamepad's B mean Back this frame: not closing a popup,
+            // ending an edit or leaving a nested child window.
+            bool backKeysFree = false;
         };
 
         void OpenFolder(const fs::path& path)
@@ -100,31 +105,21 @@ namespace dao::launcher
             return it != settings.patches.end() ? it->second : patch.defaultEnabled;
         }
 
-        // The game's splash screen (splash.dds: 1280x720 DXT1, red art on light grey),
-        // decoded and recoloured to sepia on black. Empty if missing or not DXT1.
-        std::vector<uint8_t> LoadArt(const fs::path& gameRoot, int& width, int& height)
-        {
-            std::ifstream file(gameRoot / "splash.dds", std::ios::binary);
-            std::vector<uint8_t> dds((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            auto u32 = [&](size_t offset) {
-                return uint32_t(dds[offset]) | uint32_t(dds[offset + 1]) << 8 | uint32_t(dds[offset + 2]) << 16 |
-                    uint32_t(dds[offset + 3]) << 24;
-            };
-            if (dds.size() < 128 || memcmp(dds.data(), "DDS ", 4) || memcmp(&dds[84], "DXT1", 4))
-                return {};
-            height = int(u32(12));
-            width = int(u32(16));
-            const int blocksX = (width + 3) / 4, blocksY = (height + 3) / 4;
-            if (width <= 0 || height <= 0 || width > 4096 || height > 4096 ||
-                dds.size() < 128 + size_t(blocksX) * blocksY * 8)
-                return {};
+        constexpr size_t kDdsHeaderSize = 128;
+        constexpr size_t kDxt1BlockSize = 8;
+        constexpr uint32_t kMaxArtSize = 4096;
 
+        // RGB of the DXT1 blocks of a width x height image. The 1-bit alpha colour
+        // (transparent) is decoded as black.
+        std::vector<uint8_t> DecodeDxt1(const uint8_t* blocks, int width, int height)
+        {
+            const int blocksX = (width + 3) / 4, blocksY = (height + 3) / 4;
             std::vector<uint8_t> rgb(size_t(width) * height * 3);
             for (int by = 0; by < blocksY; by++)
             {
                 for (int bx = 0; bx < blocksX; bx++)
                 {
-                    const uint8_t* block = &dds[128 + (size_t(by) * blocksX + bx) * 8];
+                    const uint8_t* block = &blocks[(size_t(by) * blocksX + bx) * kDxt1BlockSize];
                     const uint32_t c0 = block[0] | block[1] << 8, c1 = block[2] | block[3] << 8;
                     int palette[4][3];
                     for (int i = 0; i < 2; i++)
@@ -152,9 +147,14 @@ namespace dao::launcher
                     }
                 }
             }
+            return rgb;
+        }
 
-            // The art (saturated or dark) in sepia shaded by its red, the background black
-            // with a faint warm vignette, and the glowing spots kept bright.
+        // RGBA of the splash art recoloured: the art (saturated or dark) in sepia shaded
+        // by its red, the background black with a faint warm vignette, and the glowing
+        // spots kept bright.
+        std::vector<uint8_t> RecolourArt(const std::vector<uint8_t>& rgb, int width, int height)
+        {
             auto smooth = [](float e0, float e1, float x) {
                 const float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
                 return t * t * (3.0f - 2.0f * t);
@@ -185,6 +185,34 @@ namespace dao::launcher
                     rgba[(size_t(y) * width + x) * 4 + 3] = 255;
                 }
             }
+            return rgba;
+        }
+
+        // The game's splash screen (splash.dds: 1280x720 DXT1, red art on light grey),
+        // decoded and recoloured to sepia on black. Empty if missing or not DXT1.
+        std::vector<uint8_t> LoadArt(const fs::path& gameRoot, int& widthOut, int& heightOut)
+        {
+            // The header, then only the blocks it describes (at most kMaxArtSize square).
+            std::ifstream file(gameRoot / "splash.dds", std::ios::binary);
+            std::vector<uint8_t> dds(kDdsHeaderSize);
+            if (!file.read(reinterpret_cast<char*>(dds.data()), kDdsHeaderSize))
+                return {};
+            auto u32 = [&](size_t offset) {
+                return uint32_t(dds[offset]) | uint32_t(dds[offset + 1]) << 8 | uint32_t(dds[offset + 2]) << 16 |
+                    uint32_t(dds[offset + 3]) << 24;
+            };
+            // DDS_HEADER (after the "DDS " magic): dwHeight, dwWidth and the pixel format's FourCC.
+            const uint32_t headerHeight = u32(12), headerWidth = u32(16);
+            if (memcmp(dds.data(), "DDS ", 4) || memcmp(&dds[84], "DXT1", 4) || !headerWidth || !headerHeight ||
+                headerWidth > kMaxArtSize || headerHeight > kMaxArtSize)
+                return {};
+            const int width = int(headerWidth), height = int(headerHeight);
+            dds.resize(kDdsHeaderSize + size_t((width + 3) / 4) * ((height + 3) / 4) * kDxt1BlockSize);
+            if (!file.read(reinterpret_cast<char*>(&dds[kDdsHeaderSize]), std::streamsize(dds.size() - kDdsHeaderSize)))
+                return {};
+            std::vector<uint8_t> rgba = RecolourArt(DecodeDxt1(&dds[kDdsHeaderSize], width, height), width, height);
+            widthOut = width;
+            heightOut = height;
             return rgba;
         }
 
@@ -241,7 +269,8 @@ namespace dao::launcher
             const float originsSize = smallSize * 0.62f;
             const ImVec2 originsExtent = small->CalcTextSizeA(originsSize, FLT_MAX, 0, origins);
             const ImVec2 originsPos(x - originsExtent.x, baseline + 6 * st.scale);
-            draw->AddText(small, originsSize, ImVec2(originsPos.x + 1, originsPos.y + 1), IM_COL32(0, 0, 0, 200), origins);
+            draw->AddText(small, originsSize, ImVec2(originsPos.x + st.scale, originsPos.y + st.scale),
+                IM_COL32(0, 0, 0, 200), origins);
             draw->AddText(small, originsSize, originsPos, kLogo, origins);
         }
 
@@ -250,23 +279,25 @@ namespace dao::launcher
         {
             const float height = 38.0f * st.scale;
             ImGui::BeginDisabled(!enabled);
-            const bool pressed = ImGui::InvisibleButton(label, ImVec2(width, height));
+            const bool pressed = ImGui::InvisibleButton(label, ImVec2(width, height), ImGuiButtonFlags_EnableNav);
             ImGui::EndDisabled();
             const bool hot = enabled && (ImGui::IsItemHovered() || ImGui::IsItemFocused());
             const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
             ImDrawList* draw = ImGui::GetWindowDrawList();
-            const float radius = 3.0f * st.scale;
-            draw->AddRectFilled(ImVec2(min.x + 3, min.y + 3), ImVec2(max.x + 3, max.y + 3), IM_COL32(0, 0, 0, 140), radius);
+            const float radius = 3.0f * st.scale, shadow = 3.0f * st.scale;
+            draw->AddRectFilled(ImVec2(min.x + shadow, min.y + shadow), ImVec2(max.x + shadow, max.y + shadow),
+                IM_COL32(0, 0, 0, 140), radius);
             draw->AddRectFilledMultiColor(min, max, hot ? kButtonTopHot : kButtonTop, hot ? kButtonTopHot : kButtonTop,
                 hot ? kButtonBottomHot : kButtonBottom, hot ? kButtonBottomHot : kButtonBottom);
             draw->AddRect(min, max, hot ? kGoldBright : kGold, radius, 0, (hot ? 2.0f : 1.4f) * st.scale);
-            draw->AddLine(ImVec2(min.x + 4, min.y + 2 * st.scale), ImVec2(max.x - 4, min.y + 2 * st.scale),
+            draw->AddLine(ImVec2(min.x + 4 * st.scale, min.y + 2 * st.scale), ImVec2(max.x - 4 * st.scale, min.y + 2 * st.scale),
                 IM_COL32(255, 220, 170, hot ? 70 : 40), 1.0f);
             const char* end = ImGui::FindRenderedTextEnd(label);
             ImFont* font = st.buttonFont;
             const ImVec2 text = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0, label, end);
             const ImVec2 at(min.x + (width - text.x) * 0.5f, min.y + (height - text.y) * 0.5f);
-            draw->AddText(font, font->FontSize, ImVec2(at.x + 1, at.y + 1), IM_COL32(0, 0, 0, 220), label, end);
+            draw->AddText(font, font->FontSize, ImVec2(at.x + st.scale, at.y + st.scale), IM_COL32(0, 0, 0, 220), label,
+                end);
             draw->AddText(font, font->FontSize, at, enabled ? kButtonText : IM_COL32(150, 130, 120, 255), label, end);
             return pressed && enabled;
         }
@@ -546,8 +577,9 @@ namespace dao::launcher
             ImGui::PopStyleColor(2);
 
             ImGui::SetCursorPos(ImVec2(margin, viewport->Size.y - backHeight + 4));
-            if (MenuButton(st, "Back", 160.0f * st.scale) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
-                ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
+            if (MenuButton(st, "Back", 160.0f * st.scale) ||
+                (st.backKeysFree &&
+                    (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))))
                 SetView(st, View::Main);
         }
 
@@ -559,6 +591,7 @@ namespace dao::launcher
                 constexpr std::pair<const char*, TabFn> kTabs[] = {
                     { "Graphics", GraphicsTab }, { "Display", DisplayTab }, { "Patches", PatchesTab },
                     { "Advanced", AdvancedTab } };
+                static_assert(std::size(kTabs) == kConfigureTabs);
                 for (int i = 0; i < int(std::size(kTabs)); i++)
                 {
                     const ImGuiTabItemFlags flags = forcedTab == i ? ImGuiTabItemFlags_SetSelected : 0;
@@ -596,8 +629,10 @@ namespace dao::launcher
 
             // Dark warm brown with the buttons' red and gold.
             ImVec4* c = style.Colors;
-            const ImVec4 accent(0.40f, 0.15f, 0.09f, 1.0f), accentHover(0.53f, 0.21f, 0.12f, 1.0f),
-                accentActive(0.62f, 0.26f, 0.15f, 1.0f), gold(0.69f, 0.56f, 0.32f, 1.0f);
+            const ImVec4 accent = ImGui::ColorConvertU32ToFloat4(kButtonTop),
+                accentHover = ImGui::ColorConvertU32ToFloat4(kButtonTopHot), accentActive(0.62f, 0.26f, 0.15f, 1.0f),
+                gold = ImGui::ColorConvertU32ToFloat4(kGold), goldBright = ImGui::ColorConvertU32ToFloat4(kGoldBright);
+            auto withAlpha = [](ImVec4 color, float alpha) { return ImVec4(color.x, color.y, color.z, alpha); };
             c[ImGuiCol_Text] = ImVec4(0.93f, 0.89f, 0.82f, 1.0f);
             c[ImGuiCol_TextDisabled] = ImVec4(0.60f, 0.55f, 0.50f, 1.0f);
             c[ImGuiCol_WindowBg] = ImVec4(0, 0, 0, 0);
@@ -608,18 +643,18 @@ namespace dao::launcher
             c[ImGuiCol_Button] = accent;
             c[ImGuiCol_ButtonHovered] = accentHover;
             c[ImGuiCol_ButtonActive] = accentActive;
-            c[ImGuiCol_Header] = ImVec4(0.40f, 0.15f, 0.09f, 0.6f);
-            c[ImGuiCol_HeaderHovered] = ImVec4(0.53f, 0.21f, 0.12f, 0.8f);
+            c[ImGuiCol_Header] = withAlpha(accent, 0.6f);
+            c[ImGuiCol_HeaderHovered] = withAlpha(accentHover, 0.8f);
             c[ImGuiCol_HeaderActive] = accentActive;
             c[ImGuiCol_Tab] = ImVec4(0.14f, 0.10f, 0.08f, 1.0f);
             c[ImGuiCol_TabHovered] = accentHover;
             c[ImGuiCol_TabSelected] = accent;
             c[ImGuiCol_TabSelectedOverline] = gold;
-            c[ImGuiCol_CheckMark] = ImVec4(0.91f, 0.77f, 0.47f, 1.0f);
+            c[ImGuiCol_CheckMark] = goldBright;
             c[ImGuiCol_SliderGrab] = gold;
-            c[ImGuiCol_SliderGrabActive] = ImVec4(0.91f, 0.77f, 0.47f, 1.0f);
+            c[ImGuiCol_SliderGrabActive] = goldBright;
             c[ImGuiCol_Separator] = ImVec4(0.45f, 0.36f, 0.22f, 0.6f);
-            c[ImGuiCol_NavCursor] = ImVec4(0.91f, 0.77f, 0.47f, 1.0f);
+            c[ImGuiCol_NavCursor] = goldBright;
         }
 
         ImFont* LoadFont(const char* const* files, float size)
@@ -743,6 +778,13 @@ namespace dao::launcher
                 continue;
             }
 
+            // Before NewFrame, which handles ImGui's own uses of the keys.
+            {
+                const ImGuiContext& g = *ImGui::GetCurrentContext();
+                const ImGuiWindow* nav = g.NavWindow;
+                st.backKeysFree = g.OpenPopupStack.empty() && !g.ActiveId &&
+                    (!nav || !nav->ParentWindow || !nav->ParentWindow->ParentWindow);
+            }
             ImGui_ImplSDLRenderer3_NewFrame();
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
@@ -750,7 +792,7 @@ namespace dao::launcher
             // Screenshot mode: 10 frames per shot (main, the configure tabs, mods),
             // captured on the last one.
             constexpr int kFramesPerShot = 10;
-            constexpr int kShots = 6;
+            constexpr int kShots = 1 + kConfigureTabs + 1;
             const int shot = st.screenshotDir.empty() ? -1 : st.screenshotFrame / kFramesPerShot;
             const bool shotStart = shot >= 0 && st.screenshotFrame % kFramesPerShot == 0;
             const bool shotNow = shot >= 0 && st.screenshotFrame % kFramesPerShot == kFramesPerShot - 1;
@@ -758,7 +800,7 @@ namespace dao::launcher
             if (shotStart)
             {
                 SetView(st, shot == 0 ? View::Main : shot == kShots - 1 ? View::Mods : View::Configure);
-                forcedTab = shot >= 1 && shot <= 4 ? shot - 1 : -1;
+                forcedTab = shot >= 1 && shot <= kConfigureTabs ? shot - 1 : -1;
             }
             if (shot >= kShots)
                 st.quit = true;
