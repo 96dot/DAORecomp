@@ -60,9 +60,12 @@ class DaoUpscaler {
                      uint32_t normalized_color_mask, uint64_t pixel_shader_hash,
                      uint32_t pixel_shader_texture_mask,
                      bool window_offset_in_edram);
-  // After the draw has been recorded (skip_motion: memexport or predicated).
-  static void AfterDraw(const Shader& vertex_shader, bool indexed,
-                        uint32_t host_vertex_count, bool skip_motion);
+  // Right before the draw is recorded, with its pipeline set (skip_motion:
+  // memexport or predicated).
+  static void BeforeDraw(const Shader& vertex_shader, bool indexed,
+                         uint32_t host_vertex_count, bool skip_motion);
+  // After the draw has been recorded.
+  static void AfterDraw();
   // In a resolve, before the render targets are read.
   static void OnResolve(const draw_util::ResolveInfo& resolve_info);
   // At the swap, after the front buffer texture has been obtained. Returns the

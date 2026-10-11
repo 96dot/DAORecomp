@@ -339,8 +339,10 @@ class PipelineCache {
                                        std::vector<uint32_t>& shader_out);
   const std::vector<uint32_t>& GetGeometryShader(GeometryShaderKey key);
 
+  // DAO: stream_output, if not null, is added to the pipeline.
   ID3D12PipelineState* CreateD3D12Pipeline(
-      const PipelineRuntimeDescription& runtime_description);
+      const PipelineRuntimeDescription& runtime_description,
+      const D3D12_STREAM_OUTPUT_DESC* stream_output = nullptr);
 
   D3D12CommandProcessor& command_processor_;
   const RegisterFile& register_file_;

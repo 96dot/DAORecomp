@@ -239,8 +239,9 @@ class DaoUpscalerImpl {
               reg::RB_DEPTHCONTROL depth_control, uint32_t color_mask,
               uint64_t pixel_shader_hash, uint32_t pixel_shader_texture_mask,
               bool window_offset_in_edram);
-  void AfterDraw(const Shader& vertex_shader, bool indexed,
-                 uint32_t host_vertex_count, bool skip_motion);
+  void BeforeDraw(const Shader& vertex_shader, bool indexed,
+                  uint32_t host_vertex_count, bool skip_motion);
+  void AfterDraw();
   void OnResolve(const draw_util::ResolveInfo& resolve_info);
   ID3D12Resource* OnSwap(ID3D12Resource* frontbuffer,
                          const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
@@ -278,6 +279,10 @@ class DaoUpscalerImpl {
     float z_min;
     float z_max;
     float depth_test_offset;
+    float padding;
+    // The jitter in the positions written (NDC offset per W).
+    float current_ndc_jitter[2];
+    float previous_ndc_jitter[2];
   };
   // A scene draw given motion vectors.
   struct MotionDraw {
@@ -291,14 +296,9 @@ class DaoUpscalerImpl {
     // Sum of the constants (infinity if any isn't finite): the difference of
     // two is at most the distance between their constants.
     double constants_sum;
-    // Stream output, right after the draw.
+    // The draw's pipeline with stream output, and its own.
     ID3D12PipelineState* stream_out_pipeline;
     ID3D12PipelineState* pipeline;
-    UINT system_parameter;
-    D3D12_GPU_VIRTUAL_ADDRESS system_constants;
-    D3D12_GPU_VIRTUAL_ADDRESS unjittered_system_constants;
-    bool indexed;
-    uint32_t host_vertex_count;
     // Triangle list vertices of the positions written (0 if none).
     uint32_t output_vertex_count;
     // Whether the stream output buffer is bound before the draw (otherwise
@@ -362,7 +362,7 @@ class DaoUpscalerImpl {
     const void* vertex_shader;
     uint64_t vertex_shader_hash;
     ID3D12RootSignature* root_signature;
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc;
+    const PipelineCache::Pipeline* pipeline;
     ComPtr<ID3D12PipelineState> state;
     std::atomic<uint32_t> status{kPending};
   };
@@ -392,8 +392,11 @@ class DaoUpscalerImpl {
   void TransitionStreamOut(uint32_t buffer, D3D12_RESOURCE_STATES state);
   void CaptureMotion(const Shader& vertex_shader, bool indexed,
                      uint32_t host_vertex_count);
-  static void ExecuteStreamOut(void* context,
-                               ID3D12GraphicsCommandList* command_list);
+  // Around the draw: the pipeline with stream output, then its own again.
+  static void ExecuteBeginStreamOut(void* context,
+                                    ID3D12GraphicsCommandList* command_list);
+  static void ExecuteEndStreamOut(void* context,
+                                  ID3D12GraphicsCommandList* command_list);
   // Unbinds the stream output buffers, if bound.
   void CloseStreamOut();
   static void ExecuteCloseStreamOut(void* context,
@@ -521,9 +524,10 @@ class DaoUpscalerImpl {
   uint32_t motion_unmatched_ = 0;
   uint32_t motion_skipped_ = 0;
   bool motion_logged_ = false;
-  // From OnDraw to AfterDraw.
+  // From OnDraw to BeforeDraw.
   bool motion_pending_ = false;
-  float motion_ndc_jitter_[2] = {};
+  // From BeforeDraw to AfterDraw: the draw writing its positions.
+  MotionDraw* streamed_draw_ = nullptr;
   MotionConstants motion_viewport_ = {};
   uint64_t motion_pixel_shader_ = 0;
   MotionPass motion_pass_ = {};
@@ -1061,12 +1065,11 @@ void DaoUpscalerImpl::OnDraw(const RegisterFile& regs,
     if (!viewport_info.xy_extent[0] || !viewport_info.xy_extent[1]) {
       return;
     }
-    motion_ndc_jitter_[0] =
-        2.0f * jitter_[0] / float(viewport_info.xy_extent[0]);
-    motion_ndc_jitter_[1] =
-        -2.0f * jitter_[1] / float(viewport_info.xy_extent[1]);
-    viewport_info.ndc_offset[0] += motion_ndc_jitter_[0];
-    viewport_info.ndc_offset[1] += motion_ndc_jitter_[1];
+    const float ndc_jitter[2] = {
+        2.0f * jitter_[0] / float(viewport_info.xy_extent[0]),
+        -2.0f * jitter_[1] / float(viewport_info.xy_extent[1])};
+    viewport_info.ndc_offset[0] += ndc_jitter[0];
+    viewport_info.ndc_offset[1] += ndc_jitter[1];
     // Motion vectors for the draws writing color (not the depth prepass).
     if (motion_available_ && cvars::dao_motion_vectors && (color_mask & 0xF) &&
         render_size_[0]) {
@@ -1081,6 +1084,7 @@ void DaoUpscalerImpl::OnDraw(const RegisterFile& regs,
         motion.viewport_extent[i] = float(viewport_info.xy_extent[i]);
         motion.render_size[i] = float(render_size_[i]);
         motion.jitter[i] = jitter_[i];
+        motion.current_ndc_jitter[i] = ndc_jitter[i];
       }
       motion.z_min = viewport_info.z_min;
       motion.z_max = viewport_info.z_max;
@@ -1119,12 +1123,9 @@ void DaoUpscalerImpl::OnDraw(const RegisterFile& regs,
   }
 }
 
-void DaoUpscalerImpl::AfterDraw(const Shader& vertex_shader, bool indexed,
-                                uint32_t host_vertex_count, bool skip_motion) {
-  if (hudless_pending_) {
-    hudless_pending_ = false;
-    CaptureHudless();
-  }
+void DaoUpscalerImpl::BeforeDraw(const Shader& vertex_shader, bool indexed,
+                                 uint32_t host_vertex_count,
+                                 bool skip_motion) {
   if (motion_pending_) {
     motion_pending_ = false;
     if (skip_motion) {
@@ -1132,6 +1133,18 @@ void DaoUpscalerImpl::AfterDraw(const Shader& vertex_shader, bool indexed,
     } else {
       CaptureMotion(vertex_shader, indexed, host_vertex_count);
     }
+  }
+}
+
+void DaoUpscalerImpl::AfterDraw() {
+  if (streamed_draw_) {
+    cp_.GetDeferredCommandList().DaoCallback(ExecuteEndStreamOut,
+                                             streamed_draw_);
+    streamed_draw_ = nullptr;
+  }
+  if (hudless_pending_) {
+    hudless_pending_ = false;
+    CaptureHudless();
   }
 }
 
@@ -1154,60 +1167,7 @@ ID3D12PipelineState* DaoUpscalerImpl::GetStreamOutPipeline(
   entry->vertex_shader = runtime.vertex_shader;
   entry->vertex_shader_hash = runtime.vertex_shader->shader().ucode_data_hash();
   entry->root_signature = runtime.root_signature;
-  const PipelineCache::PipelineDescription& description = runtime.description;
-  // The draw's vertex shader and root signature, writing the positions
-  // instead of rasterizing. Render target formats and sample count as bound.
-  D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc = entry->desc;
-  desc = {};
-  desc.pRootSignature = runtime.root_signature;
-  const std::vector<uint8_t>& vertex_shader =
-      runtime.vertex_shader->translated_binary();
-  desc.VS.pShaderBytecode = vertex_shader.data();
-  desc.VS.BytecodeLength = vertex_shader.size();
-  // Static: the description, with pointers to them, is used on the creation
-  // thread.
-  static const D3D12_SO_DECLARATION_ENTRY kSoEntry = {0, "SV_Position", 0,
-                                                      0, 4, 0};
-  static const UINT kSoStride = 16;
-  desc.StreamOutput.pSODeclaration = &kSoEntry;
-  desc.StreamOutput.NumEntries = 1;
-  desc.StreamOutput.pBufferStrides = &kSoStride;
-  desc.StreamOutput.NumStrides = 1;
-  desc.StreamOutput.RasterizedStream = D3D12_SO_NO_RASTERIZED_STREAM;
-  desc.SampleMask = UINT_MAX;
-  desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-  desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-  desc.RasterizerState.DepthClipEnable = TRUE;
-  switch (description.strip_cut_index) {
-    case PipelineCache::PipelineStripCutIndex::kFFFF:
-      desc.IBStripCutValue = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFF;
-      break;
-    case PipelineCache::PipelineStripCutIndex::kFFFFFFFF:
-      desc.IBStripCutValue = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFFFFFF;
-      break;
-    default:
-      desc.IBStripCutValue = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
-      break;
-  }
-  desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
-    const PipelineCache::PipelineRenderTarget& rt =
-        description.render_targets[i];
-    if (rt.used) {
-      desc.NumRenderTargets = i + 1;
-      desc.RTVFormats[i] = rtc_.GetColorDrawDXGIFormat(rt.format);
-    }
-  }
-  desc.DSVFormat =
-      D3D12RenderTargetCache::GetDepthDSVDXGIFormat(description.depth_format);
-  const uint32_t samples = uint32_t(1)
-                           << uint32_t(description.host_msaa_samples);
-  if (samples == 2 && !rtc_.msaa_2x_supported()) {
-    desc.SampleMask = 0b1001;
-    desc.SampleDesc.Count = 4;
-  } else {
-    desc.SampleDesc.Count = samples;
-  }
+  entry->pipeline = &pipeline;
   if (!stream_out_thread_.joinable()) {
     stream_out_thread_ = std::thread([this] { StreamOutPipelineThread(); });
   }
@@ -1221,7 +1181,6 @@ ID3D12PipelineState* DaoUpscalerImpl::GetStreamOutPipeline(
 
 void DaoUpscalerImpl::StreamOutPipelineThread() {
   xe::threading::set_name("FSR stream output pipelines");
-  ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
   while (true) {
     StreamOutPipeline* entry;
     {
@@ -1235,8 +1194,19 @@ void DaoUpscalerImpl::StreamOutPipelineThread() {
       entry = stream_out_queue_.front();
       stream_out_queue_.pop_front();
     }
-    if (SUCCEEDED(device->CreateGraphicsPipelineState(
-            &entry->desc, IID_PPV_ARGS(&entry->state)))) {
+    // The draw's pipeline, also writing the positions (SV_Position).
+    static const D3D12_SO_DECLARATION_ENTRY kSoEntry = {0, "SV_Position", 0,
+                                                        0, 4, 0};
+    static const UINT kSoStride = 16;
+    D3D12_STREAM_OUTPUT_DESC stream_output = {};
+    stream_output.pSODeclaration = &kSoEntry;
+    stream_output.NumEntries = 1;
+    stream_output.pBufferStrides = &kSoStride;
+    stream_output.NumStrides = 1;
+    stream_output.RasterizedStream = 0;
+    entry->state.Attach(cp_.pipeline_cache_->CreateD3D12Pipeline(
+        entry->pipeline->description, &stream_output));
+    if (entry->state) {
       entry->status.store(StreamOutPipeline::kReady, std::memory_order_release);
     } else {
       XELOGW("FSR: no stream output pipeline for vertex shader {:016X}",
@@ -1479,21 +1449,6 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     return;
   }
 
-  // The system constants without the jitter.
-  D3D12_GPU_VIRTUAL_ADDRESS unjittered_system_constants;
-  DxbcShaderTranslator::SystemConstants system_constants =
-      cp_.system_constants_;
-  system_constants.ndc_offset[0] -= motion_ndc_jitter_[0];
-  system_constants.ndc_offset[1] -= motion_ndc_jitter_[1];
-  uint8_t* mapping = cp_.constant_buffer_pool_->Request(
-      cp_.frame_current_, sizeof(system_constants),
-      D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, nullptr, nullptr,
-      &unjittered_system_constants);
-  if (!mapping) {
-    return;
-  }
-  std::memcpy(mapping, &system_constants, sizeof(system_constants));
-
   if (!stream_out_reset_) {
     // Zero the filled-size counters, once per frame.
     TransitionStreamOut(motion_frame_, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -1508,14 +1463,6 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
 
   draw.stream_out_pipeline = stream_out_pipeline;
   draw.pipeline = pipeline_state;
-  draw.system_parameter =
-      cp_.bindless_resources_used_
-          ? D3D12CommandProcessor::kRootParameter_Bindless_SystemConstants
-          : D3D12CommandProcessor::kRootParameter_Bindful_SystemConstants;
-  draw.system_constants = cp_.cbuffer_binding_system_.address;
-  draw.unjittered_system_constants = unjittered_system_constants;
-  draw.indexed = indexed;
-  draw.host_vertex_count = host_vertex_count;
   draw.output_vertex_count = output_vertex_count;
   draw.motion = motion_viewport_;
   const D3D12_GPU_VIRTUAL_ADDRESS buffer =
@@ -1562,6 +1509,8 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     draw.motion.previous_offset = previous->motion.current_offset;
     draw.motion.previous_counter = previous->motion.current_counter;
     draw.motion.previous_in_buffer = previous->motion.current_in_buffer;
+    draw.motion.previous_ndc_jitter[0] = previous->motion.current_ndc_jitter[0];
+    draw.motion.previous_ndc_jitter[1] = previous->motion.current_ndc_jitter[1];
     draw.has_motion = true;
     ++motion_matched_;
   } else {
@@ -1570,27 +1519,23 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   if (draw.bind_stream_out) {
     stream_out_bound_ = true;
   }
-  cp_.GetDeferredCommandList().DaoCallback(ExecuteStreamOut, &draw);
+  cp_.GetDeferredCommandList().DaoCallback(ExecuteBeginStreamOut, &draw);
+  streamed_draw_ = &draw;
 }
 
-void DaoUpscalerImpl::ExecuteStreamOut(
+void DaoUpscalerImpl::ExecuteBeginStreamOut(
     void* context, ID3D12GraphicsCommandList* command_list) {
   const MotionDraw& draw = *static_cast<const MotionDraw*>(context);
   command_list->SetPipelineState(draw.stream_out_pipeline);
-  command_list->SetGraphicsRootConstantBufferView(
-      draw.system_parameter, draw.unjittered_system_constants);
   if (draw.bind_stream_out) {
     command_list->SOSetTargets(0, 1, &draw.stream_out_view);
   }
-  if (draw.indexed) {
-    command_list->DrawIndexedInstanced(draw.host_vertex_count, 1, 0, 0, 0);
-  } else {
-    command_list->DrawInstanced(draw.host_vertex_count, 1, 0, 0);
-  }
-  // Back to the draw's state (the stream output buffer stays bound, unused by
-  // the other pipelines).
-  command_list->SetGraphicsRootConstantBufferView(draw.system_parameter,
-                                                  draw.system_constants);
+}
+
+void DaoUpscalerImpl::ExecuteEndStreamOut(
+    void* context, ID3D12GraphicsCommandList* command_list) {
+  // The stream output buffer stays bound, unused by the other pipelines.
+  const MotionDraw& draw = *static_cast<const MotionDraw*>(context);
   command_list->SetPipelineState(draw.pipeline);
 }
 
@@ -2190,10 +2135,16 @@ void DaoUpscaler::OnDraw(const RegisterFile& regs,
   }
 }
 
-void DaoUpscaler::AfterDraw(const Shader& vertex_shader, bool indexed,
-                            uint32_t host_vertex_count, bool skip_motion) {
+void DaoUpscaler::BeforeDraw(const Shader& vertex_shader, bool indexed,
+                             uint32_t host_vertex_count, bool skip_motion) {
   if (impl_) {
-    impl_->AfterDraw(vertex_shader, indexed, host_vertex_count, skip_motion);
+    impl_->BeforeDraw(vertex_shader, indexed, host_vertex_count, skip_motion);
+  }
+}
+
+void DaoUpscaler::AfterDraw() {
+  if (impl_) {
+    impl_->AfterDraw();
   }
 }
 

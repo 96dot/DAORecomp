@@ -17,6 +17,9 @@ DaoMvInterpolators main(uint vertex_id : SV_VertexID) {
       asfloat(dao_mv_positions.Load4(dao_mv_current_offset + byte_index));
   float4 previous = asfloat(
       dao_mv_previous_positions.Load4(dao_mv_previous_offset + byte_index));
+  // Written as drawn, jittered: without the jitter.
+  current.xy -= dao_mv_current_ndc_jitter * current.w;
+  previous.xy -= dao_mv_previous_ndc_jitter * previous.w;
   // Rasterize where the scene was: the current position plus the jitter, on
   // the full-frame motion vector target, with the draw's depth range.
   float2 screen = DaoMvToScreen(current.xy, current.w) + dao_mv_jitter;

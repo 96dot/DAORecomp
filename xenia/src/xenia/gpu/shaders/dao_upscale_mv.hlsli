@@ -1,7 +1,7 @@
-// DAO: motion vectors for FSR. Each scene draw's vertex shader was run again
-// with stream output and without jitter (dao_upscale.cc), giving the
-// clip-space position of every vertex now; the position one frame ago is what
-// the matching draw of the previous frame wrote. This pass draws those
+// DAO: motion vectors for FSR. Each scene draw wrote the clip-space position
+// of every vertex with stream output as it was drawn (dao_upscale.cc), with
+// the jitter (taken out here); the position one frame ago is what the
+// matching draw of the previous frame wrote. This pass draws those
 // triangles again into the motion vector target, keeping only the pixels where
 // they are the visible surface in the scene depth. The scene depth is also in
 // the depth buffer, so the depth test can reject most of the hidden pixels
@@ -38,6 +38,10 @@ cbuffer DaoMvConstants : register(b0) {
   // nearer is less, positive if nearer is greater, 0 if the draw's depth test
   // is neither (then the pass has none).
   float dao_mv_depth_test_offset;
+  float dao_mv_padding;
+  // The jitter in the current and previous positions (NDC offset per W).
+  float2 dao_mv_current_ndc_jitter;
+  float2 dao_mv_previous_ndc_jitter;
 };
 
 // Larger depth differences from the scene are other surfaces

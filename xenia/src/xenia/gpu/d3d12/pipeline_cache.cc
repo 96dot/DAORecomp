@@ -2855,7 +2855,8 @@ void PipelineCache::EnsurePipelineShadersTranslated(
 }
 
 ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
-    const PipelineRuntimeDescription& runtime_description) {
+    const PipelineRuntimeDescription& runtime_description,
+    const D3D12_STREAM_OUTPUT_DESC* stream_output) {
   const PipelineDescription& description = runtime_description.description;
 
   if (runtime_description.pixel_shader != nullptr) {
@@ -3296,6 +3297,10 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
     state_desc.PS.BytecodeLength = 0;
     state_desc.DepthStencilState.DepthEnable = false;
     state_desc.DepthStencilState.StencilEnable = false;
+  }
+
+  if (stream_output) {
+    state_desc.StreamOutput = *stream_output;
   }
 
   // Create the D3D12 pipeline state object.

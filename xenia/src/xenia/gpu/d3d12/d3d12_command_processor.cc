@@ -3167,6 +3167,13 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
 
   // Draw.
   OnVIZSurveyDraw(true);
+  // DAO: the draw writes its positions for motion vectors.
+  DaoUpscaler::BeforeDraw(
+      *vertex_shader,
+      primitive_processing_result.index_buffer_type !=
+          PrimitiveProcessor::ProcessedIndexBufferType::kNone,
+      primitive_processing_result.host_draw_vertex_count,
+      memexport_used || predicate_buffer);
   if (primitive_processing_result.index_buffer_type ==
       PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
     if (!memexport_used) {
@@ -3265,12 +3272,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     }
   }
 
-  DaoUpscaler::AfterDraw(
-      *vertex_shader,
-      primitive_processing_result.index_buffer_type !=
-          PrimitiveProcessor::ProcessedIndexBufferType::kNone,
-      primitive_processing_result.host_draw_vertex_count,
-      memexport_used || predicate_buffer);
+  DaoUpscaler::AfterDraw();
 
   if (memexport_used) {
     // Make sure this memexporting draw is ordered with other work using shared
