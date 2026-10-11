@@ -8,6 +8,7 @@
  */
 
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
+#include "xenia/dao_host.h"
 #include "xenia/gpu/d3d12/dao_frame_trace.h"
 #include "xenia/gpu/d3d12/dao_gpu_timing.h"
 #include "xenia/gpu/d3d12/dao_upscale.h"
@@ -4085,7 +4086,10 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
 }
 
 bool D3D12CommandProcessor::CanEndSubmissionImmediately() const {
-  return !submission_open_ || !pipeline_cache_->IsCreatingPipelines();
+  // With asynchronous compilation, draws whose pipeline isn't created yet are
+  // skipped, so every pipeline the submission uses already exists.
+  return !submission_open_ || cvars::async_shader_compilation ||
+         !pipeline_cache_->IsCreatingPipelines();
 }
 
 void D3D12CommandProcessor::ClearCommandAllocatorCache() {

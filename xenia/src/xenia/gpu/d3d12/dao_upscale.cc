@@ -1193,8 +1193,6 @@ ID3D12PipelineState* DaoUpscalerImpl::GetStreamOutPipeline(
 
 void DaoUpscalerImpl::StreamOutPipelineThread() {
   xe::threading::set_name("FSR stream output pipelines");
-  // Behind the frame's threads: draws go without motion until it's done.
-  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
   while (true) {
     StreamOutPipeline* entry;
     {

@@ -334,4 +334,9 @@ namespace xe::dao_host
     {
         return dao::kernel::g_module.titleId;
     }
+
+    void ShortSleep(uint32_t microseconds)
+    {
+        dao::kernel::ShortSleep(microseconds);
+    }
 }

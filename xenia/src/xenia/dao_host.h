@@ -19,6 +19,10 @@ void DispatchInterrupt(uint32_t callback, uint32_t user_data, uint32_t source,
 
 uint32_t TitleId();
 
+// Sleeps about `microseconds` (high resolution, unlike Sleep / NtDelayExecution
+// on Windows).
+void ShortSleep(uint32_t microseconds);
+
 }  // namespace xe::dao_host
 
 #endif  // XENIA_DAO_HOST_H_

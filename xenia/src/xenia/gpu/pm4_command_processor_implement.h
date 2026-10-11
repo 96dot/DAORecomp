@@ -722,6 +722,7 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
                 : register_file_->values[poll_reg_addr];
 
   bool matched = false;
+  uint64_t poll_start = 0;
 
   do {
     uint32_t value = value_ref;
@@ -743,9 +744,18 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
       if (wait >= 0x100) {
         PrepareForWait();
         if (!cvars::vsync) {
-          // User wants it fast and dangerous: polls, but lets other threads
-          // have the core (few on handhelds).
-          xe::threading::MaybeYield();
+          // User wants it fast and dangerous: polls, but after a short while
+          // in brief sleeps, so the core is free for the guest's threads (few
+          // cores on handhelds) during waits of most of a frame.
+          const uint64_t now = Clock::QueryHostUptimeMillis();
+          if (!poll_start) {
+            poll_start = now + 1;
+          }
+          if (now >= poll_start) {
+            xe::dao_host::ShortSleep(100);
+          } else {
+            xe::threading::MaybeYield();
+          }
         } else {
           xe::threading::Sleep(std::chrono::milliseconds(wait / 0x100));
           ReturnFromWait();
