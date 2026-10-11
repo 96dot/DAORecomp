@@ -6,6 +6,7 @@
 // engine reads loose files in packages/core/override before its archives.
 #include "stdafx.h"
 #include "ui/erf.h"
+#include "text.h"
 #include "ui/graphics_menu.h"
 #include "ui/graphics_tab_as.h"
 #include "kernel/vfs.h"
@@ -72,13 +73,13 @@ namespace dao::ui
                 const uint64_t size = fs::file_size(*loose, ec);
                 if (ec || size > kMaxMovieSize)
                     return std::nullopt;
-                source = loose->string();
+                source = Utf8(*loose);
                 return ReadFileBytes(*loose, 0, uint32_t(size));
             }
             const auto archive = kernel::VfsResolve(kArchivePath);
             if (!archive)
                 return std::nullopt;
-            source = archive->string();
+            source = Utf8(*archive);
             return ReadErfEntry(*archive, kMovieName, kMaxMovieSize);
         }
 
@@ -235,13 +236,13 @@ namespace dao::ui
                 file.write(reinterpret_cast<const char*>(patched->data()), std::streamsize(patched->size()));
                 if (!file)
                 {
-                    LOGW("Options menu: can't write {}; no Graphics tab", temp.string());
+                    LOGW("Options menu: can't write {}; no Graphics tab", Utf8(temp));
                     return false;
                 }
             }
             if (!MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
             {
-                LOGW("Options menu: can't replace {} ({}); no Graphics tab", path.string(), GetLastError());
+                LOGW("Options menu: can't replace {} ({}); no Graphics tab", Utf8(path), GetLastError());
                 return false;
             }
         }

@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include <fstream>
 #include "gpu/frame_history.h"
+#include "text.h"
 #include "gpu/video.h"
 #include "gpu/xenia_host.h"
 
@@ -161,7 +162,7 @@ namespace dao::gpu
             std::filesystem::create_directories(dir);
             for (size_t i = 0; i < frames.size(); i++)
                 Save(dir / fmt::format("{:03}_swap{}.png", i, frames[i]->swap), *frames[i], width, height);
-            LOGI("Frame history: saved {} frames to {}", frames.size(), dir.string());
+            LOGI("Frame history: saved {} frames to {}", frames.size(), Utf8(dir));
         }).detach();
     }
 }

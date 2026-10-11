@@ -11,7 +11,9 @@
 #include "mods/mods.h"
 #include "ui/graphics_menu.h"
 #include "settings.h"
+#include "text.h"
 
+#include <shellapi.h>
 #include <timeapi.h>
 #include <tlhelp32.h>
 #include <csignal>
@@ -145,15 +147,23 @@ static void TerminateHandler()
     abort();
 }
 
-static fs::path FindGameRoot(int argc, char** argv)
+static fs::path FindGameRoot()
 {
-    // The first argument that isn't a --flag is the game folder.
-    for (int i = 1; i < argc; i++)
+    // The first argument that isn't a --flag is the game folder (read as UTF-16:
+    // argv is in the ANSI code page, which may lack the folder's characters).
+    int count = 0;
+    wchar_t** args = CommandLineToArgvW(GetCommandLineW(), &count);
+    for (int i = 1; args && i < count; i++)
     {
-        if (strncmp(argv[i], "--", 2) != 0)
-            return fs::path(argv[i]);
+        if (wcsncmp(args[i], L"--", 2) != 0)
+        {
+            const fs::path folder = args[i];
+            LocalFree(args);
+            return folder;
+        }
     }
-    if (const char* env = getenv("DAO_GAME"))
+    LocalFree(args);
+    if (const wchar_t* env = _wgetenv(L"DAO_GAME"))
         return fs::path(env);
 
     wchar_t exePath[MAX_PATH];
@@ -175,15 +185,15 @@ int main(int argc, char** argv)
     // coordinates.
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
-    const fs::path gameRoot = fs::absolute(FindGameRoot(argc, argv));
+    const fs::path gameRoot = fs::absolute(FindGameRoot());
     const fs::path userRoot = gameRoot.parent_path() / "userdata";
     fs::create_directories(userRoot);
-    dao::log::Init((userRoot / "dao.log").string().c_str());
+    dao::log::Init(userRoot / "dao.log");
 
-    LOGI("Dragon Age: Origins recomp - game {}, user data {}", gameRoot.string(), userRoot.string());
+    LOGI("Dragon Age: Origins recomp - game {}, user data {}", dao::Utf8(gameRoot), dao::Utf8(userRoot));
     if (!fs::exists(gameRoot / "default.xex"))
     {
-        LOGE("default.xex not found under {}", gameRoot.string());
+        LOGE("default.xex not found under {}", dao::Utf8(gameRoot));
         return 1;
     }
 
@@ -256,7 +266,7 @@ int main(int argc, char** argv)
             {
                 std::this_thread::sleep_for(std::chrono::seconds(seconds));
                 const auto path = userRoot / fmt::format("capture_{}.png", n);
-                LOGI("Capture {}: {}", path.string(), dao::gpu::CaptureFrame(path) ? "ok" : "failed");
+                LOGI("Capture {}: {}", dao::Utf8(path), dao::gpu::CaptureFrame(path) ? "ok" : "failed");
             }
         }).detach();
     }

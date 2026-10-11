@@ -3,6 +3,7 @@
 #include "stdafx.h"
 #include <set>
 #include "gpu/xenia_host.h"
+#include "text.h"
 #include "function.h"
 #include "thread.h"
 #include "vfs.h"
@@ -190,14 +191,14 @@ namespace dao::imp
             if (file->host == INVALID_HANDLE_VALUE)
             {
                 const DWORD error = GetLastError();
-                LOGW("NtCreateFile: host open of '{}' failed ({})", hostPath->string(), error);
+                LOGW("NtCreateFile: host open of '{}' failed ({})", dao::Utf8(*hostPath), error);
                 return fail(error == ERROR_ACCESS_DENIED || error == ERROR_SHARING_VIOLATION ? X_STATUS_ACCESS_DENIED
                     : X_STATUS_OBJECT_NAME_NOT_FOUND, Action::DoesNotExist);
             }
         }
 
         LOGT("NtCreateFile '{}' access {:08X} disp {} opts {:#x} -> {}", *guestPath, access, disposition, options,
-            hostPath->string());
+            dao::Utf8(*hostPath));
         SetIosb(iosb, X_STATUS_SUCCESS, action);
         if (handleOut)
             *handleOut = CreateHandle(file);
@@ -440,7 +441,7 @@ namespace dao::imp
             break;
         case XFileInternalInformation:
             if (!need(8)) { status = X_STATUS_BUFFER_TOO_SMALL; break; }
-            *reinterpret_cast<u64*>(info) = std::hash<std::string>{}(file->hostPath.string());
+            *reinterpret_cast<u64*>(info) = std::hash<std::wstring>{}(file->hostPath.native());
             break;
         case XFilePositionInformation:
             if (!need(8)) { status = X_STATUS_BUFFER_TOO_SMALL; break; }
@@ -453,7 +454,7 @@ namespace dao::imp
             break;
         case XFileSectorInformation:
             if (!need(4)) { status = X_STATUS_BUFFER_TOO_SMALL; break; }
-            *reinterpret_cast<u32*>(info) = uint32_t(std::hash<std::string>{}(file->hostPath.string()));
+            *reinterpret_cast<u32*>(info) = uint32_t(std::hash<std::wstring>{}(file->hostPath.native()));
             break;
         case XFileNetworkOpenInformation:
             if (!need(56)) { status = X_STATUS_BUFFER_TOO_SMALL; break; }
@@ -652,7 +653,11 @@ namespace dao::imp
                 std::error_code ec;
                 for (auto& entry : fs::directory_iterator(dir, ec))
                 {
-                    std::string name = entry.path().filename().string();
+                    // (A name the guest can't use is left out.)
+                    std::optional<std::string> guestName = dao::ToAnsi(entry.path().filename());
+                    if (!guestName)
+                        continue;
+                    std::string name = std::move(*guestName);
                     if (dao::patches::IsHiddenFile(name))
                         continue;
                     std::transform(name.begin(), name.end(), name.begin(), [](char c) { return char(tolower(uint8_t(c))); });
@@ -667,7 +672,7 @@ namespace dao::imp
         while (file->nextEntry < file->entries.size())
         {
             const auto& entry = file->entries[file->nextEntry++];
-            const std::string name = entry.path().filename().string();
+            const std::string name = dao::ToAnsi(entry.path().filename()).value_or(std::string());
             if (!WildcardMatch(pattern, name))
                 continue;
             if (0x40 + name.size() > length)

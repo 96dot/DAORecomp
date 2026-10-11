@@ -7,7 +7,7 @@ namespace dao::log
 {
     enum class Level { Trace, Info, Warn, Error };
 
-    void Init(const char* path);
+    void Init(const std::filesystem::path& path);
     void Write(Level level, std::string_view message);
     bool TraceEnabled();
 }

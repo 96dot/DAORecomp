@@ -42,6 +42,24 @@ namespace dao
         return ToWide(text);
     }
 
+    // A name in the ANSI code page, as the guest's file names are (guest paths become
+    // host paths through it); nothing if it has characters the code page lacks.
+    inline std::optional<std::string> ToAnsi(const std::filesystem::path& name)
+    {
+        const std::wstring& text = name.native();
+        if (text.empty())
+            return std::string();
+        BOOL lossy = FALSE;
+        const int size = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, text.data(), int(text.size()), nullptr, 0,
+            nullptr, &lossy);
+        if (size <= 0 || lossy)
+            return std::nullopt;
+        std::string out(size, '\0');
+        WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, text.data(), int(text.size()), out.data(), size, nullptr,
+            nullptr);
+        return out;
+    }
+
     // ASCII lowercase.
     inline std::string Lower(std::string_view text)
     {

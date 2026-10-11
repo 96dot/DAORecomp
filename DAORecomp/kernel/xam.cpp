@@ -1,6 +1,7 @@
 // xam: users/profile, input, notifications, content (saves), enumerators, UI, messages.
 #include "stdafx.h"
 #include "function.h"
+#include "text.h"
 #include "module.h"
 #include "thread.h"
 #include "vfs.h"
@@ -263,7 +264,7 @@ namespace dao::imp
         for (auto& entry : fs::directory_iterator(ProfileDir(), ec))
         {
             uint32_t id = 0;
-            if (sscanf(entry.path().filename().string().c_str(), "%08X.bin", &id) != 1)
+            if (sscanf(dao::Utf8(entry.path().filename()).c_str(), "%08X.bin", &id) != 1)
                 continue;
             FILE* f = _wfopen(entry.path().c_str(), L"rb");
             if (!f)
@@ -771,12 +772,13 @@ namespace dao::imp
         const fs::path dir = ContentPath(contentType, "");
         for (auto& entry : fs::directory_iterator(dir, ec))
         {
-            if (!entry.is_directory())
+            const std::optional<std::string> guestName = dao::ToAnsi(entry.path().filename());
+            if (!entry.is_directory(ec) || !guestName)
                 continue;
             XCONTENT_DATA item{};
             item.deviceId = kHddDeviceId;
             item.contentType = contentType;
-            const std::string name = entry.path().filename().string();
+            const std::string& name = *guestName;
             memcpy(item.fileName, name.data(), std::min<size_t>(name.size(), sizeof(item.fileName)));
             FILE* f = _wfopen((dir / (name + ".name")).c_str(), L"rb");
             if (f)

@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include <fstream>
 #include "thread.h"
+#include "text.h"
 #include "memory.h"
 
 namespace dao::kernel
@@ -260,7 +261,7 @@ namespace dao::kernel
             samples++;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        LOGI("Profiled thread {}: {} samples -> {}", threadId, samples, out.string());
+        LOGI("Profiled thread {}: {} samples -> {}", threadId, samples, Utf8(out));
     }
 
     void ForEachThread(const std::function<void(GuestThread&)>& fn)

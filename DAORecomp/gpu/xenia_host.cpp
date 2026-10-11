@@ -3,6 +3,7 @@
 #include <future>
 
 #include "gpu/xenia_host.h"
+#include "text.h"
 #include "kernel/memory.h"
 #include "kernel/module.h"
 #include "kernel/thread.h"
@@ -22,6 +23,8 @@
 #include "xenia/ui/windowed_app_context_win.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+// File names are UTF-8.
+#define STBIW_WINDOWS_UTF8
 #include "third_party/stb/stb_image_write.h"
 
 DECLARE_path(log_file);
@@ -300,7 +303,7 @@ namespace dao::gpu
             for (uint32_t x = 0; x < image.width; x++)
                 memcpy(&rgb[(size_t(y) * image.width + x) * 3], row + x * 4, 3);
         }
-        return stbi_write_png(path.string().c_str(), int(image.width), int(image.height), 3, rgb.data(),
+        return stbi_write_png(Utf8(path).c_str(), int(image.width), int(image.height), 3, rgb.data(),
             int(image.width) * 3) != 0;
     }
 
@@ -341,7 +344,7 @@ namespace dao::gpu
 
     bool WritePng(const std::filesystem::path& path, const uint8_t* rgb, uint32_t width, uint32_t height)
     {
-        return stbi_write_png(path.string().c_str(), int(width), int(height), 3, rgb, int(width) * 3) != 0;
+        return stbi_write_png(Utf8(path).c_str(), int(width), int(height), 3, rgb, int(width) * 3) != 0;
     }
 
     void CallInterruptCallback(uint32_t callback, uint32_t userData, uint32_t source, uint32_t cpu)

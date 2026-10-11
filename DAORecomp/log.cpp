@@ -8,9 +8,9 @@ namespace dao::log
     static bool s_trace = getenv("DAO_TRACE") != nullptr;
     static const auto s_start = std::chrono::steady_clock::now();
 
-    void Init(const char* path)
+    void Init(const std::filesystem::path& path)
     {
-        s_file = fopen(path, "w");
+        s_file = _wfopen(path.c_str(), L"w");
     }
 
     bool TraceEnabled()

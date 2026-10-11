@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "module.h"
+#include "text.h"
 #include "memory.h"
 #include "thread.h"
 
@@ -115,14 +116,14 @@ namespace dao::kernel
         const auto file = LoadFile(path);
         if (file.empty())
         {
-            LOGE("Failed to read {}", path.string());
+            LOGE("Failed to read {}", Utf8(path));
             return false;
         }
 
         Image image = Image::ParseImage(file.data(), file.size());
         if (!image.data)
         {
-            LOGE("Failed to parse {}", path.string());
+            LOGE("Failed to parse {}", Utf8(path));
             return false;
         }
         if (image.base != PPC_IMAGE_BASE)

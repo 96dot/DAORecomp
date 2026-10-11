@@ -71,7 +71,7 @@ namespace dao::kernel
         // Longest prefix first.
         std::sort(s_devices.begin(), s_devices.end(),
             [](const Device& a, const Device& b) { return a.path.size() > b.path.size(); });
-        LOGI("VFS: {} -> {}", devicePath, hostRoot.string());
+        LOGI("VFS: {} -> {}", devicePath, Utf8(hostRoot));
     }
 
     void VfsUnmountDevice(const std::string& devicePath)
@@ -109,7 +109,7 @@ namespace dao::kernel
             if (device.path == key)
             {
                 for (const auto& overlay : overlays)
-                    LOGI("VFS: {} overlay {}", devicePath, overlay.string());
+                    LOGI("VFS: {} overlay {}", devicePath, Utf8(overlay));
                 device.overlays = std::move(overlays);
                 return;
             }
@@ -179,7 +179,7 @@ namespace dao::kernel
             LOGW("VFS: no device for {}", guestPath);
             return;
         }
-        LOGI("VFS: {} -> {}", guestPath, hostPath.string());
+        LOGI("VFS: {} -> {}", guestPath, Utf8(hostPath));
         Device& device = const_cast<Device&>(*located->first);
         std::string rest = Lower(located->second);
         device.files[rest] = hostPath;
@@ -260,21 +260,21 @@ namespace dao::kernel
     bool VfsIsReadOnly(const fs::path& hostPath)
     {
         std::lock_guard lock(s_vfsMutex);
-        const std::string host = Lower(hostPath.lexically_normal().string());
+        const std::string host = Lower(Utf8(hostPath.lexically_normal()));
         for (const Device& device : s_devices)
         {
             if (!device.readOnly)
                 continue;
-            if (host.starts_with(Lower(device.root.lexically_normal().string())))
+            if (host.starts_with(Lower(Utf8(device.root.lexically_normal()))))
                 return true;
             for (const auto& overlay : device.overlays)
             {
-                if (host.starts_with(Lower(overlay.lexically_normal().string())))
+                if (host.starts_with(Lower(Utf8(overlay.lexically_normal()))))
                     return true;
             }
             for (const auto& [rest, file] : device.files)
             {
-                if (host == Lower(file.lexically_normal().string()))
+                if (host == Lower(Utf8(file.lexically_normal())))
                     return true;
             }
         }

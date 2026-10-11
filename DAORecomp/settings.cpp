@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "settings.h"
+#include "text.h"
 
 #include <fstream>
 #include <sstream>
@@ -10,7 +11,17 @@ namespace dao
 {
     namespace
     {
+        namespace fs = std::filesystem;
+
         Settings s_settings;
+
+        // (toml::parse_file takes the path as text in the ANSI code page.)
+        toml::table ParseToml(const fs::path& path)
+        {
+            std::ifstream file(path, std::ios::binary);
+            const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            return toml::parse(text, Utf8(path));
+        }
 
         constexpr const char* kXeniaComment = "# Any Xenia GPU option, by its cvar name, e.g. anisotropic_override = 4.\n";
 
@@ -104,7 +115,7 @@ namespace dao
         toml::table table;
         try
         {
-            table = toml::parse_file(path.string());
+            table = ParseToml(path);
         }
         catch (const toml::parse_error& error)
         {
@@ -227,18 +238,18 @@ window_height = {}
         out += '\n' + std::string(kXeniaComment) + xenia;
 
         // Write a temporary file and swap it in, so a failed write leaves the old config.
-        const auto temp = path.string() + ".tmp";
+        const fs::path temp = path.native() + L".tmp";
         {
             std::ofstream file(temp, std::ios::binary | std::ios::trunc);
             file << out;
             if (!file)
             {
-                LOGE("config.toml: failed to write {}", temp);
+                LOGE("config.toml: failed to write {}", Utf8(temp));
                 return;
             }
         }
-        if (!MoveFileExA(temp.c_str(), path.string().c_str(), MOVEFILE_REPLACE_EXISTING))
-            LOGE("config.toml: failed to replace {} ({})", path.string(), GetLastError());
+        if (!MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
+            LOGE("config.toml: failed to replace {} ({})", Utf8(path), GetLastError());
     }
 
     const Settings& LoadSettings(const std::filesystem::path& userRoot)
@@ -269,7 +280,7 @@ window_height = {}
             SetXeniaCvar("anisotropic_override", toml::value<int64_t>(XeniaAnisotropicLevel(s.anisotropicFiltering)));
         try
         {
-            const toml::table table = toml::parse_file((userRoot / "config.toml").string());
+            const toml::table table = ParseToml(userRoot / "config.toml");
             if (const auto* xenia = table["xenia"].as_table())
             {
                 for (const auto& [key, value] : *xenia)
