@@ -23,6 +23,17 @@ var CHECKBOX_X = 53;
 var PICKER_X = 55.9;
 var PICKER_LABEL_X = 81;
 var SLIDER_X = 88.65;
+// Row heights: a header, a checkbox, a slider, a picker (its label above it).
+var HEADER_STEP = 52;
+var TOGGLE_STEP = 33;
+var SLIDER_STEP = 64;
+var PICKER_STEP = 70;
+var PICKER_BELOW_LABEL = 19.45;
+// The game's click sounds (m_nSoundType) of checkboxes and tabs.
+var CHECKBOX_SOUND = 96;
+var TAB_SOUND = 126;
+// The sliders' steps (0 to 10), as graphics_menu.cpp's kSliderSteps.
+var SLIDER_STEPS = 10;
 
 function Nits(values) {
     var labels = new Array();
@@ -36,7 +47,8 @@ var HDR_PAPER_WHITE = [80, 100, 120, 160, 200, 250, 300, 400];
 var HDR_PEAK = [400, 600, 800, 1000, 1500, 2000, 3000, 4000];
 
 // The rows in order: a header, or a setting shown as a picker (values and their
-// labels), a checkbox (toggle) or a slider (0 to slider).
+// labels), a checkbox (toggle) or a slider. A value not in a picker's list (from
+// config.toml, such as a resolution scale above 4) shows as the closest one.
 var ROWS = [
     { header: "Display" },
     { key: "Fullscreen", label: "Display mode", values: [0, 1], labels: ["Windowed", "Fullscreen"] },
@@ -47,10 +59,10 @@ var ROWS = [
     { header: "Upscaling" },
     { key: "TemporalUpscaler", label: "Temporal upscaling", restart: true, values: [0, 1, 2, 3],
       labels: ["Off", "Auto", "FidelityFX FSR 4", "FidelityFX FSR 3.1"] },
-    { key: "TemporalSharpness", label: "Temporal sharpening", slider: 10 },
+    { key: "TemporalSharpness", label: "Temporal sharpening", slider: SLIDER_STEPS },
     { key: "Upscaler", label: "Output upscaler", values: [0, 1, 2],
       labels: ["Bilinear", "FidelityFX CAS", "FidelityFX FSR 1"] },
-    { key: "Sharpness", label: "Output sharpening", slider: 10 },
+    { key: "Sharpness", label: "Output sharpening", slider: SLIDER_STEPS },
     { header: "Quality" },
     { key: "AnisotropicFiltering", label: "Anisotropic filtering", values: [0, 2, 4, 8, 16],
       labels: ["Game default", "2x", "4x", "8x", "16x"] },
@@ -68,6 +80,10 @@ function Get(key) {
 
 function Set(key, value) {
     ExternalCommands.SendMessage("DAORecomp.Set " + key + " " + value);
+    // The host keeps the peak at least the paper white.
+    if (key == "HdrPaperWhite") {
+        RefreshRows();
+    }
 }
 
 // The index of the value closest to v.
@@ -108,7 +124,7 @@ function AddHeader(group, index, text, y) {
 
 function AddToggle(group, row, y) {
     return Attach(group, "checkbox_mc", "Opt" + row.key + "_mc", CHECKBOX_X, y, function() {
-        this.m_nSoundType = 96;
+        this.m_nSoundType = CHECKBOX_SOUND;
         this.Label_mc_init = function() {
             this.SetText(row.label);
         };
@@ -134,7 +150,7 @@ function AddPicker(group, row, y) {
     Attach(group, "txt_PotionOption", "Label" + row.key + "_mc", PICKER_LABEL_X, y, function() {
         this.SetText(row.label);
     });
-    return Attach(group, "Picker", "Opt" + row.key + "_mc", PICKER_X, y + 19.45, function() {
+    return Attach(group, "Picker", "Opt" + row.key + "_mc", PICKER_X, y + PICKER_BELOW_LABEL, function() {
         var picker = this;
         this.PickedEntry = Closest(row.values, Get(row.key));
         this.NumEntries = row.values.length;
@@ -195,21 +211,22 @@ function BuildRows(scrollable) {
         var row = ROWS[i];
         if (row.header != undefined) {
             AddHeader(group, i, row.header, y);
-            y += 52;
+            y += HEADER_STEP;
         } else if (row.toggle) {
             options.push(AddToggle(group, row, y + 3));
-            y += 33;
+            y += TOGGLE_STEP;
         } else if (row.slider) {
             options.push(AddSlider(group, row, y + 1));
-            y += 64;
+            y += SLIDER_STEP;
         } else {
             options.push(AddPicker(group, row, y));
-            y += 70;
+            y += PICKER_STEP;
         }
     }
     graphicsGroup = group;
     graphicsOptions = options;
-    // The rows hide their parts (picker lists) once initialized: measure after.
+    // The rows hide their parts (picker lists) once initialized, over the next
+    // frames: measure now and again a few frames later.
     scrollable.UpdateScrollValues();
     var timer = setInterval(function() {
         clearInterval(timer);
@@ -286,19 +303,20 @@ OptionsMenu.StartScene = function() {
         AddGraphicsTab(this);
     };
     _root.GraphicsTab_mc_init = function() {
-        this.m_nSoundType = 126;
+        this.m_nSoundType = TAB_SOUND;
         this.OnButtonAction = ShowGraphicsTab;
     };
 };
 
 // The menu's navigation knows the engine's tabs by position (0 to 3); the ones
-// after this tab are a step further down.
+// after this tab are a step further down. The game's functions are static (they
+// name OptionsMenu), but are called on it in case a mod's are not.
 var setCurrentSubOptions = OptionsMenu.SetCurrentSubOptions;
 OptionsMenu.SetCurrentSubOptions = function() {
     var selected = OptionsMenu.SelectedGroup;
     var at = IndexOf(OptionsMenu.OptionGroups, graphicsTab);
     if (graphicsTab == null || at < 0 || selected < at) {
-        setCurrentSubOptions();
+        setCurrentSubOptions.apply(OptionsMenu, arguments);
         return;
     }
     if (selected == at) {
@@ -307,7 +325,7 @@ OptionsMenu.SetCurrentSubOptions = function() {
         return;
     }
     OptionsMenu.SelectedGroup = selected - 1;
-    setCurrentSubOptions();
+    setCurrentSubOptions.apply(OptionsMenu, arguments);
     OptionsMenu.SelectedGroup = selected;
 };
 
@@ -316,7 +334,7 @@ var commitOptions = OptionsMenu.CommitOptions;
 OptionsMenu.CommitOptions = function() {
     var changes = RestartChanges();
     if (changes.length == 0) {
-        commitOptions();
+        commitOptions.apply(OptionsMenu, arguments);
         return;
     }
     RecordPending();
@@ -326,7 +344,7 @@ OptionsMenu.CommitOptions = function() {
     }
     Popups.ShowDialogBox(text, Localization.GetString(325483), function() {
         ExternalCommands.SendMessageArgs("GUI.DialogBoxClosed");
-        commitOptions();
+        commitOptions.apply(OptionsMenu);
     });
 };
 

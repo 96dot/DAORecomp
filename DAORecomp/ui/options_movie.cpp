@@ -1,9 +1,9 @@
 // Builds the Options menu with the Graphics tab from the user's own game files:
 // optionsmenu.gfx (a Scaleform movie: Flash 8 with ActionScript 2) is read from
 // a mod's override folder or the disc's guiexport.erf, the compiled script of
-// graphics_tab.as is inserted, and the result is written to userdata/generated,
-// an overlay above the disc and the mods. The engine reads loose files in
-// packages/core/override before its archives.
+// graphics_tab.as is inserted, and the result is written to userdata/generated
+// and served in place of the override path, above the disc and the mods. The
+// engine reads loose files in packages/core/override before its archives.
 #include "stdafx.h"
 #include "ui/graphics_menu.h"
 #include "ui/graphics_tab_as.h"
@@ -27,8 +27,11 @@ namespace dao::ui
         constexpr uint16_t kHeaderSprite = 387;
         constexpr std::string_view kHeaderLabel = "LabelGameplay_mc";
         constexpr std::string_view kHeaderExport = "DAORecomp_SectionHeader";
-        // Far more than the movie (about 2 MB unpacked); bounds what's read.
+        // Far more than the movie (about 330 KB unpacked); bounds what's read.
         constexpr uint32_t kMaxMovieSize = 64u << 20;
+        // What a movie may unpack to beyond its header's length, which is only a
+        // hint (the game's unpack to a few KB more).
+        constexpr uint32_t kMovieSizeSlack = 1u << 20;
 
         constexpr uint16_t kTagEnd = 0;
         constexpr uint16_t kTagDoAction = 12;
@@ -65,23 +68,20 @@ namespace dao::ui
             out.insert(out.end(), body.begin(), body.end());
         }
 
-        // zlib data of `size` bytes unpacked, or of any size up to kMaxMovieSize if
-        // `size` is only a hint.
+        // zlib data of `size` bytes unpacked, or, if `size` is only a hint, of up to
+        // kMovieSizeSlack more. Decoded into a buffer of that size, which bounds it.
         std::optional<std::vector<uint8_t>> Inflate(std::span<const uint8_t> packed, uint32_t size, bool exact)
         {
             if (packed.size() > INT_MAX || size > kMaxMovieSize)
                 return std::nullopt;
-            int length = 0;
-            char* data = stbi_zlib_decode_malloc_guesssize_headerflag(
-                reinterpret_cast<const char*>(packed.data()), int(packed.size()), int(size), &length, 1);
-            if (!data)
-                return std::nullopt;
-            std::vector<uint8_t> out;
-            if (exact ? uint32_t(length) == size : length > 0 && uint32_t(length) <= kMaxMovieSize)
-                out.assign(data, data + length);
-            stbi_image_free(data);
+            std::vector<uint8_t> out(exact ? size : std::min(size + kMovieSizeSlack, kMaxMovieSize));
             if (out.empty())
                 return std::nullopt;
+            const int length = stbi_zlib_decode_buffer(reinterpret_cast<char*>(out.data()), int(out.size()),
+                reinterpret_cast<const char*>(packed.data()), int(packed.size()));
+            if (length <= 0 || (exact && uint32_t(length) != size))
+                return std::nullopt;
+            out.resize(size_t(length));
             return out;
         }
 
@@ -102,6 +102,8 @@ namespace dao::ui
         {
             constexpr size_t kEntriesOffset = 0x20;
             constexpr size_t kEntrySize = 44;
+            constexpr size_t kNameSize = 32;
+            // A sanity bound (the game's archives have far fewer entries).
             constexpr uint32_t kMaxEntries = 1u << 16;
 
             std::error_code ec;
@@ -119,10 +121,12 @@ namespace dao::ui
             {
                 const std::span<const uint8_t> entry(entries->data() + i * kEntrySize, kEntrySize);
                 const auto* entryName = reinterpret_cast<const char*>(entry.data());
-                const std::string_view entryView(entryName, strnlen(entryName, 32));
-                if (!std::ranges::equal(entryView, name, [](char a, char b) { return tolower(a) == tolower(b); }))
+                const std::string_view entryView(entryName, strnlen(entryName, kNameSize));
+                if (!std::ranges::equal(entryView, name,
+                        [](char a, char b) { return tolower(uint8_t(a)) == tolower(uint8_t(b)); }))
                     continue;
-                const uint32_t offset = Read32(entry, 32), packed = Read32(entry, 36), size = Read32(entry, 40);
+                const uint32_t offset = Read32(entry, kNameSize), packed = Read32(entry, kNameSize + 4),
+                               size = Read32(entry, kNameSize + 8);
                 if (packed > kMaxMovieSize || size > kMaxMovieSize || uint64_t(offset) + packed > fileSize)
                     return std::nullopt;
                 auto data = ReadFile(path, offset, packed);
@@ -190,13 +194,12 @@ namespace dao::ui
         // uncompressed.
         std::optional<std::vector<uint8_t>> PatchOptionsMovie(std::span<const uint8_t> file, std::string& error)
         {
+            // "GFX" (uncompressed) or "CFX" (zlib after the 8-byte header).
             if (file.size() < 8 || file[1] != 'F' || file[2] != 'X' || (file[0] != 'C' && file[0] != 'G'))
             {
                 error = "not a Scaleform movie";
                 return std::nullopt;
             }
-            // The header's length is no more than a hint: the game's compressed movies
-            // unpack to a few KB more (tags included).
             const uint32_t size = Read32(file, 4);
             std::vector<uint8_t> unpacked;
             std::span<const uint8_t> movie = file;
@@ -275,7 +278,10 @@ namespace dao::ui
         const auto movie = ReadOptionsMovie(source);
         if (!movie)
         {
-            LOGW("Options menu: can't read {} ({}); no Graphics tab", kMovieName, source.empty() ? "not found" : source);
+            if (source.empty())
+                LOGW("Options menu: {} not found; no Graphics tab", kMovieName);
+            else
+                LOGW("Options menu: can't read {} from {}; no Graphics tab", kMovieName, source);
             return false;
         }
         std::string error;
@@ -287,8 +293,7 @@ namespace dao::ui
         }
 
         // Rewritten only when it changes (a new game version, mod or script).
-        const fs::path root = kernel::VfsUserRoot() / "generated";
-        const fs::path path = root / "packages" / "core" / "override" / kMovieName;
+        const fs::path path = kernel::VfsUserRoot() / "generated" / "packages" / "core" / "override" / kMovieName;
         std::error_code ec;
         const uint64_t existingSize = fs::file_size(path, ec);
         const auto existing = !ec && existingSize == patched->size() ? ReadFile(path, 0, uint32_t(existingSize))
@@ -296,7 +301,8 @@ namespace dao::ui
         if (!existing || *existing != *patched)
         {
             fs::create_directories(path.parent_path(), ec);
-            const fs::path temp = path.string() + ".tmp";
+            fs::path temp = path;
+            temp += L".tmp";
             {
                 std::ofstream file(temp, std::ios::binary | std::ios::trunc);
                 file.write(reinterpret_cast<const char*>(patched->data()), std::streamsize(patched->size()));
@@ -312,7 +318,7 @@ namespace dao::ui
                 return false;
             }
         }
-        kernel::VfsAddTopOverlay("\\Device\\Cdrom0", root);
+        kernel::VfsAddFile(kOverridePath, path);
         LOGI("Options menu: Graphics tab added ({} from {})", kMovieName, source);
         return true;
     }

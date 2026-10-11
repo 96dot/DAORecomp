@@ -20,3 +20,5 @@ jobs:
         run: python3 install.py --prepare-only --accept-msvc-license
       - name: Include case
         run: python3 scripts/check_include_case.py
+      - name: Graphics tab script compiled
+        run: python3 scripts/as2c.py DAORecomp/ui/graphics_tab.as DAORecomp/ui/graphics_tab_as.h kGraphicsTabScript --check

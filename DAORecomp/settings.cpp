@@ -76,7 +76,25 @@ namespace dao
         }
     }
 
+    void ClampSettings(Settings& s)
+    {
+        s.resolutionScale = std::clamp(s.resolutionScale, 1, kMaxResolutionScale);
+        s.sharpness = std::clamp(s.sharpness, 0.0f, 2.0f);
+        s.temporalSharpness = std::clamp(s.temporalSharpness, 0.0f, 1.0f);
+        if (std::ranges::find(kAnisotropicLevels, s.anisotropicFiltering) == std::end(kAnisotropicLevels))
+            s.anisotropicFiltering = 0;
+        s.hdrPaperWhite = std::clamp(s.hdrPaperWhite, kHdrMinNits, kHdrMaxPaperWhite);
+        s.hdrPeak = std::clamp(s.hdrPeak, s.hdrPaperWhite, kHdrMaxPeak);
+        s.windowWidth = std::max(320, s.windowWidth);
+        s.windowHeight = std::max(180, s.windowHeight);
+    }
+
     Settings ReadSettings(const std::filesystem::path& userRoot)
+    {
+        return TryReadSettings(userRoot).value_or(Settings{});
+    }
+
+    std::optional<Settings> TryReadSettings(const std::filesystem::path& userRoot)
     {
         Settings s;
         const auto path = userRoot / "config.toml";
@@ -91,13 +109,13 @@ namespace dao
         catch (const toml::parse_error& error)
         {
             LOGE("config.toml: {} (line {}); using defaults", error.description(), error.source().begin.line);
-            return s;
+            return std::nullopt;
         }
 
         s.showLauncher = table["launcher"]["show"].value_or(s.showLauncher);
 
         const auto video = table["video"];
-        s.resolutionScale = std::clamp(video["resolution_scale"].value_or(s.resolutionScale), 1, 7);
+        s.resolutionScale = video["resolution_scale"].value_or(s.resolutionScale);
         const std::string upscaler = video["upscaler"].value_or(std::string("fsr"));
         s.upscaler = upscaler == "bilinear" ? Upscaler::Bilinear : upscaler == "cas" ? Upscaler::Cas : Upscaler::Fsr;
         s.sharpness = video["sharpness"].value_or(s.sharpness);
@@ -106,20 +124,18 @@ namespace dao
             : temporal == "fsr4"               ? TemporalUpscaler::Fsr4
             : temporal == "fsr3"               ? TemporalUpscaler::Fsr3
                                                : TemporalUpscaler::Auto;
-        s.temporalSharpness = std::clamp(video["temporal_sharpness"].value_or(s.temporalSharpness), 0.0f, 1.0f);
+        s.temporalSharpness = video["temporal_sharpness"].value_or(s.temporalSharpness);
         s.vsync = video["vsync"].value_or(s.vsync);
         s.unlockFrameRate = video["unlock_frame_rate"].value_or(s.unlockFrameRate);
         s.fullscreen = video["fullscreen"].value_or(s.fullscreen);
         s.anisotropicFiltering = video["anisotropic_filtering"].value_or(s.anisotropicFiltering);
-        if (std::ranges::find(kAnisotropicLevels, s.anisotropicFiltering) == std::end(kAnisotropicLevels))
-            s.anisotropicFiltering = 0;
         s.shadows = video["shadows"].value_or(s.shadows);
         s.postProcessing = video["post_processing"].value_or(s.postProcessing);
         s.hdr = video["hdr"].value_or(s.hdr);
-        s.hdrPaperWhite = std::clamp(video["hdr_paper_white"].value_or(s.hdrPaperWhite), 80.0f, 1000.0f);
-        s.hdrPeak = std::clamp(video["hdr_peak"].value_or(s.hdrPeak), s.hdrPaperWhite, 10000.0f);
-        s.windowWidth = std::max(320, video["window_width"].value_or(s.windowWidth));
-        s.windowHeight = std::max(180, video["window_height"].value_or(s.windowHeight));
+        s.hdrPaperWhite = video["hdr_paper_white"].value_or(s.hdrPaperWhite);
+        s.hdrPeak = video["hdr_peak"].value_or(s.hdrPeak);
+        s.windowWidth = video["window_width"].value_or(s.windowWidth);
+        s.windowHeight = video["window_height"].value_or(s.windowHeight);
 
         if (const auto* patches = table["patches"].as_table())
         {
@@ -143,6 +159,7 @@ namespace dao
                     s.mods.push_back(std::move(state));
             }
         }
+        ClampSettings(s);
         return s;
     }
 
@@ -231,7 +248,7 @@ window_height = {}
 
         // DAO_RES_SCALE overrides the file (handy for testing).
         if (const char* env = getenv("DAO_RES_SCALE"))
-            s.resolutionScale = std::clamp(atoi(env), 1, 7);
+            s.resolutionScale = std::clamp(atoi(env), 1, kMaxResolutionScale);
         if (const char* env = getenv("DAO_HDR"))
             s.hdr = atoi(env) != 0;
         if (const char* env = getenv("DAO_UNLOCK_FPS"))

@@ -11,6 +11,11 @@ namespace dao::kernel
         fs::path root;
         bool readOnly;
         std::vector<fs::path> overlays; // highest priority first
+        // Files the runtime generates, above the overlays, and their folders (listed
+        // with the others' and there even if the disc has none): lowercase relative
+        // path -> host path.
+        std::unordered_map<std::string, fs::path> files;
+        std::unordered_map<std::string, fs::path> folders;
     };
 
     static std::mutex s_vfsMutex;
@@ -118,22 +123,6 @@ namespace dao::kernel
         LOGW("VFS: no device {} for overlays", devicePath);
     }
 
-    void VfsAddTopOverlay(const std::string& devicePath, const fs::path& overlay)
-    {
-        std::lock_guard lock(s_vfsMutex);
-        const std::string key = Lower(Normalize(devicePath));
-        for (Device& device : s_devices)
-        {
-            if (device.path == key)
-            {
-                LOGI("VFS: {} top overlay {}", devicePath, overlay.string());
-                device.overlays.insert(device.overlays.begin(), overlay);
-                return;
-            }
-        }
-        LOGW("VFS: no device {} for overlays", devicePath);
-    }
-
     // The device a guest path lives on and the path relative to the device root.
     // Caller holds s_vfsMutex.
     static std::optional<std::pair<const Device*, std::string>> Locate(std::string_view guestPath)
@@ -187,6 +176,28 @@ namespace dao::kernel
         return std::nullopt;
     }
 
+    void VfsAddFile(std::string_view guestPath, const fs::path& hostPath)
+    {
+        std::lock_guard lock(s_vfsMutex);
+        const auto located = Locate(guestPath);
+        if (!located || located->second.empty())
+        {
+            LOGW("VFS: no device for {}", guestPath);
+            return;
+        }
+        LOGI("VFS: {} -> {}", guestPath, hostPath.string());
+        Device& device = const_cast<Device&>(*located->first);
+        std::string rest = Lower(located->second);
+        device.files[rest] = hostPath;
+        fs::path folder = hostPath.parent_path();
+        for (size_t slash = rest.rfind('\\'); slash != std::string::npos; slash = rest.rfind('\\'))
+        {
+            rest.resize(slash);
+            device.folders.emplace(rest, folder);
+            folder = folder.parent_path();
+        }
+    }
+
     static fs::path Join(const fs::path& root, const std::string& rest)
     {
         fs::path host = root;
@@ -202,17 +213,30 @@ namespace dao::kernel
         if (!located)
             return std::nullopt;
         const auto& [device, rest] = *located;
+        const fs::path* folder = nullptr;
+        if (!device->files.empty())
+        {
+            const std::string lower = Lower(rest);
+            if (const auto it = device->files.find(lower); it != device->files.end())
+                return it->second;
+            if (const auto it = device->folders.find(lower); it != device->folders.end())
+                folder = &it->second;
+        }
+        std::error_code ec;
         if (!rest.empty())
         {
             for (const auto& overlay : device->overlays)
             {
                 fs::path candidate = Join(overlay, rest);
-                std::error_code ec;
                 if (fs::exists(candidate, ec))
                     return candidate;
             }
         }
-        return Join(device->root, rest);
+        fs::path host = Join(device->root, rest);
+        // A generated file's folder the disc and the mods don't have.
+        if (folder && !fs::exists(host, ec))
+            return *folder;
+        return host;
     }
 
     std::vector<fs::path> VfsResolveAll(std::string_view guestPath)
@@ -223,6 +247,11 @@ namespace dao::kernel
         if (!located)
             return out;
         const auto& [device, rest] = *located;
+        if (!device->folders.empty())
+        {
+            if (const auto it = device->folders.find(Lower(rest)); it != device->folders.end())
+                out.push_back(it->second);
+        }
         for (const auto& overlay : device->overlays)
         {
             fs::path candidate = Join(overlay, rest);
@@ -247,6 +276,11 @@ namespace dao::kernel
             for (const auto& overlay : device.overlays)
             {
                 if (host.starts_with(Lower(overlay.lexically_normal().string())))
+                    return true;
+            }
+            for (const auto& [rest, file] : device.files)
+            {
+                if (host == Lower(file.lexically_normal().string()))
                     return true;
             }
         }

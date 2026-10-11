@@ -62,7 +62,19 @@ namespace dao
         std::vector<ModState> mods;
     };
 
-    // Reads config.toml as written (no environment overrides, no side effects).
+    // The limits ClampSettings keeps.
+    constexpr int kMaxResolutionScale = 7;
+    constexpr float kHdrMinNits = 80.0f;
+    constexpr float kHdrMaxPaperWhite = 1000.0f;
+    constexpr float kHdrMaxPeak = 10000.0f;
+
+    // Brings every value within its limits (the HDR peak at least the paper white).
+    void ClampSettings(Settings& settings);
+
+    // Reads config.toml as written (no environment overrides, no side effects):
+    // defaults if it's missing, nothing if it can't be parsed.
+    std::optional<Settings> TryReadSettings(const std::filesystem::path& userRoot);
+    // TryReadSettings, with defaults if the file can't be parsed.
     Settings ReadSettings(const std::filesystem::path& userRoot);
     // Rewrites config.toml from the settings, keeping the [xenia] section as it is.
     void SaveSettings(const std::filesystem::path& userRoot, const Settings& settings);

@@ -76,7 +76,7 @@ Everything is pinned to exact versions and checked (`installer/deps.py`):
   are asked to accept. No Visual Studio installation is needed.
 
 The install folder gets the game files (`game/`), the program, `userdata/` (settings,
-saves, logs, and the shader cache) and `mods/`.
+saves, logs, the shader cache, and the Options menu it generates) and `mods/`.
 
 ## Playing
 
@@ -92,9 +92,9 @@ saves, logs, and the shader cache) and `mods/`.
   FSR 4 needs AMD's Windows driver and is unlikely to work under Proton; choose FSR 3.1
   in the launcher.
 
-Most graphics settings can also be changed in the game: *Options → Graphics*. Those
-marked as needing a restart take effect the next time the game starts; the others
-apply at once. Turning off dynamic shadows and post-processing there (or in the
+Most graphics settings can also be changed in the game: *Options → Graphics*. Most
+apply at once; when you leave the menu, the game lists the ones that take effect
+the next time it starts. Turning off dynamic shadows and post-processing there (or in the
 launcher) makes the game faster on low-power devices such as the Steam Deck.
 
 Shaders are compiled the first time something is drawn, and that draw is skipped
@@ -118,8 +118,9 @@ start, so this happens once per place.
 - The in-game Graphics tab is ActionScript 2 (`DAORecomp/ui/graphics_tab.as`), which
   `scripts/as2c.py` compiles to `DAORecomp/ui/graphics_tab_as.h`; run
   `python scripts/as2c.py DAORecomp/ui/graphics_tab.as DAORecomp/ui/graphics_tab_as.h kGraphicsTabScript`
-  after changing it. At start the runtime adds the script to the player's own
-  `optionsmenu.gfx` and serves the result from `userdata/generated/`.
+  after changing it (with `--check` at the end it only checks the header, as CI does).
+  At start the runtime adds the script to the player's own `optionsmenu.gfx` and
+  serves the result from `userdata/generated/`.
 - `scripts/check_include_case.py` finds `#include`s whose case differs from the file on
   disk, which only breaks builds on Linux.
 - Diagnostics, set as environment variables (results in `userdata/xenia.log`):

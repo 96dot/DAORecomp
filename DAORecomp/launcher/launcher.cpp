@@ -406,7 +406,7 @@ namespace dao::launcher
             ImGui::Checkbox("Post-processing effects", &s.postProcessing);
             HelpText("Turning these off makes the game faster on low-power devices such as the Steam Deck.");
             ImGui::Spacing();
-            HelpText("You can also change these in the game, under Options > Graphics.");
+            HelpText("Most of these settings can also be changed in the game, under Options > Graphics.");
             ImGui::PopItemWidth();
         }
 
@@ -442,7 +442,7 @@ namespace dao::launcher
             Section("HDR (experimental)");
             ImGui::Checkbox("HDR output", &s.hdr);
             ImGui::BeginDisabled(!s.hdr);
-            ImGui::SliderFloat("Paper white", &s.hdrPaperWhite, 80.0f, 400.0f, "%.0f nits");
+            ImGui::SliderFloat("Paper white", &s.hdrPaperWhite, kHdrMinNits, 400.0f, "%.0f nits");
             ImGui::SliderFloat("Peak brightness", &s.hdrPeak, s.hdrPaperWhite, 4000.0f, "%.0f nits");
             ImGui::EndDisabled();
             ImGui::PopItemWidth();

@@ -1,6 +1,8 @@
 // The host side of the Options menu's Graphics tab (graphics_tab.as): the settings
 // it shows, read and changed through the engine's Flash callbacks, applied at once
 // where they can be, and saved to config.toml when the menu commits its options.
+// Leaving the menu without committing keeps the live changes for this session; a
+// later commit saves them.
 #include "stdafx.h"
 #include "ui/graphics_menu.h"
 #include "gpu/video.h"
@@ -77,18 +79,38 @@ namespace dao::ui
         constexpr double kSliderSteps = 10.0;
 
         // The engine's switches for the PC version's EnableShadows and
-        // EnableFrameBufferEffects options (applied by its options code at 82274168).
-        constexpr uint32_t kRenderFlags = 0x83211E54;
-        constexpr uint32_t kRenderFlagShadows = 2;
-        constexpr uint32_t kFrameBufferEffects = 0x83211E0B; // byte
+        // EnableFrameBufferEffects options, which its options code (82274168) sets
+        // from those options: the shadows bit of the big-endian render flags word at
+        // 83211E54 (in its last byte) and a byte.
+        constexpr uint32_t kRenderFlagsLowByte = 0x83211E57;
+        constexpr uint8_t kRenderFlagShadows = 2;
+        constexpr uint32_t kFrameBufferEffects = 0x83211E0B;
+        // The options object (a pointer) and its two options (bytes).
+        constexpr uint32_t kOptions = 0x83211BB8;
+        constexpr uint32_t kOptionEnableShadows = 0x510;
+        constexpr uint32_t kOptionEnableFrameBufferEffects = 0x520;
 
         // GFx value types (the Flash callbacks' arguments and results).
         constexpr uint32_t kGfxNull = 1;
         constexpr uint32_t kGfxNumber = 3;
         constexpr uint32_t kGfxString = 4;
 
+        // The settings, set by InitializeGraphicsMenu and the menu.
         std::atomic<bool> s_shadows{ true };
         std::atomic<bool> s_postProcessing{ true };
+
+        // The longest guest string read, and how many unexpected ones are logged
+        // (any movie, a mod's too, can send them).
+        constexpr size_t kMaxGuestString = 256;
+        constexpr int kMaxWarnings = 16;
+        std::atomic<int> s_warnings;
+
+        template <typename... Args>
+        void Warn(fmt::format_string<Args...> format, Args&&... args)
+        {
+            if (s_warnings.fetch_add(1, std::memory_order_relaxed) < kMaxWarnings)
+                LOGW("Graphics menu: {}", fmt::format(format, std::forward<Args>(args)...));
+        }
 
         // The menu's view of the settings, and the keys it changed since the last save.
         std::mutex s_menuMutex;
@@ -150,21 +172,21 @@ namespace dao::ui
             return 0.0;
         }
 
-        // Sets a value from the script, within the limits ReadSettings keeps.
+        // Sets a value from the script, within the limits ClampSettings keeps.
         void SetValue(Settings& s, Key key, double value)
         {
             const int whole = int(std::lround(std::clamp(value, -1e6, 1e6)));
             switch (key)
             {
             case Key::Fullscreen: s.fullscreen = whole != 0; break;
-            case Key::ResolutionScale: s.resolutionScale = std::clamp(whole, 1, 7); break;
+            case Key::ResolutionScale: s.resolutionScale = whole; break;
             case Key::UnlockFrameRate: s.unlockFrameRate = whole != 0; break;
             case Key::VSync: s.vsync = whole != 0; break;
             case Key::TemporalUpscaler:
                 s.temporalUpscaler = TemporalUpscaler(std::clamp(whole, 0, int(TemporalUpscaler::Fsr3)));
                 break;
             case Key::TemporalSharpness:
-                s.temporalSharpness = float(std::clamp(value, 0.0, kSliderSteps) / kSliderSteps);
+                s.temporalSharpness = float(value / kSliderSteps);
                 break;
             case Key::Upscaler:
             {
@@ -175,17 +197,24 @@ namespace dao::ui
                 break;
             }
             case Key::Sharpness: SetSharpnessSteps(s, value); break;
-            case Key::AnisotropicFiltering:
-                if (std::ranges::find(kAnisotropicLevels, whole) != std::end(kAnisotropicLevels))
-                    s.anisotropicFiltering = whole;
-                break;
+            case Key::AnisotropicFiltering: s.anisotropicFiltering = whole; break;
             case Key::Shadows: s.shadows = whole != 0; break;
             case Key::PostProcessing: s.postProcessing = whole != 0; break;
             case Key::Hdr: s.hdr = whole != 0; break;
-            case Key::HdrPaperWhite: s.hdrPaperWhite = float(std::clamp(value, 80.0, 1000.0)); break;
-            case Key::HdrPeak: s.hdrPeak = float(std::clamp(value, 80.0, 10000.0)); break;
+            case Key::HdrPaperWhite: s.hdrPaperWhite = float(value); break;
+            case Key::HdrPeak: s.hdrPeak = float(value); break;
             case Key::Count: break;
             }
+            ClampSettings(s);
+        }
+
+        // Whether the fields behind a key are equal (the upscaler and its sharpness
+        // go together).
+        bool SameKey(const Settings& a, const Settings& b, Key key)
+        {
+            if (key == Key::Upscaler || key == Key::Sharpness)
+                return a.upscaler == b.upscaler && a.sharpness == b.sharpness;
+            return Value(a, key) == Value(b, key);
         }
 
         // Copies the fields behind a key (the upscaler and its sharpness go together).
@@ -257,9 +286,18 @@ namespace dao::ui
         {
             std::lock_guard lock(s_menuMutex);
             Settings& s = Menu();
-            const Settings before = s;
+            const double before = Value(s, key);
+            const Upscaler upscalerBefore = s.upscaler;
+            const float sharpnessBefore = s.sharpness;
+            const float peakBefore = s.hdrPeak;
             SetValue(s, key, value);
-            if (Value(s, key) == Value(before, key) && s.sharpness == before.sharpness)
+            // The peak stays at least the paper white.
+            if (key != Key::HdrPeak && s.hdrPeak != peakBefore)
+            {
+                s_dirty.set(size_t(Key::HdrPeak));
+                ApplyLive(s, Key::HdrPeak);
+            }
+            if (Value(s, key) == before && s.upscaler == upscalerBefore && s.sharpness == sharpnessBefore)
                 return;
             s_dirty.set(size_t(key));
             ApplyLive(s, key);
@@ -275,8 +313,7 @@ namespace dao::ui
             {
                 // The display mode is the player's setup more than a setting.
                 const Key key = Key(i);
-                if (key == Key::Fullscreen ||
-                    (Value(s, key) == Value(defaults, key) && s.sharpness == defaults.sharpness))
+                if (key == Key::Fullscreen || SameKey(s, defaults, key))
                     continue;
                 CopyKey(s, defaults, key);
                 s_dirty.set(i);
@@ -286,20 +323,27 @@ namespace dao::ui
         }
 
         // Saves the changed settings over what config.toml holds now (keeping the
-        // rest of the file, and not saving environment overrides of this run).
+        // rest of the file, and not saving environment overrides of this run). A file
+        // that can't be parsed is left for the player to fix.
         void SaveMenuSettings()
         {
             std::lock_guard lock(s_menuMutex);
             if (s_dirty.none())
                 return;
             const auto& root = kernel::VfsUserRoot();
-            Settings file = ReadSettings(root);
+            std::optional<Settings> file = TryReadSettings(root);
+            if (!file)
+            {
+                LOGE("Graphics menu: config.toml can't be read; settings not saved");
+                return;
+            }
+            const Settings& menu = Menu();
             for (size_t i = 0; i < size_t(Key::Count); ++i)
             {
                 if (s_dirty.test(i))
-                    CopyKey(file, *s_menu, Key(i));
+                    CopyKey(*file, menu, Key(i));
             }
-            SaveSettings(root, file);
+            SaveSettings(root, *file);
             s_dirty.reset();
             LOGI("Graphics menu: settings saved");
         }
@@ -315,7 +359,7 @@ namespace dao::ui
             constexpr std::string_view kSet = "Set ";
             if (!message.starts_with(kSet))
             {
-                LOGW("Graphics menu: unknown message '{}'", message);
+                Warn("unknown message '{}'", message);
                 return;
             }
             message.remove_prefix(kSet.size());
@@ -323,7 +367,7 @@ namespace dao::ui
             const auto key = FindKey(message.substr(0, space));
             if (!key || space == std::string_view::npos)
             {
-                LOGW("Graphics menu: bad message 'Set {}'", message);
+                Warn("bad message 'Set {}'", message);
                 return;
             }
             const std::string text(message.substr(space + 1));
@@ -331,19 +375,20 @@ namespace dao::ui
             const double value = strtod(text.c_str(), &end);
             if (end == text.c_str() || !std::isfinite(value))
             {
-                LOGW("Graphics menu: bad value 'Set {}'", message);
+                Warn("bad value 'Set {}'", message);
                 return;
             }
             SetMenuValue(*key, value);
         }
 
-        // A NUL-terminated guest string the engine passed (at most 256 characters).
+        // A NUL-terminated guest string the engine passed (at most kMaxGuestString
+        // characters).
         std::string_view GuestString(uint8_t* base, uint32_t address)
         {
             if (!address)
                 return {};
             const char* text = reinterpret_cast<const char*>(base + address);
-            return std::string_view(text, strnlen(text, 256));
+            return std::string_view(text, strnlen(text, kMaxGuestString));
         }
 
         // Returns a value to the Flash call being handled, as the engine's own
@@ -351,7 +396,9 @@ namespace dao::ui
         // handler), its vtable+0xA0 given the value, then released.
         void ReturnValue(PPCContext& ctx, uint8_t* base, uint32_t handler, uint32_t type, double number)
         {
-            // Scratch below the stack pointer, the callees' frames below that.
+            // A 0x80-byte frame below the stack pointer (the callees' frames below
+            // it): the back chain at +0, the movie slot at +0x50, the GFx value
+            // (type, 0, the double) at +0x60.
             const uint32_t stack = ctx.r1.u32;
             const uint32_t frame = (stack - 0x80) & ~0xFu;
             const uint32_t slot = frame + 0x50;
@@ -389,44 +436,50 @@ namespace dao::ui
 
     void ApplyEngineGraphicsOptions(uint8_t* base)
     {
-        // What the engine had when a switch was forced off, restored when it's back
-        // on (render thread only).
-        static std::optional<uint32_t> s_savedShadows;
-        static std::optional<uint8_t> s_savedEffects;
+        // Whether a switch is forced off (render thread only).
+        static bool s_shadowsForced = false;
+        static bool s_effectsForced = false;
 
-        const uint32_t flags = PPC_LOAD_U32(kRenderFlags);
-        if (!s_shadows.load(std::memory_order_relaxed))
+        const bool shadows = s_shadows.load(std::memory_order_relaxed);
+        const bool effects = s_postProcessing.load(std::memory_order_relaxed);
+        if (shadows && effects && !s_shadowsForced && !s_effectsForced)
+            return;
+
+        // Switched back on: the engine's own option, as its options code applies it.
+        const uint32_t options = PPC_LOAD_U32(kOptions);
+        auto option = [&](uint32_t offset) { return !options || PPC_LOAD_U8(options + offset) != 0; };
+
+        // The flags' other bits are the engine's, changed as it renders: only this
+        // one changes, atomically.
+        std::atomic_ref<uint8_t> flags(base[kRenderFlagsLowByte]);
+        if (!shadows)
         {
-            if (!s_savedShadows)
-            {
-                s_savedShadows = flags & kRenderFlagShadows;
+            if (flags.load(std::memory_order_relaxed) & kRenderFlagShadows)
+                flags.fetch_and(uint8_t(~kRenderFlagShadows));
+            if (!s_shadowsForced)
                 LOGI("Engine graphics: dynamic shadows off");
-            }
-            if (flags & kRenderFlagShadows)
-                PPC_STORE_U32(kRenderFlags, flags & ~kRenderFlagShadows);
+            s_shadowsForced = true;
         }
-        else if (s_savedShadows)
+        else if (s_shadowsForced)
         {
-            PPC_STORE_U32(kRenderFlags, flags | *s_savedShadows);
-            s_savedShadows.reset();
+            if (option(kOptionEnableShadows))
+                flags.fetch_or(kRenderFlagShadows);
+            s_shadowsForced = false;
             LOGI("Engine graphics: dynamic shadows on");
         }
 
-        const uint8_t effects = base[kFrameBufferEffects];
-        if (!s_postProcessing.load(std::memory_order_relaxed))
+        if (!effects)
         {
-            if (!s_savedEffects)
-            {
-                s_savedEffects = effects;
+            if (PPC_LOAD_U8(kFrameBufferEffects))
+                PPC_STORE_U8(kFrameBufferEffects, 0);
+            if (!s_effectsForced)
                 LOGI("Engine graphics: post-processing off");
-            }
-            if (effects)
-                base[kFrameBufferEffects] = 0;
+            s_effectsForced = true;
         }
-        else if (s_savedEffects)
+        else if (s_effectsForced)
         {
-            base[kFrameBufferEffects] = *s_savedEffects;
-            s_savedEffects.reset();
+            PPC_STORE_U8(kFrameBufferEffects, uint8_t(option(kOptionEnableFrameBufferEffects)));
+            s_effectsForced = false;
             LOGI("Engine graphics: post-processing on");
         }
     }
@@ -462,7 +515,7 @@ PPC_FUNC(sub_825B5410)
         {
             const auto number = MenuNumber(name.substr(kPrefix.size()));
             if (!number)
-                LOGW("Graphics menu: unknown value '{}'", name);
+                Warn("unknown value '{}'", name);
             ReturnValue(ctx, base, ctx.r3.u32, number ? kGfxNumber : kGfxNull, number.value_or(0.0));
             return;
         }
