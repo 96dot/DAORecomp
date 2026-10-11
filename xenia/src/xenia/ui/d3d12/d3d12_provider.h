@@ -50,6 +50,10 @@ class D3D12Provider : public GraphicsProvider {
     return graphics_analysis_;
   }
   ID3D12Device* GetDevice() const { return device_; }
+  // DAO: logs why the device was removed, with the device removed extended
+  // data (the GPU operations in flight and the faulting address) when
+  // DAO_DRED=1 enabled collecting it.
+  void LogDeviceRemoved() const;
   ID3D12CommandQueue* GetDirectQueue() const { return direct_queue_; }
 
   uint32_t GetDescriptorSize(D3D12_DESCRIPTOR_HEAP_TYPE type) const {

@@ -62,7 +62,8 @@ class GpuTiming {
         slot_ * kMaxDraws + stats_draws_);
   }
   void EndDrawStatistics(D3D12CommandProcessor& cp, std::string kind = {},
-                         std::string shaders = {}, uint32_t indices = 0) {
+                         std::string shaders = {}, uint32_t indices = 0,
+                         uint32_t vertex_range = 0) {
     if (!stats_heap_ || stats_draws_ >= kMaxDraws) {
       return;
     }
@@ -78,6 +79,8 @@ class GpuTiming {
     slot.stats_shaders[stats_draws_] = std::move(shaders);
     slot.stats_indices.resize(stats_draws_ + 1);
     slot.stats_indices[stats_draws_] = indices;
+    slot.stats_ranges.resize(stats_draws_ + 1);
+    slot.stats_ranges[stats_draws_] = vertex_range;
     ++stats_draws_;
   }
 
@@ -166,16 +169,17 @@ class GpuTiming {
     uint32_t stats_draws = 0;
     std::vector<uint32_t> stats_marks;
     std::vector<std::string> stats_kinds, stats_shaders;
-    std::vector<uint32_t> stats_indices;
+    std::vector<uint32_t> stats_indices, stats_ranges;
   };
   struct TagStats {
-    double draws = 0, indices = 0, ia = 0, vs = 0, prim = 0, ps = 0;
+    double draws = 0, indices = 0, range = 0, ia = 0, vs = 0, prim = 0, ps = 0;
   };
   std::unordered_map<std::string, TagStats> kind_stats_, shader_stats_;
   static void AddTag(TagStats& t, const D3D12_QUERY_DATA_PIPELINE_STATISTICS& s,
-                     uint32_t indices) {
+                     uint32_t indices, uint32_t range) {
     t.draws += 1;
     t.indices += indices;
+    t.range += range;
     t.ia += double(s.IAVertices);
     t.vs += double(s.VSInvocations);
     t.prim += double(s.CPrimitives);
@@ -190,9 +194,10 @@ class GpuTiming {
     for (size_t i = 0; i < v.size() && i < 14; ++i) {
       const TagStats& t = v[i].second;
       XELOGI(
-          "GT {}: {:6.1f} draws {:7.0f}k idx {:7.0f}k ia {:7.0f}k vs {:7.0f}k "
+          "GT {}: {:6.1f} draws {:7.0f}k idx {:7.0f}k range {:7.0f}k ia {:7.0f}k vs {:7.0f}k "
           "prim {:7.0f}k ps  {}",
           name, t.draws / frames_, t.indices / frames_ / 1000.0,
+          t.range / frames_ / 1000.0,
           t.ia / frames_ / 1000.0, t.vs / frames_ / 1000.0,
           t.prim / frames_ / 1000.0, t.ps / frames_ / 1000.0, v[i].first);
     }
@@ -292,9 +297,10 @@ class GpuTiming {
     std::vector<D3D12_QUERY_DATA_PIPELINE_STATISTICS> mark_stats(slot.marks);
     for (uint32_t i = 0; i < slot.stats_draws; ++i) {
       const uint32_t mark = slot.stats_marks[i];
-      AddTag(kind_stats_[slot.stats_kinds[i]], stats[i], slot.stats_indices[i]);
+      AddTag(kind_stats_[slot.stats_kinds[i]], stats[i], slot.stats_indices[i],
+             slot.stats_ranges[i]);
       AddTag(shader_stats_[slot.stats_shaders[i]], stats[i],
-             slot.stats_indices[i]);
+             slot.stats_indices[i], slot.stats_ranges[i]);
       if (mark < slot.marks) {
         mark_stats[mark].IAVertices += stats[i].IAVertices;
         mark_stats[mark].VSInvocations += stats[i].VSInvocations;

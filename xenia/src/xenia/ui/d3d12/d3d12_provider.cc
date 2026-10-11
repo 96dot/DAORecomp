@@ -136,6 +136,61 @@ bool D3D12Provider::EnableIncreaseBasePriorityPrivilege() {
   return enabled;
 }
 
+void D3D12Provider::LogDeviceRemoved() const {
+  if (!device_) {
+    return;
+  }
+  XELOGE("D3D12: device removed, reason {:08X}",
+         uint32_t(device_->GetDeviceRemovedReason()));
+  ID3D12DeviceRemovedExtendedData* dred;
+  if (FAILED(device_->QueryInterface(IID_PPV_ARGS(&dred)))) {
+    return;
+  }
+  D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT breadcrumbs = {};
+  if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput(&breadcrumbs))) {
+    for (const D3D12_AUTO_BREADCRUMB_NODE* node = breadcrumbs.pHeadAutoBreadcrumbNode;
+         node; node = node->pNext) {
+      const uint32_t last = node->pLastBreadcrumbValue
+                                ? *node->pLastBreadcrumbValue
+                                : 0;
+      // Only the command lists the GPU had started but not finished.
+      if (last >= node->BreadcrumbCount) {
+        continue;
+      }
+      std::string ops;
+      const uint32_t first = last > 24 ? last - 24 : 0;
+      const uint32_t end = std::min(node->BreadcrumbCount, last + 8);
+      for (uint32_t i = first; i < end; ++i) {
+        ops += fmt::format("{}{}{} ", i == last ? "[" : "",
+                           uint32_t(node->pCommandHistory[i]),
+                           i == last ? "]" : "");
+      }
+      XELOGE("D3D12: command list {} of {} operations completed: {}", last,
+             node->BreadcrumbCount, ops);
+    }
+  }
+  D3D12_DRED_PAGE_FAULT_OUTPUT page_fault = {};
+  if (SUCCEEDED(dred->GetPageFaultAllocationOutput(&page_fault)) &&
+      page_fault.PageFaultVA) {
+    XELOGE("D3D12: page fault at GPU address {:016X}", page_fault.PageFaultVA);
+    for (const D3D12_DRED_ALLOCATION_NODE* node =
+             page_fault.pHeadExistingAllocationNode;
+         node; node = node->pNext) {
+      XELOGE("D3D12: existing allocation at the address: type {} {}",
+             uint32_t(node->AllocationType),
+             node->ObjectNameA ? node->ObjectNameA : "");
+    }
+    for (const D3D12_DRED_ALLOCATION_NODE* node =
+             page_fault.pHeadRecentFreedAllocationNode;
+         node; node = node->pNext) {
+      XELOGE("D3D12: recently freed allocation at the address: type {} {}",
+             uint32_t(node->AllocationType),
+             node->ObjectNameA ? node->ObjectNameA : "");
+    }
+  }
+  dred->Release();
+}
+
 bool D3D12Provider::Initialize() {
   // Load the core libraries.
   library_dxgi_ = LoadLibraryW(L"dxgi.dll");
@@ -251,6 +306,21 @@ bool D3D12Provider::Initialize() {
     } else {
       XELOGW("Failed to enable the Direct3D 12 debug layer");
       debug = false;
+    }
+  }
+
+  // DAO: DAO_DRED=1 collects the device removed extended data (costs a bit of
+  // GPU time), logged by LogDeviceRemoved.
+  if (const char* dred = std::getenv("DAO_DRED"); dred && std::atoi(dred)) {
+    ID3D12DeviceRemovedExtendedDataSettings* dred_settings;
+    if (SUCCEEDED(
+            pfn_d3d12_get_debug_interface_(IID_PPV_ARGS(&dred_settings)))) {
+      dred_settings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+      dred_settings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+      dred_settings->Release();
+      XELOGI("D3D12: device removed extended data enabled");
+    } else {
+      XELOGW("D3D12: failed to enable the device removed extended data");
     }
   }
 

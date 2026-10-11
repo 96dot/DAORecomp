@@ -3225,7 +3225,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
                           : ""),
           fmt::format("vs {:016X} ps {:016X}", vertex_shader->ucode_data_hash(),
                       pixel_shader ? pixel_shader->ucode_data_hash() : 0),
-          primitive_processing_result.host_draw_vertex_count);
+          primitive_processing_result.host_draw_vertex_count,
+          regs.Get<reg::VGT_MAX_VTX_INDX>().max_indx -
+              regs.Get<reg::VGT_MIN_VTX_INDX>().min_indx + 1);
     }
     if (predicate_buffer) {
       deferred_command_list_.D3DSetPredication(nullptr, 0,
@@ -3316,7 +3318,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
                           : ""),
           fmt::format("vs {:016X} ps {:016X}", vertex_shader->ucode_data_hash(),
                       pixel_shader ? pixel_shader->ucode_data_hash() : 0),
-          primitive_processing_result.host_draw_vertex_count);
+          primitive_processing_result.host_draw_vertex_count,
+          regs.Get<reg::VGT_MAX_VTX_INDX>().max_indx -
+              regs.Get<reg::VGT_MIN_VTX_INDX>().min_indx + 1);
     }
     if (predicate_buffer) {
       deferred_command_list_.D3DSetPredication(nullptr, 0,
@@ -3832,6 +3836,7 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
   HRESULT device_removed_reason = device->GetDeviceRemovedReason();
   if (FAILED(device_removed_reason)) {
     device_removed_ = true;
+    GetD3D12Provider().LogDeviceRemoved();
     graphics_system_->OnHostGpuLossFromAnyThread(device_removed_reason !=
                                                  DXGI_ERROR_DEVICE_REMOVED);
     return false;
