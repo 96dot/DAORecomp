@@ -521,7 +521,9 @@ namespace dao::ui
 
             void HandleKeyboard(ImGuiIO& io)
             {
-                if (finished_)
+                // Not on the first frame: the key that opened it (Enter, as Start) may be
+                // in it.
+                if (finished_ || std::exchange(firstFrame_, false))
                     return;
                 for (const ImWchar c : io.InputQueueCharacters)
                 {
@@ -607,6 +609,7 @@ namespace dao::ui
             const size_t max_;
             std::promise<std::optional<std::u16string>> done_;
             bool finished_ = false;
+            bool firstFrame_ = true;
             // The selected key: a row, and a column (in the wide keys' row, which of them).
             int row_ = 1, column_ = 0, remembered_ = 0;
             bool caps_ = false, accents_ = false;
@@ -624,8 +627,12 @@ namespace dao::ui
     std::optional<std::u16string> RunKeyboard(const KeyboardRequest& request)
     {
         const gpu::XeniaWindow host = gpu::GetXeniaWindow();
-        if (!host.window || s_open.exchange(true))
+        // With no window (no rendering), the text offered is taken; with one open
+        // already, this one is cancelled.
+        if (!host.window)
             return request.text;
+        if (s_open.exchange(true))
+            return std::nullopt;
         LOGI("Keyboard: shown for \"{}\" (up to {} characters)", ToUtf8(request.title), request.maxLength);
         input::SetTextEntry(true);
         std::promise<std::optional<std::u16string>> done;

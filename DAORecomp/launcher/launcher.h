@@ -10,8 +10,7 @@ namespace dao::launcher
     // Shift shows it anyway).
     bool ShouldShow(int argc, char** argv, const std::filesystem::path& userRoot);
 
-    // Whether --mods asks for the launcher to open on its Mods page (as the game's
-    // Graphics menu does).
+    // Whether --mods asks for the launcher to open on its Mods page.
     bool ShowsMods(int argc, char** argv);
 
     // Runs the launcher, on the Mods page with `showMods`; false if the player closed

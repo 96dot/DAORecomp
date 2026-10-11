@@ -13,6 +13,10 @@ namespace dao::mods::gff
         constexpr size_t kFieldEntrySize = 12;
         // Mod files are untrusted: references can point anywhere, including back up the tree.
         constexpr int kMaxDepth = 64;
+        // The memory the tree read from a file may take (values cost their size,
+        // strings and byte lists their bytes): as many values as the file has bytes,
+        // so references sharing data can't blow it up, and at most this.
+        constexpr size_t kMaxTreeBytes = size_t(1) << 30;
 
         struct Malformed : std::runtime_error
         {
@@ -24,9 +28,9 @@ namespace dao::mods::gff
         {
             switch (type)
             {
-            case 0: case 1: return 1;
-            case 2: case 3: return 2;
-            case 6: case 7: case 9: return 8;
+            case kU8: case kI8: return 1;
+            case kU16: case kI16: return 2;
+            case kU64: case kI64: case kF64: return 8;
             default: return 4;
             }
         }
@@ -40,9 +44,10 @@ namespace dao::mods::gff
         class Reader
         {
         public:
-            Reader(std::span<const uint8_t> data, bool bigEndian, uint32_t dataOffset, const std::vector<Template>& templates)
+            Reader(std::span<const uint8_t> data, bool bigEndian, uint32_t dataOffset,
+                const std::vector<Template>& templates)
                 : data_(data), bigEndian_(bigEndian), dataOffset_(dataOffset), templates_(templates),
-                  budget_(data.size())
+                  budget_(std::min(data.size(), kMaxTreeBytes / sizeof(Value)) * sizeof(Value))
             {
             }
 
@@ -50,9 +55,7 @@ namespace dao::mods::gff
             {
                 if (depth > kMaxDepth)
                     throw Malformed("nested too deeply");
-                // Every value read costs budget, so references that share data can't blow up the tree.
-                if (budget_-- == 0)
-                    throw Malformed("too many values");
+                Spend(sizeof(Value));
                 if (type == kGeneric && !(flags & kList))
                     flags = 0;   // A generic field is always an inline (typeflags, ref) pair.
 
@@ -69,6 +72,7 @@ namespace dao::mods::gff
                     if (type == kU8 && !sub)
                     {
                         Need(base + 4, count);
+                        Spend(count);
                         value.kind = Value::Kind::Bytes;
                         value.bytes.assign(data_.begin() + size_t(base + 4), data_.begin() + size_t(base + 4 + count));
                         return value;
@@ -101,7 +105,8 @@ namespace dao::mods::gff
                     value.fourcc = tpl.fourcc;
                     value.fields.reserve(tpl.fields.size());
                     for (const FieldDef& field : tpl.fields)
-                        value.fields.push_back({ field.label, Read(field.type, field.flags, at + field.offset, depth + 1) });
+                        value.fields.push_back(
+                            { field.label, Read(field.type, field.flags, at + field.offset, depth + 1) });
                     return value;
                 }
                 if (type == kString)
@@ -151,6 +156,14 @@ namespace dao::mods::gff
             }
 
         private:
+            // Charges the budget (see kMaxTreeBytes).
+            void Spend(size_t bytes)
+            {
+                if (budget_ < bytes)
+                    throw Malformed("too big");
+                budget_ -= bytes;
+            }
+
             void Need(uint64_t at, uint64_t size) const
             {
                 if (at > data_.size() || size > data_.size() - at)
@@ -177,9 +190,7 @@ namespace dao::mods::gff
                 const uint64_t at = uint64_t(dataOffset_) + ref;
                 const uint32_t count = U32(at);
                 Need(at + 4, uint64_t(count) * 2);
-                if (budget_ < count / 64)
-                    throw Malformed("too many values");
-                budget_ -= count / 64;
+                Spend(size_t(count) * 2);
                 // Code unit by code unit: some of the game's strings aren't valid UTF-16, and they must survive.
                 std::u16string text(count, u'\0');
                 memcpy(text.data(), data_.data() + at + 4, size_t(count) * 2);
@@ -390,8 +401,8 @@ namespace dao::mods::gff
     void Value::SetU32(uint32_t value)
     {
         kind = Kind::Prim;
-        if (type == 0)
-            type = 4;
+        if (type == kU8)   // (not set yet)
+            type = kU32;
         bytes.resize(4);
         memcpy(bytes.data(), &value, 4);
     }
@@ -400,11 +411,11 @@ namespace dao::mods::gff
     {
         switch (type)
         {
-        case 0: case 1: return 1;
-        case 2: case 3: return 2;
-        case 4: case 5: case 8: return 4;
-        case 6: case 7: case 9: return 8;
-        case 10: return 12;
+        case kU8: case kI8: return 1;
+        case kU16: case kI16: return 2;
+        case kU32: case kI32: case kF32: return 4;
+        case kU64: case kI64: case kF64: return 8;
+        case kVec3: return 12;
         case kVec4: case kQuat: case kColor: return 16;
         case kMatrix: return 64;
         default: return 0;

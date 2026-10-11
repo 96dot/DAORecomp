@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "mods/convert/texture.h"
 
+#include "ui/erf.h"
+
 #include "xenia/gpu/texture_address.h"
 #include "xenia/gpu/texture_util.h"
 
@@ -156,11 +158,6 @@ namespace dao::mods::convert
             return out;
         }
 
-        uint32_t Get32(std::span<const uint8_t> d, size_t at)
-        {
-            return d[at] | d[at + 1] << 8 | d[at + 2] << 16 | uint32_t(d[at + 3]) << 24;
-        }
-
         // Unpacks an uncompressed layout the 360 has no match for to A8R8G8B8 (PC byte
         // order); with `luminance`, the red mask is the grey of all three colours.
         std::vector<uint8_t> Expand(std::span<const uint8_t> data, uint32_t bytes, const std::array<uint32_t, 4>& masks,
@@ -252,7 +249,7 @@ namespace dao::mods::convert
                 };
                 const int g0 = green(c0), g1 = green(c1);
                 const int palette[4] = { g0, g1, (2 * g0 + g1) / 3, (g0 + 2 * g1) / 3 };
-                const uint32_t indices = Get32(blocks, at + 12);
+                const uint32_t indices = ui::ReadLE32(blocks, at + 12);
                 uint8_t values[16];
                 for (int p = 0; p < 16; ++p)
                     values[p] = uint8_t(palette[(indices >> (2 * p)) & 3]);
@@ -290,17 +287,21 @@ namespace dao::mods::convert
         const TextureOptions& options)
     {
         constexpr uint32_t kFourcc = 0x4, kAlphaPixels = 0x1, kLuminance = 0x20000;
+        constexpr uint32_t kCubemap = 0x200, kVolume = 0x200000;   // in caps2
         constexpr size_t kHeaderSize = 128, kDx10HeaderSize = 20;
         if (dds.size() < kHeaderSize || memcmp(dds.data(), "DDS ", 4) != 0)
             return std::string("it isn't a DDS file");
-        const uint32_t height = Get32(dds, 12), width = Get32(dds, 16);
-        const uint32_t mipCount = std::max(Get32(dds, 28), 1u);
-        const uint32_t pixelFlags = Get32(dds, 80);
-        const uint32_t bits = Get32(dds, 88);
-        std::array<uint32_t, 4> masks = { Get32(dds, 92), Get32(dds, 96), Get32(dds, 100),
-            pixelFlags & kAlphaPixels ? Get32(dds, 104) : 0 };
-        const uint32_t caps2 = Get32(dds, 112);
-        if (caps2 & (0x200 | 0x200000))
+        // The header (DDS_HEADER, after the magic): height, width, mip count, then
+        // the pixel format (flags, fourcc, bit count, red/green/blue/alpha masks)
+        // and caps2.
+        const uint32_t height = ui::ReadLE32(dds, 12), width = ui::ReadLE32(dds, 16);
+        const uint32_t mipCount = std::max(ui::ReadLE32(dds, 28), 1u);
+        const uint32_t pixelFlags = ui::ReadLE32(dds, 80);
+        const uint32_t bits = ui::ReadLE32(dds, 88);
+        std::array<uint32_t, 4> masks = { ui::ReadLE32(dds, 92), ui::ReadLE32(dds, 96), ui::ReadLE32(dds, 100),
+            pixelFlags & kAlphaPixels ? ui::ReadLE32(dds, 104) : 0 };
+        const uint32_t caps2 = ui::ReadLE32(dds, 112);
+        if (caps2 & (kCubemap | kVolume))
             return std::string("cube and volume textures aren't handled");
         if (width == 0 || height == 0 || width > kMaxSize || height > kMaxSize)
             return fmt::format("its size ({}x{}) isn't one the Xbox 360 takes", width, height);
@@ -318,7 +319,7 @@ namespace dao::mods::convert
         if (pixelFlags & kFourcc)
         {
             const std::string_view fourcc(reinterpret_cast<const char*>(dds.data() + 84), 4);
-            const uint32_t code = Get32(dds, 84);
+            const uint32_t code = ui::ReadLE32(dds, 84);
             if (fourcc == "DXT1")
                 format = &kDxt1;
             else if (fourcc == "DXT2" || fourcc == "DXT3")
@@ -341,8 +342,8 @@ namespace dao::mods::convert
                     return std::string("the file is cut short");
                 offset += kDx10HeaderSize;
                 constexpr uint32_t kTexture2D = 3, kCube = 0x4;
-                const uint32_t dxgi = Get32(dds, 128), dimension = Get32(dds, 132), misc = Get32(dds, 136),
-                               arraySize = Get32(dds, 140);
+                const uint32_t dxgi = ui::ReadLE32(dds, 128), dimension = ui::ReadLE32(dds, 132);
+                const uint32_t misc = ui::ReadLE32(dds, 136), arraySize = ui::ReadLE32(dds, 140);
                 if (dimension != kTexture2D || (misc & kCube) || arraySize > 1)
                     return std::string("cube, volume and array textures aren't handled");
                 switch (dxgi)

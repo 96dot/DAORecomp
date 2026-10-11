@@ -8,8 +8,10 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
   motion vectors generated for the game's 3D scenes
 - 60 fps (the original is locked to 30)
 - SDL3 input, including DualSense and other controllers
-- a launcher for settings, mods (file overrides) and code patches
+- a launcher for settings, mods (file overrides, with a converter for PC mods) and
+  code patches
 - a Graphics tab in the game's own Options menu (title and pause menus)
+- an on-screen keyboard for naming characters, usable with a gamepad
 
 **This repository contains no game code or data.** You need your own copy of the
 game: an ISO image of the Xbox 360 disc. The installer extracts it, translates the
@@ -107,7 +109,8 @@ saves, logs, the shader cache, and the Options menu it generates) and `mods/`.
   title screen and menu art from your copy of the game (`guiexport.erf`, read at
   startup; none of it is shipped), falling back to plain shapes without it, and uses
   Windows' serif fonts (Palatino Linotype, Georgia or Times New Roman). It works with
-  a mouse, the keyboard or a gamepad (Start plays).
+  a mouse, the keyboard or a gamepad (Start plays). `--launcher` shows it anyway,
+  `--mods` opens it on its Mods page, and `--play` skips it.
 - **Linux:** the program is a Windows executable; run it with Wine or Proton.
   - Steam: *Add a Non-Steam Game* → `DAORecomp.exe`, then in its properties force a
     Proton version (Proton includes vkd3d-proton for Direct3D 12).
@@ -125,8 +128,11 @@ launcher) makes the game faster on low-power devices such as the Steam Deck.
 
 Mods go in `mods/` (see `mods/README.txt`); the easiest way to add one is to drop its
 archive, folder or files on the launcher window (archives are opened with Windows'
-`tar.exe`, in Windows 10 1803 and later). Mods must be made for the Xbox 360 version: PC
-mods with models, textures or archives are marked as such and not loaded.
+`tar.exe`, in Windows 10 1803 and later). PC mods with models, textures or archives
+are marked as such and not loaded until converted (select one and press *Convert*); the
+launcher also warns of what it finds in a mod that may not work on this version. The
+first time the Mods page opens it explains this (`mods_warning_seen` in the
+`[launcher]` section of `userdata/config.toml` records that it was read).
 
 Shaders are compiled the first time something is drawn, and that draw is skipped
 until then, so new places can show objects popping in for a moment. Compiled shaders
@@ -160,10 +166,15 @@ start, so this happens once per place.
   - `DAO_DRED=1`: when the GPU device is lost, the operations it was running and the
     memory it faulted on (Direct3D 12 DRED).
   - `DAO_LAUNCHER_SCREENSHOTS=<folder>`: saves each launcher view (the title screen,
-    the four Configure tabs, Mods) as `launcher_0.bmp` to `launcher_5.bmp`, and the
-    Update page as `launcher_6.bmp` when the update check finds a release, then quits.
+    the four Configure tabs, Mods: its list, even before the first-open notice was
+    read) as `launcher_0.bmp` to `launcher_5.bmp`, and the Update page as
+    `launcher_6.bmp` when the update check finds a release, then quits.
   - `DAO_LAUNCHER_DROP=<path>|<path>...`: with `DAO_LAUNCHER_SCREENSHOTS`, adds those
     as mods as if dropped on the window (tests adding mods).
+  - `DAO_CONVERT_MOD=<mod folder>`: converts that PC mod as the launcher's Convert does,
+    logs the outcome to `userdata/dao.log` and quits (tests the converter).
+  - `DAO_TEST_KEYBOARD=<seconds>`: shows the on-screen keyboard that long after the
+    game starts and logs what was entered (tests it without creating a character).
 
 Never commit game files or anything generated from them (`game/`, `ppc/`, `analysis/`,
 built executables); `.gitignore` excludes them.

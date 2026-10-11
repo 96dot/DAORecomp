@@ -23,7 +23,16 @@ namespace dao::mods::gff
     enum Types : uint16_t
     {
         kU8 = 0,
+        kI8 = 1,
+        kU16 = 2,
+        kI16 = 3,
+        kU32 = 4,
+        kI32 = 5,
+        kU64 = 6,
+        kI64 = 7,
         kF32 = 8,
+        kF64 = 9,
+        kVec3 = 10,
         kVec4 = 12,
         kQuat = 13,
         kColor = 15,

@@ -9,9 +9,9 @@
 #include "input/input.h"
 #include "launcher/launcher.h"
 #include "mods/mods.h"
-#include "ui/keyboard.h"
 #include "mods/convert/convert.h"
 #include "ui/graphics_menu.h"
+#include "ui/keyboard.h"
 #include "settings.h"
 #include "text.h"
 
@@ -247,7 +247,8 @@ int main(int argc, char** argv)
     {
         // Same rule as the launcher: mod folders not in config.toml yet are enabled.
         const auto modsRoot = dao::mods::ModsRoot(gameRoot);
-        dao::mods::Apply(modsRoot, dao::mods::Scan(modsRoot, dao::GetSettings().mods));
+        dao::mods::Apply(modsRoot,
+            dao::mods::Scan(modsRoot, dao::GetSettings().mods, nullptr, dao::mods::Detail::Loading));
     }
     // The Options menu's Graphics tab is patched into the menu the mods leave.
     dao::ui::InitializeGraphicsMenu();

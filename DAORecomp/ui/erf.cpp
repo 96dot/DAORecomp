@@ -45,14 +45,17 @@ namespace dao::ui
 
         std::error_code ec;
         const uint64_t fileSize = fs::file_size(path, ec);
-        const auto header = ec ? std::nullopt : ReadFileBytes(path, 0, kEntriesOffset);
-        if (!header || memcmp(header->data(), "ERF V2.1", 8) != 0)
+        // (One open for both reads: the game has hundreds of archives.)
+        std::ifstream file(path, std::ios::binary);
+        std::vector<uint8_t> header(kEntriesOffset);
+        if (ec || !file.read(reinterpret_cast<char*>(header.data()), std::streamsize(header.size())) ||
+            memcmp(header.data(), "ERF V2.1", 8) != 0)
             return std::nullopt;
-        const uint32_t count = ReadLE32(*header, 0x10);
+        const uint32_t count = ReadLE32(header, 0x10);
         if (count > kMaxEntries)
             return std::nullopt;
-        const auto table = ReadFileBytes(path, kEntriesOffset, uint32_t(count * kEntrySize));
-        if (!table)
+        std::vector<uint8_t> table(size_t(count) * kEntrySize);
+        if (!file.read(reinterpret_cast<char*>(table.data()), std::streamsize(table.size())))
             return std::nullopt;
 
         ErfArchive archive;
@@ -61,7 +64,7 @@ namespace dao::ui
         archive.entries_.reserve(count);
         for (uint32_t i = 0; i < count; ++i)
         {
-            const std::span<const uint8_t> entry(table->data() + i * kEntrySize, kEntrySize);
+            const std::span<const uint8_t> entry(table.data() + i * kEntrySize, kEntrySize);
             const auto* name = reinterpret_cast<const char*>(entry.data());
             archive.entries_.push_back(Entry{ std::string(name, strnlen(name, kNameSize)),
                 ReadLE32(entry, kNameSize), ReadLE32(entry, kNameSize + 4), ReadLE32(entry, kNameSize + 8) });

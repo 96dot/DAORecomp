@@ -3,9 +3,8 @@
 
 #include <shellapi.h>
 
-#include <fstream>
-
 #include "kernel/vfs.h"
+#include "mods/mod_files.h"
 #include "text.h"
 
 #include "xenia/base/cvar.h" // toml++
@@ -84,47 +83,34 @@ namespace dao::mods
             return calls;
         }
 
-        std::optional<std::vector<uint8_t>> ReadAll(const fs::path& path)
-        {
-            std::ifstream file(path, std::ios::binary);
-            std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            return file.bad() ? std::nullopt : std::optional(std::move(data));
-        }
-
-        std::string ReadHead(const fs::path& path)
-        {
-            std::string head(kHeadBytes, '\0');
-            std::ifstream file(path, std::ios::binary);
-            file.read(head.data(), head.size());
-            head.resize(size_t(file.gcount()));
-            return head;
-        }
-
         // Whether a file is in a format of the PC version: a GFF file (models,
         // meshes, morphs, ...) for the PC platform, a DDS texture (the Xbox 360
         // version's are .xds) or a PC archive (its header in UTF-16).
-        bool IsPcFile(std::string_view extension, std::string_view head)
+        bool IsPcFile(std::string_view extension, std::span<const uint8_t> head)
         {
             if (extension == ".dds" || extension == ".dazip")
                 return true;
-            return head.starts_with(std::string_view("GFF V4.0PC  ", 12)) ||
-                head.starts_with(std::string_view("E\0R\0F\0", 6));
+            return IsPcGff(head) || IsPcArchive(head);
+        }
+
+        // Files whose first bytes don't matter: those in formats that are the same
+        // on both versions (or are only the 360's), which aren't GFF files or archives.
+        bool HeadTellsNothing(std::string_view extension)
+        {
+            static constexpr std::string_view kKnown[] = { ".xds", ".dds", ".ncs", ".nss", ".gfx", ".mao", ".xml",
+                ".tga", ".bik", ".wav", ".ogg", ".toml", ".dazip" };
+            return std::ranges::find(kKnown, extension) != std::end(kKnown);
         }
 
         // A sound bank the 360 version can't play: one not in its format (FSB4 with
         // XMA samples).
-        bool IsPcSoundBank(std::string_view head)
+        bool IsPcSoundBank(std::span<const uint8_t> head)
         {
-            if (head.size() < kHeadBytes || !head.starts_with("FSB4"))
+            if (head.size() < kHeadBytes || memcmp(head.data(), "FSB4", 4) != 0)
                 return true;
             uint32_t mode;
             memcpy(&mode, head.data() + 0x60, sizeof(mode));
             return !(mode & kFsbXma);
-        }
-
-        bool IsUnder(const fs::path& relative, std::string_view folder)
-        {
-            return std::ranges::any_of(relative, [&](const fs::path& part) { return Lower(Utf8(part)) == folder; });
         }
 
         // Where the game finds a file of a mod (see ModInfo::changes).
@@ -133,14 +119,6 @@ namespace dao::mods
             if (IsUnder(relative.parent_path(), "override"))
                 return "override/" + Lower(Utf8(relative.filename()));
             return Lower(WideToUtf8(relative.generic_wstring()));
-        }
-
-        // Files that aren't for the game: read-mes, pictures, links.
-        bool IsDocument(std::string_view extension)
-        {
-            static constexpr std::string_view kDocuments[] = { ".txt", ".md", ".pdf", ".rtf", ".doc", ".docx",
-                ".htm", ".html", ".url", ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp" };
-            return std::ranges::find(kDocuments, extension) != std::end(kDocuments);
         }
 
         bool IsProgram(std::string_view extension)
@@ -238,21 +216,23 @@ namespace dao::mods
         return false;
     }
 
-    ModInfo Describe(const fs::path& dir, const GameFiles* game)
+    namespace
     {
-        ModInfo info;
-        info.folder = Utf8(dir.filename());
-        info.name = info.folder;
-        const auto manifest = dir / "mod.toml";
-        std::error_code ec;
-        if (fs::is_regular_file(manifest, ec) && fs::file_size(manifest, ec) > kMaxModTomlBytes)
-            LOGW("Mod {}: mod.toml is too big to be one", info.folder);
-        else if (fs::is_regular_file(manifest, ec))
+        // The mod's description from its mod.toml, if it has one.
+        void ReadModToml(const fs::path& manifest, ModInfo& info)
         {
+            std::error_code ec;
+            if (!fs::is_regular_file(manifest, ec))
+                return;
+            const auto bytes = ReadAll(manifest, kMaxModTomlBytes);
+            if (!bytes)
+            {
+                LOGW("Mod {}: mod.toml can't be read or is too big to be one", info.folder);
+                return;
+            }
             try
             {
-                std::ifstream file(manifest, std::ios::binary);
-                const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
                 const toml::table table = toml::parse(text, Utf8(manifest));
                 info.name = table["name"].value_or(info.name);
                 info.version = table["version"].value_or(std::string());
@@ -264,25 +244,44 @@ namespace dao::mods
                 LOGW("Mod {}: mod.toml: {}", info.folder, error.description());
             }
         }
+    }
 
+    ModInfo Describe(const fs::path& dir, const GameFiles* game, Detail detail)
+    {
+        ModInfo info;
+        info.folder = Utf8(dir.filename());
+        info.name = info.folder;
+        const auto manifest = dir / "mod.toml";
+        ReadModToml(manifest, info);
+
+        const bool full = detail == Detail::Full;
         Findings found;
         std::unordered_set<std::string> changes;
+        std::error_code ec;
         for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator();
              it.increment(ec))
         {
-            if (!it->is_regular_file(ec) || it->path() == manifest)
+            // (A file that can't be looked at doesn't end the listing.)
+            std::error_code fileEc;
+            if (!it->is_regular_file(fileEc) || it->path() == manifest)
                 continue;
             info.fileCount++;
             const fs::path relative = it->path().lexically_relative(dir);
+            const std::string extension = Lower(Utf8(relative.extension()));
+            const bool document = IsDocument(relative);
+            // (Loading needs only whether it's for the PC version, not the sound banks' heads.)
+            const bool needsHead = !document && !HeadTellsNothing(extension) && (full || extension != ".fsb");
+            const auto head = needsHead ? ReadHead(it->path(), kHeadBytes) : std::vector<uint8_t>();
+            if (IsPcFile(extension, head) && info.pcFiles++ == 0)
+            {
+                info.pcExample = WideToUtf8(relative.generic_wstring());
+                if (!full)
+                    break;
+            }
+            if (document || !full)
+                continue;
             const std::string path = WideToUtf8(relative.generic_wstring());
             const std::string name = Lower(Utf8(relative.filename()));
-            const std::string extension = Lower(Utf8(relative.extension()));
-            const std::string head = ReadHead(it->path());
-            if (IsPcFile(extension, head) && info.pcFiles++ == 0)
-                info.pcExample = path;
-
-            if (IsDocument(extension))
-                continue;
             const std::string top = Lower(Utf8(*relative.begin()));
             if (!relative.has_parent_path() || (top != "packages" && top != "modules"))
                 found.outside.Add(path);
@@ -292,7 +291,7 @@ namespace dao::mods
                 found.sounds.Add(path);
             else if (extension == ".ncs")
             {
-                const auto code = it->file_size(ec) <= kMaxScriptBytes ? ReadAll(it->path()) : std::nullopt;
+                const auto code = ReadAll(it->path(), kMaxScriptBytes);
                 const auto calls = code ? ScriptCalls(*code) : std::nullopt;
                 if (!calls)
                     found.oddScripts.Add(path);
@@ -311,7 +310,7 @@ namespace dao::mods
                 found.addins.Add(path);
             if (extension == ".xds" || extension == ".dds")
             {
-                if (const uintmax_t size = it->file_size(ec); !ec && size >= kLargeTextureBytes)
+                if (const uintmax_t size = it->file_size(fileEc); !fileEc && size >= kLargeTextureBytes)
                     found.largeTextures.Add(path, size);
             }
 
@@ -320,6 +319,12 @@ namespace dao::mods
                 found.twice.Add(path);
             else
                 info.changes.push_back(std::move(change));
+        }
+        if (!full)
+        {
+            if (info.IsForPc())
+                LOGW("Mod {}: made for the PC version (such as {}); not loaded", info.folder, info.pcExample);
+            return info;
         }
         info.warnings = found.Warnings();
         if (info.IsForPc())
@@ -335,7 +340,8 @@ namespace dao::mods
         return gameRoot.parent_path() / "mods";
     }
 
-    std::vector<ModInfo> Scan(const fs::path& modsRoot, const std::vector<ModState>& saved, const GameFiles* game)
+    std::vector<ModInfo> Scan(const fs::path& modsRoot, const std::vector<ModState>& saved, const GameFiles* game,
+        Detail detail)
     {
         std::error_code ec;
         fs::create_directories(modsRoot, ec);
@@ -356,14 +362,15 @@ namespace dao::mods
                 [&](const fs::path& p) { return _stricmp(Utf8(p.filename()).c_str(), state.folder.c_str()) == 0; });
             if (it == folders.end())
                 continue;
-            ModInfo info = Describe(*it, game);
+            ModInfo info = Describe(*it, game, detail);
             info.enabled = state.enabled;
             out.push_back(std::move(info));
             folders.erase(it);
         }
         for (const auto& folder : folders)
-            out.push_back(Describe(folder, game));
-        FindOverlaps(out);
+            out.push_back(Describe(folder, game, detail));
+        if (detail == Detail::Full)
+            FindOverlaps(out);
         return out;
     }
 
@@ -417,12 +424,15 @@ namespace dao::mods
 
     bool RecycleMod(const fs::path& modsRoot, const std::string& folder, std::string& error)
     {
-        // The paths, each ending in a null, the list in another.
+        // The paths, each ending in a null, the list in another. A link (which the
+        // mods folder may have been given by hand) goes alone, not what it leads to.
         std::wstring from;
         std::error_code ec;
         for (const fs::path& path : { modsRoot / FromUtf8(folder), modsRoot / kOriginalsFolder / FromUtf8(folder) })
         {
-            if (fs::exists(path, ec))
+            if (IsLink(path))
+                fs::remove(path, ec);
+            else if (fs::exists(path, ec))
                 from += path.native() + L'\0';
         }
         if (from.empty())

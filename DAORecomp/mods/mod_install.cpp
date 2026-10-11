@@ -5,6 +5,7 @@
 #include <regex>
 #include <unordered_set>
 
+#include "mods/mod_files.h"
 #include "text.h"
 
 #include "xenia/base/cvar.h" // toml++
@@ -20,7 +21,6 @@ namespace dao::mods
         // adding mods, locked while it does, with a folder per drop.
         constexpr std::string_view kWorkFolder = ".adding";
         static_assert(kWorkFolder.front() == kHiddenPrefix);
-        constexpr const wchar_t* kLockFile = L"lock";
         // Folders that say where their contents go: name -> place in the mod.
         constexpr std::pair<std::string_view, std::string_view> kAnchors[] = {
             { "packages", "packages" },
@@ -49,9 +49,6 @@ namespace dao::mods
         // The archives mods come in that tar.exe reads (.dazip: the PC version's
         // own, a zip).
         constexpr std::string_view kArchiveExtensions[] = { ".zip", ".7z", ".rar", ".dazip" };
-        // Readmes and pictures: kept at the top of the mod folder.
-        constexpr std::string_view kDocumentExtensions[] = { ".txt", ".md", ".pdf", ".rtf", ".htm", ".html", ".url",
-            ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp" };
 
         struct HandleCloser
         {
@@ -119,9 +116,10 @@ namespace dao::mods
             PROCESS_INFORMATION info = {};
             // Detached (no console), so nothing can make it wait for input such as an
             // encrypted archive's password; suspended until it's in the job.
-            if (!job || !SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits)) ||
-                !CreateProcessW(tar.c_str(), command.data(), nullptr, nullptr, FALSE, DETACHED_PROCESS | CREATE_SUSPENDED,
-                    nullptr, into.c_str(), &startup, &info))
+            if (!job ||
+                !SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits)) ||
+                !CreateProcessW(tar.c_str(), command.data(), nullptr, nullptr, FALSE,
+                    DETACHED_PROCESS | CREATE_SUSPENDED, nullptr, into.c_str(), &startup, &info))
             {
                 error = fmt::format("can't run tar.exe (error {})", GetLastError());
                 return false;
@@ -321,15 +319,8 @@ namespace dao::mods
             {
                 const size_t close = xml.find('>', start);
                 const std::string_view element = xml.substr(start, close - start);
-                for (size_t at = element.find(attribute); at != std::string_view::npos;
-                     at = element.find(attribute, at + 1))
-                {
-                    const size_t equals = at + attribute.size();
-                    if (!isspace(uint8_t(element[at - 1])) || element.substr(equals, 2) != "=\"")
-                        continue;
-                    const size_t value = equals + 2;
-                    return XmlText(element.substr(value, element.find('"', value) - value));
-                }
+                if (const std::string_view value = XmlAttribute(element, attribute); !value.empty())
+                    return XmlText(value);
                 if (close == std::string_view::npos)
                     break;
                 start = xml.find(tag, close);
@@ -383,23 +374,6 @@ namespace dao::mods
             manifest.author = Attribute(xml, "<Publisher", "DefaultText");
             manifest.description = Attribute(xml, "<Description", "DefaultText");
             return manifest;
-        }
-
-        // Whether Windows reserves the name for a device (CON, NUL, COM1...), also
-        // with an extension.
-        bool IsDeviceName(std::string_view name)
-        {
-            std::string base = Lower(name.substr(0, name.find('.')));
-            while (!base.empty() && base.back() == ' ')
-                base.pop_back();
-            if (base == "con" || base == "prn" || base == "aux" || base == "nul")
-                return true;
-            if (!base.starts_with("com") && !base.starts_with("lpt"))
-                return false;
-            const std::string_view number = std::string_view(base).substr(3);
-            // A digit, or a superscript 1, 2 or 3.
-            return (number.size() == 1 && isdigit(uint8_t(number[0]))) || number == "\xC2\xB9" ||
-                number == "\xC2\xB2" || number == "\xC2\xB3";
         }
 
         // A folder name from what was dropped: the ending of a download's name from
@@ -545,7 +519,7 @@ namespace dao::mods
                 const std::string file = Lower(Utf8(entry.path().filename()));
                 if (file == "manifest.xml")
                     manifest = ReadManifest(entry.path());
-                if (file == "manifest.xml" || file == "mod.toml" || HasExtension(entry.path(), kDocumentExtensions))
+                if (file == "manifest.xml" || file == "mod.toml" || IsDocument(entry.path()))
                     MoveOne(entry.path(), out / entry.path().filename(), moves);
             }
             if (manifest && !manifest->name.empty())
@@ -554,7 +528,7 @@ namespace dao::mods
             for (const auto& [folder, place] : FindAnchors(raw))
             {
                 MoveInto(folder, out / fs::path(place), moves);
-                fs::remove_all(folder, ec);
+                RemoveTree(folder);
             }
             // The rest: into override/, in a folder of the mod's name unless a DAModder
             // manifest says the mod is made for override/ itself.
@@ -578,16 +552,16 @@ namespace dao::mods
         {
             Contents contents;
             const fs::path packages = mod / "packages";
-            const std::wstring overrideFolder = (packages / "core" / "override").native();
             std::unordered_set<std::string> names;
             std::error_code ec;
             for (auto it = fs::recursive_directory_iterator(packages, ec);
                  !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
             {
-                if (!it->is_regular_file(ec))
+                if (std::error_code fileEc; !it->is_regular_file(fileEc))
                     continue;
                 contents.files++;
-                if (it->path().native().starts_with(overrideFolder) &&
+                // (Its folders keep the case they were dropped with.)
+                if (IsUnder(it->path().lexically_relative(packages).parent_path(), "override") &&
                     !names.insert(Lower(Utf8(it->path().filename()))).second)
                     contents.sameName++;
             }
@@ -695,37 +669,6 @@ namespace dao::mods
             }
             return Describe(folder, game);
         }
-
-        // This launcher's folder in the work folder, locked while it's there (a
-        // second launcher's clean-up leaves it alone).
-        class WorkFolder
-        {
-        public:
-            explicit WorkFolder(const fs::path& modsRoot)
-                : dir_(modsRoot / kWorkFolder / std::to_wstring(GetCurrentProcessId()))
-            {
-                std::error_code ec;
-                fs::remove_all(dir_, ec);
-                fs::create_directories(dir_, ec);
-                // Shared with no one, so it can't be deleted while open.
-                lock_.reset(CreateFileW((dir_ / kLockFile).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr));
-            }
-
-            ~WorkFolder()
-            {
-                lock_.reset();
-                std::error_code ec;
-                fs::remove_all(dir_, ec);
-                fs::remove(dir_.parent_path(), ec); // Only if empty.
-            }
-
-            const fs::path& Dir() const { return dir_; }
-
-        private:
-            fs::path dir_;
-            Handle lock_;
-        };
     }
 
     bool UnpackArchive(const fs::path& archive, const fs::path& into, std::stop_token stop, std::string& error)
@@ -763,16 +706,7 @@ namespace dao::mods
 
     void CleanUpInstalls(const fs::path& modsRoot)
     {
-        const fs::path work = modsRoot / kWorkFolder;
-        std::error_code ec;
-        for (const auto& entry : fs::directory_iterator(work, ec))
-        {
-            // A running install's lock can't be deleted.
-            fs::remove(entry.path() / kLockFile, ec);
-            if (!fs::exists(entry.path() / kLockFile, ec))
-                fs::remove_all(entry.path(), ec);
-        }
-        fs::remove(work, ec); // Only if empty.
+        RemoveUnlockedFolders(modsRoot / kWorkFolder);
     }
 
     InstallResult Install(const fs::path& modsRoot, const std::vector<fs::path>& dropped, std::stop_token stop,
@@ -801,7 +735,8 @@ namespace dao::mods
             result.lines.push_back({ "Nothing to add: drop mod archives, folders or files.", true });
             return result;
         }
-        const WorkFolder work(modsRoot);
+        // This launcher's folder in the work folder.
+        const LockedFolder work(modsRoot / kWorkFolder / std::to_wstring(GetCurrentProcessId()));
         for (size_t i = 0; i < drops.size() && !stop.stop_requested(); i++)
         {
             const auto& [sources, name] = drops[i];
@@ -822,7 +757,7 @@ namespace dao::mods
             {
                 error = e.what();
             }
-            fs::remove_all(dir, ec);
+            RemoveTree(dir);
             if (!mod)
             {
                 LOGW("Mods: can't add {}: {}", what, error);

@@ -236,6 +236,20 @@ namespace dao::launcher
             std::string text;
         };
 
+        // What reading the mod list gives.
+        struct ModScan
+        {
+            std::shared_ptr<const mods::GameFiles> gameFiles;
+            std::vector<mods::ModInfo> mods;
+        };
+
+        // A conversion's outcome, and the mod described again after it.
+        struct Converted
+        {
+            mods::ConvertResult result;
+            mods::ModInfo mod;
+        };
+
         struct State
         {
             fs::path gameRoot, userRoot, modsRoot;
@@ -256,10 +270,14 @@ namespace dao::launcher
             std::stop_source modStop;
             std::vector<mods::InstallResult::Line> modMessages;
             // A PC mod being converted in the background (its folder), stopped with modStop.
-            std::future<mods::ConvertResult> modConvert;
+            std::future<Converted> modConvert;
             std::string convertingMod;
-            // The game's file names, for the mods' warnings: read once, shared with
-            // the background work.
+            // The mod list being read in the background (at the start, and on Refresh),
+            // and whether it has been (until then, the saved list isn't replaced).
+            std::future<ModScan> modScan;
+            bool modsRead = false;
+            // The game's file names, for the mods' warnings: read once (with the mod
+            // list), shared with the background work.
             std::shared_ptr<const mods::GameFiles> gameFiles;
             // Scroll the mod list to the selected mod (just added).
             bool scrollToMod = false;
@@ -701,6 +719,12 @@ namespace dao::launcher
             st.viewStart = ImGui::GetTime();
         }
 
+        // Mod folders' names compare as Windows' do, ignoring case.
+        bool SameFolder(const std::string& a, const std::string& b)
+        {
+            return _stricmp(a.c_str(), b.c_str()) == 0;
+        }
+
         bool AddingMods(const State& st)
         {
             return st.modInstall.valid();
@@ -717,10 +741,59 @@ namespace dao::launcher
             return AddingMods(st) || ConvertingMod(st);
         }
 
+        bool ReadingMods(const State& st)
+        {
+            return st.modScan.valid();
+        }
+
+        // Reads the mod list (in the saved order) in the background: every file of
+        // every mod is looked at, and the game's file names read the first time.
+        void ReadMods(State& st, std::vector<ModState> saved)
+        {
+            st.modScan = std::async(std::launch::async,
+                [root = st.modsRoot, gameRoot = st.gameRoot, game = st.gameFiles, saved = std::move(saved),
+                    stop = st.modStop.get_token()]() mutable {
+                    if (!game)
+                        game = std::make_shared<const mods::GameFiles>(mods::GameFiles::Read(gameRoot, stop));
+                    return ModScan{ game, mods::Scan(root, saved, game.get()) };
+                });
+        }
+
+        void AddDroppedMods(State& st);
+
+        // When the mod list has been read: shown, and a drop that waited for it added.
+        void FinishReadingMods(State& st)
+        {
+            if (!ReadingMods(st) || st.modScan.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                return;
+            try
+            {
+                ModScan scan = st.modScan.get();
+                st.gameFiles = std::move(scan.gameFiles);
+                st.mods = std::move(scan.mods);
+                st.modsRead = true;
+            }
+            catch (const std::exception& error)
+            {
+                LOGE("Mods: reading the mods failed: {}", error.what());
+                st.modMessages = { { "Can't read the mods: something went wrong (see dao.log).", true } };
+            }
+            st.selectedMod = -1;
+            if (!st.dropped.empty() && !st.play && !st.quit)
+                AddDroppedMods(st);
+        }
+
         // Adds the mods just dropped on the window, in the background (copying and
         // unpacking can take a while), and shows the Mods page.
         void AddDroppedMods(State& st)
         {
+            // (After the list has been read, which they're added to.)
+            if (ReadingMods(st))
+            {
+                if (!st.dropped.empty())
+                    SetView(st, View::Mods);
+                return;
+            }
             std::vector<fs::path> dropped = std::move(st.dropped);
             st.dropped.clear();
             if (dropped.empty())
@@ -756,9 +829,7 @@ namespace dao::launcher
             for (mods::ModInfo& mod : result.mods)
             {
                 // (A folder deleted while the launcher was open may have the same name.)
-                std::erase_if(st.mods, [&](const mods::ModInfo& old) {
-                    return _stricmp(old.folder.c_str(), mod.folder.c_str()) == 0;
-                });
+                std::erase_if(st.mods, [&](const mods::ModInfo& old) { return SameFolder(old.folder, mod.folder); });
                 st.mods.push_back(std::move(mod));
             }
             if (!result.mods.empty())
@@ -770,40 +841,48 @@ namespace dao::launcher
             st.modMessages = std::move(result.lines);
         }
 
-        // Converts the selected mod, made for the PC version, in the background.
+        // Converts the selected mod, made for the PC version, in the background (and
+        // describes it again there: that reads every file).
         void ConvertSelectedMod(State& st)
         {
             const mods::ModInfo& mod = st.mods[st.selectedMod];
             st.convertingMod = mod.folder;
             st.modMessages.clear();
             st.modConvert = std::async(std::launch::async,
-                [folder = st.modsRoot / FromUtf8(mod.folder), root = st.gameRoot, stop = st.modStop.get_token()] {
-                    return mods::ConvertPcMod(folder, root, stop);
+                [folder = st.modsRoot / FromUtf8(mod.folder), root = st.gameRoot, stop = st.modStop.get_token(),
+                    game = st.gameFiles] {
+                    Converted out{ mods::ConvertPcMod(folder, root, stop, game.get()), {} };
+                    out.mod = mods::Describe(folder, game.get());
+                    return out;
                 });
         }
 
-        // When the background conversion is done: the mod described again, and the outcome.
+        // When the background conversion is done: the mod as it is now, and the outcome.
         void FinishConverting(State& st)
         {
             if (!ConvertingMod(st) || st.modConvert.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
                 return;
-            mods::ConvertResult result;
+            Converted converted;
+            bool described = false;
             try
             {
-                result = st.modConvert.get();
+                converted = st.modConvert.get();
+                described = true;
             }
             catch (const std::exception& error)
             {
                 LOGE("Mods: converting failed: {}", error.what());
-                result.problems.push_back("Something went wrong (see dao.log).");
+                converted.result.problems.push_back("Something went wrong (see dao.log).");
             }
+            const mods::ConvertResult& result = converted.result;
             const std::string folder = std::exchange(st.convertingMod, {});
-            const auto mod = std::ranges::find(st.mods, folder, &mods::ModInfo::folder);
+            const auto mod = std::ranges::find_if(st.mods,
+                [&](const mods::ModInfo& m) { return SameFolder(m.folder, folder); });
             const std::string name = mod != st.mods.end() ? mod->name : folder;
-            if (mod != st.mods.end())
+            if (mod != st.mods.end() && described)
             {
                 const bool enabled = mod->enabled;
-                *mod = mods::Describe(st.modsRoot / FromUtf8(folder), st.gameFiles.get());
+                *mod = std::move(converted.mod);
                 mod->enabled = enabled;
                 mods::FindOverlaps(st.mods);
             }
@@ -881,11 +960,14 @@ namespace dao::launcher
             {
                 const auto enabledMods =
                     std::count_if(st.mods.begin(), st.mods.end(), [](auto& m) { return m.IsLoaded(); });
-                Label(fmt::format("{}  \xC2\xB7  {}x{}  \xC2\xB7  {}  \xC2\xB7  {}  \xC2\xB7  {} mod{} on",
-                    Version(), 1280 * st.settings.resolutionScale, 720 * st.settings.resolutionScale,
+                const std::string modsOn = st.modsRead
+                    ? fmt::format("{} mod{} on", enabledMods, enabledMods == 1 ? "" : "s")
+                    : std::string("reading mods");
+                Label(fmt::format("{}  \xC2\xB7  {}x{}  \xC2\xB7  {}  \xC2\xB7  {}  \xC2\xB7  {}", Version(),
+                    1280 * st.settings.resolutionScale, 720 * st.settings.resolutionScale,
                     st.settings.unlockFrameRate ? "60 fps" : "30 fps",
                     st.settings.temporalUpscaler != TemporalUpscaler::Off ? "temporal FSR" : "no temporal upscaling",
-                    enabledMods, enabledMods == 1 ? "" : "s")
+                    modsOn)
                           .c_str());
             }
             ImGui::Checkbox("Show this launcher at startup", &st.settings.showLauncher);
@@ -1208,7 +1290,10 @@ namespace dao::launcher
                 ImGui::PushTextWrapPos(0.0f);
                 ImGui::Text("Delete \"%s\"?", mod.name.c_str());
                 ImGui::PopTextWrapPos();
-                HelpText(fmt::format("Its folder, mods/{}, goes to the Recycle Bin.", mod.folder).c_str());
+                HelpText(fmt::format("Its folder, mods/{}, goes to the Recycle Bin, with the PC files kept from "
+                                     "converting it, if it was.",
+                    mod.folder)
+                             .c_str());
                 ImGui::Spacing();
                 if (ImGui::Button("Delete"))
                 {
@@ -1241,7 +1326,8 @@ namespace dao::launcher
         void ModsList(State& st)
         {
             HelpText("Each mod is a folder in mods/ that mirrors the game folder, e.g. "
-                     "mods/MyMod/packages/core/override/. Mods lower in the list win over mods above them.");
+                     "mods/MyMod/packages/core/override/. Where two change the same file, the one lower in the list "
+                     "usually wins.");
             ImGui::Spacing();
 
             HelpText(mods::CanOpenArchives()
@@ -1249,6 +1335,11 @@ namespace dao::launcher
                       "are sorted into place."
                     : "To add a mod, drop its folder or files on this window: its files are sorted into place.");
             ImGui::Spacing();
+            if (ReadingMods(st))
+            {
+                ImGui::TextUnformatted("Reading the mods...");
+                return;
+            }
             if (AddingMods(st))
                 ImGui::TextUnformatted("Adding...");
             if (ConvertingMod(st))
@@ -1268,11 +1359,11 @@ namespace dao::launcher
             ImGui::SameLine();
             // The list changes under a conversion: not while one runs.
             ImGui::BeginDisabled(ConvertingMod(st));
+            // (Nor while mods are added, which the new list would leave out.)
+            ImGui::BeginDisabled(AddingMods(st));
             if (ImGui::Button("Refresh"))
-            {
-                st.mods = mods::Scan(st.modsRoot, mods::ToState(st.mods), st.gameFiles.get());
-                st.selectedMod = -1;
-            }
+                ReadMods(st, mods::ToState(st.mods));
+            ImGui::EndDisabled();
             ImGui::SameLine();
             const bool canUp = st.selectedMod > 0;
             const bool canDown = st.selectedMod >= 0 && st.selectedMod + 1 < int(st.mods.size());
@@ -1594,7 +1685,9 @@ namespace dao::launcher
         void ModsView(State& st, const Layout& layout)
         {
             PanelFrame(st, layout, "Mods", nullptr);
-            ShowContents(st, layout, kModsLeft, st.settings.modsWarningSeen ? ModsList : ModsWarning);
+            // (Screenshots show the list.)
+            const bool warn = !st.settings.modsWarningSeen && st.screenshotDir.empty();
+            ShowContents(st, layout, kModsLeft, warn ? ModsWarning : ModsList);
         }
 
         void UpdateView(State& st, const Layout& layout)
@@ -1829,6 +1922,8 @@ namespace dao::launcher
 
     bool ShowsMods(int argc, char** argv)
     {
+        if (argc < 2)
+            return false;
         return std::ranges::any_of(std::span(argv + 1, argv + argc),
             [](const char* arg) { return strcmp(arg, "--mods") == 0; });
     }
@@ -1920,8 +2015,7 @@ namespace dao::launcher
         st.settings = ReadSettings(userRoot);
         mods::CleanUpInstalls(st.modsRoot);
         mods::CleanUpConversions(st.modsRoot);
-        st.gameFiles = std::make_shared<const mods::GameFiles>(mods::GameFiles::Read(gameRoot));
-        st.mods = mods::Scan(st.modsRoot, st.settings.mods, st.gameFiles.get());
+        ReadMods(st, st.settings.mods);
         if (showMods)
             SetView(st, View::Mods);
         if (const char* dir = getenv("DAO_LAUNCHER_SCREENSHOTS"))
@@ -1971,6 +2065,7 @@ namespace dao::launcher
                 else if (event.type == SDL_EVENT_DROP_COMPLETE)
                     AddDroppedMods(st);
             }
+            FinishReadingMods(st);
             FinishAddingMods(st);
             FinishConverting(st);
             if (flags & SDL_WINDOW_MINIMIZED)
@@ -1992,7 +2087,7 @@ namespace dao::launcher
             const bool shotNow = shot >= 0 && st.screenshotFrame % kFramesPerShot == kFramesPerShot - 1;
             // The mods page waits for mods being added, the update's page for the check.
             const bool updateShot = shot == kUpdateShot;
-            const bool shotWaits = (shot == kModsShot && AddingMods(st)) ||
+            const bool shotWaits = (shot == kModsShot && (ReadingMods(st) || AddingMods(st))) ||
                 (updateShot && st.updater->GetState() == Updater::State::Checking);
             // (The update's page only when there's an update.)
             if (shot > kUpdateShot || (updateShot && !shotWaits && !FoundRelease(st)))
@@ -2066,18 +2161,23 @@ namespace dao::launcher
             frameStart = SDL_GetTicksNS();
         }
 
-        // Mods still being added or converted: stopped (what's done is kept).
-        if (ModsBusy(st))
+        // Mods still being read, added or converted: stopped (what's done is kept).
+        if (ModsBusy(st) || ReadingMods(st))
         {
             st.modStop.request_stop();
+            if (ReadingMods(st))
+                st.modScan.wait();
             if (AddingMods(st))
                 st.modInstall.wait();
             if (ConvertingMod(st))
                 st.modConvert.wait();
+            FinishReadingMods(st);
             FinishAddingMods(st);
             FinishConverting(st);
         }
-        st.settings.mods = mods::ToState(st.mods);
+        // (Not if the list couldn't be read: the saved one stays.)
+        if (st.modsRead)
+            st.settings.mods = mods::ToState(st.mods);
         SaveSettings(userRoot, st.settings);
         LOGI("Launcher: {}", st.play ? "play" : "quit");
 

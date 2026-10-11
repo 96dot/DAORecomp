@@ -28,6 +28,9 @@ namespace dao::mods::convert
             kDeclUsageIndex = 8031,
         };
 
+        // A declaration's stream and type in its end row (D3DDECL_END).
+        constexpr uint32_t kDeclEnd = 0xFFFFFFFF;
+
         // D3DDECLTYPE
         enum DeclType : uint32_t
         {
@@ -210,7 +213,7 @@ namespace dao::mods::convert
             for (const gff::Value& row : chunk.At(kDeclaration).items)
             {
                 const uint32_t stream = row.Find(kDeclStream) ? row.Find(kDeclStream)->U32() : 0;
-                if (stream == 0xFFFFFFFF)
+                if (stream == kDeclEnd)
                     continue;
                 if (stream != 0)
                     return "it has more than one vertex stream";
@@ -344,7 +347,8 @@ namespace dao::mods::convert
                 for (const Column& column : columns)
                 {
                     const uint32_t size = TypeSize(column.type);
-                    out.insert(out.end(), column.data.begin() + size_t(i) * size, column.data.begin() + size_t(i + 1) * size);
+                    const auto from = column.data.begin() + size_t(i) * size;
+                    out.insert(out.end(), from, from + size);
                 }
             return std::nullopt;
         }
@@ -353,21 +357,30 @@ namespace dao::mods::convert
     std::optional<std::string> ConvertMesh(gff::File& mesh)
     {
         gff::Value& root = mesh.root;
-        gff::Value& chunks = root.At(kChunks);
-        if (chunks.kind == gff::Value::Kind::Null || chunks.items.empty())
+        // (Found, not At: adding a field would move the others.)
+        gff::Value* chunks = root.Find(kChunks);
+        if (!chunks || chunks->items.empty())
             return std::nullopt;
-        const std::vector<uint8_t> vb = root.At(kVertexData).bytes;
-        const std::vector<uint8_t> ib = root.At(kIndexData).bytes;
+        static const std::vector<uint8_t> kNone;
+        const gff::Value* vertexBytes = root.Find(kVertexData);
+        const gff::Value* indexBytes = root.Find(kIndexData);
+        const std::vector<uint8_t>& vb = vertexBytes ? vertexBytes->bytes : kNone;
+        const std::vector<uint8_t>& ib = indexBytes ? indexBytes->bytes : kNone;
 
+        // Laid out as the game's own meshes are: each chunk's vertices from a multiple
+        // of 16 bytes; after the last, padding to the next multiple of 16 (a whole 16
+        // when it ends on one), and after the indices to the next multiple of 32.
         std::vector<uint8_t> vertices;
         uint64_t indexEnd = 0;
-        for (size_t i = 0; i < chunks.items.size(); ++i)
+        for (size_t i = 0; i < chunks->items.size(); ++i)
         {
-            gff::Value& chunk = chunks.items[i];
+            gff::Value& chunk = chunks->items[i];
             const gff::Value& declaration = chunk.At(kDeclaration);
             if (chunk.kind != gff::Value::Kind::Struct || declaration.items.empty())
                 return fmt::format("chunk {} has no vertex declaration", i);
-            const gff::Value proto = declaration.items[0];
+            // The rows' struct, for the new rows.
+            const uint32_t rowSid = declaration.items[0].sid;
+            const gff::Fourcc rowFourcc = declaration.items[0].fourcc;
             uint32_t stride = 0;
             std::vector<std::array<uint32_t, 6>> rows;
             while (vertices.size() % 16)
@@ -378,19 +391,20 @@ namespace dao::mods::convert
             chunk.At(kVertexOffset).SetU32(uint32_t(offset));
             chunk.At(kVertexSize).SetU32(stride);
 
-            rows.push_back({ 0xFFFFFFFF, 0, 0xFFFFFFFF, 0xFFFFFFFF, 0, 0 });
+            rows.push_back({ kDeclEnd, 0, kDeclEnd, kDeclEnd, 0, 0 });
             gff::Value list;
             list.kind = gff::Value::Kind::List;
             for (const auto& row : rows)
             {
                 gff::Value element;
                 element.kind = gff::Value::Kind::Struct;
-                element.sid = proto.sid;
-                element.fourcc = proto.fourcc;
+                element.sid = rowSid;
+                element.fourcc = rowFourcc;
                 // Stream and offset are i32s, the rest u32s.
-                const uint32_t labels[] = { kDeclStream, kDeclOffset, kDeclType, kDeclUsage, kDeclMethod, kDeclUsageIndex };
+                const uint32_t labels[] = { kDeclStream, kDeclOffset, kDeclType, kDeclUsage, kDeclMethod,
+                    kDeclUsageIndex };
                 for (int k = 0; k < 6; ++k)
-                    element.fields.push_back({ labels[k], Prim(k < 2 ? 5 : 4, row[k]) });
+                    element.fields.push_back({ labels[k], Prim(k < 2 ? gff::kI32 : gff::kU32, row[k]) });
                 list.items.push_back(std::move(element));
             }
             chunk.At(kDeclaration) = std::move(list);

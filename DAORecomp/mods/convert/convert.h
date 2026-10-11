@@ -16,12 +16,17 @@
 //
 // Files that can't be converted are left out, and said so. The mod's PC files are
 // moved to mods/.originals/<mod folder>/ (which keeps their paths), so converting
-// can be undone by moving them back.
+// can be undone by moving them back. The work is done in mods/.converting/ and
+// the files put in place at the end: an interrupted conversion changes nothing.
+// It stops when the drive gets nearly full or the mod unpacks to more than any
+// mod could hold.
 
 #include <stop_token>
 
 namespace dao::mods
 {
+    class GameFiles;
+
     struct ConvertResult
     {
         bool converted = false;   // files were changed
@@ -31,8 +36,9 @@ namespace dao::mods
         std::vector<std::string> notes;      // other things worth knowing
     };
 
+    // With the game's files (GameFiles::Read), or they're read.
     ConvertResult ConvertPcMod(const std::filesystem::path& modFolder, const std::filesystem::path& gameRoot,
-        std::stop_token stop = {});
+        std::stop_token stop = {}, const GameFiles* game = nullptr);
 
     // Removes what interrupted conversions left in mods/.
     void CleanUpConversions(const std::filesystem::path& modsRoot);

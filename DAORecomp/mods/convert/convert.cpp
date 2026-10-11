@@ -9,6 +9,7 @@
 #include "mods/convert/mesh.h"
 #include "mods/convert/texture.h"
 #include "mods/game_files.h"
+#include "mods/mod_files.h"
 #include "mods/mod_install.h"
 #include "mods/mods.h"
 #include "text.h"
@@ -26,10 +27,18 @@ namespace dao::mods
         // Bigger files aren't mod files the game could load anyway.
         constexpr uintmax_t kMaxFileBytes = 256u << 20;
         constexpr uint32_t kMaxGameFileBytes = 64u << 20;
-        // Where PC packages are unpacked while converting (under mods/, hidden).
-        constexpr char kUnpackFolder[] = ".converting";
-        static_assert(kUnpackFolder[0] == kHiddenPrefix && kOriginalsFolder[0] == kHiddenPrefix);
-        constexpr char kTempSuffix[] = ".converting";
+        // All a conversion reads (unpacked): more than a mod the game could hold, so
+        // a damaged or hostile archive can't keep it busy for hours.
+        constexpr uint64_t kMaxReadBytes = 4ull << 30;
+        // Converting stops when the drive gets this full.
+        constexpr uintmax_t kMinFreeBytes = 1ull << 30;
+        // Game files read for one file type's struct layouts without finding a new
+        // one: then the rest are laid out as the game's own are (see Catalog::For).
+        constexpr int kMaxFruitlessGameFiles = 300;
+        // Where conversions work (under mods/, hidden): a folder each, holding the PC
+        // packages unpacked and the converted files until they're put in place.
+        constexpr char kWorkFolder[] = ".converting";
+        static_assert(kWorkFolder[0] == kHiddenPrefix && kOriginalsFolder[0] == kHiddenPrefix);
 
         std::string FourccText(const gff::Fourcc& f)
         {
@@ -71,18 +80,25 @@ namespace dao::mods
 
             bool Has(const std::string& exactKey) const { return exact_.contains(exactKey); }
 
+            // Whether For has the game's layout for a struct (not one derived).
+            bool Covers(const gff::Fourcc& type, const gff::Template& src) const
+            {
+                if (exact_.contains(ExactKey(type, src)))
+                    return true;
+                const auto it = any_.find(FourccText(type) + FourccText(src.fourcc));
+                return it != any_.end() && std::ranges::all_of(src.fields,
+                    [&](const gff::FieldDef& f) { return it->second.tpl.Find(f.label) != nullptr; });
+            }
+
             // The 360 layout for PC struct `src`, its struct fields renumbered to the PC file's struct ids.
             std::variant<gff::Template, std::string> For(const gff::Fourcc& type, const gff::Template& src,
                 const std::vector<gff::Template>& srcTemplates) const
             {
+                if (!Covers(type, src))
+                    return Derive(src, srcTemplates);
                 auto it = exact_.find(ExactKey(type, src));
                 if (it == exact_.end())
-                {
                     it = any_.find(FourccText(type) + FourccText(src.fourcc));
-                    if (it == any_.end() || !std::ranges::all_of(src.fields,
-                            [&](const gff::FieldDef& f) { return it->second.tpl.Find(f.label) != nullptr; }))
-                        return Derive(src, srcTemplates);
-                }
                 const Known& known = it->second;
                 gff::Template out{ known.tpl.fourcc, known.tpl.size, {} };
                 for (size_t i = 0; i < known.tpl.fields.size(); ++i)
@@ -151,50 +167,20 @@ namespace dao::mods
             std::unordered_map<std::string, Known> any_;
         };
 
-        std::optional<std::vector<uint8_t>> ReadAll(const fs::path& path)
-        {
-            std::error_code ec;
-            const uintmax_t size = fs::file_size(path, ec);
-            if (ec || size > kMaxFileBytes)
-                return std::nullopt;
-            std::ifstream file(path, std::ios::binary);
-            std::vector<uint8_t> data(static_cast<size_t>(size));
-            if (!file.read(reinterpret_cast<char*>(data.data()), std::streamsize(size)))
-                return std::nullopt;
-            return data;
-        }
-
-        bool IsPcGff(std::span<const uint8_t> data)
-        {
-            return data.size() >= 28 && memcmp(data.data(), "GFF V4.0PC  ", 12) == 0;
-        }
-
-        // From a file's first 12 bytes.
-        bool IsPcGffHead(std::span<const uint8_t> head)
-        {
-            return head.size() >= 12 && memcmp(head.data(), "GFF V4.0PC  ", 12) == 0;
-        }
-
-        bool IsPcArchive(std::span<const uint8_t> head)
-        {
-            return head.size() >= 6 && memcmp(head.data(), "E\0R\0F\0", 6) == 0;
-        }
-
         std::vector<uint8_t> ReadHead(const fs::path& path)
         {
-            char head[12] = {};
-            std::ifstream file(path, std::ios::binary);
-            file.read(head, sizeof(head));
-            return std::vector<uint8_t>(head, head + file.gcount());
+            return mods::ReadHead(path, kFormatHeadBytes);
         }
 
-        // Whether a name can be a file's as it is (a name from an archive).
+        // Whether a name can be a file's as it is (a name from an archive): not a
+        // path, nor a device's.
         bool IsPlainName(std::string_view name)
         {
-            if (name.empty() || name == "." || name == ".." || name.back() == '.' || name.back() == ' ')
+            constexpr std::string_view kNotInNames = "<>:\"/\\|?*";
+            if (name.empty() || name.back() == '.' || name.back() == ' ' || IsDeviceName(name))
                 return false;
-            return std::ranges::none_of(name,
-                [](char c) { return uint8_t(c) < 0x20 || std::string_view("<>:\"/\\|?*").find(c) != std::string_view::npos; });
+            return std::ranges::all_of(name,
+                [&](char c) { return uint8_t(c) >= 0x20 && kNotInNames.find(c) == std::string_view::npos; });
         }
 
         // A PC archive: ERF V2.0, or V2.2 (whose files may be compressed), with UTF-16 names.
@@ -260,6 +246,15 @@ namespace dao::mods
                         return std::string("it's damaged");
                     archive.entries_.push_back(std::move(entry));
                 }
+                // Files don't share data (else a small archive could unpack to a lot).
+                std::vector<std::pair<uint64_t, uint64_t>> spans;   // (offset, end)
+                for (const Entry& entry : archive.entries_)
+                    if (entry.packedSize)
+                        spans.emplace_back(entry.offset, uint64_t(entry.offset) + entry.packedSize);
+                std::ranges::sort(spans);
+                for (size_t i = 1; i < spans.size(); ++i)
+                    if (spans[i].first < spans[i - 1].second)
+                        return std::string("it's damaged (its files overlap)");
                 return archive;
             }
 
@@ -296,11 +291,6 @@ namespace dao::mods
             std::vector<Entry> entries_;
         };
 
-        bool IsUnder(const fs::path& path, std::string_view folder)
-        {
-            return std::ranges::any_of(path, [&](const fs::path& part) { return Lower(Utf8(part)) == folder; });
-        }
-
         // Normal maps by name, for those no material in the mod names.
         bool LooksLikeNormalMap(std::string_view stem)
         {
@@ -308,20 +298,6 @@ namespace dao::mods
                 if (stem.ends_with(end))
                     return true;
             return false;
-        }
-
-        // An attribute's value in an XML element's text.
-        std::string_view Attribute(std::string_view element, std::string_view name)
-        {
-            for (size_t at = element.find(name); at != std::string_view::npos; at = element.find(name, at + 1))
-            {
-                const size_t value = at + name.size();
-                if (at == 0 || !isspace(uint8_t(element[at - 1])) || element.substr(value, 2) != "=\"")
-                    continue;
-                const size_t end = element.find('"', value + 2);
-                return end == std::string_view::npos ? std::string_view() : element.substr(value + 2, end - value - 2);
-            }
-            return {};
         }
 
         // A menu atlas's layout (atl_<name>_dat.xml): the pages (atl_<name>_00.dds, ...)
@@ -342,15 +318,15 @@ namespace dao::mods
             {
                 const std::string_view element = xml.substr(at, xml.find('>', at) - at);
                 if (element.starts_with("<AtlasTexture"))
-                    page = Lower(Attribute(element, "Name"));
+                    page = Lower(XmlAttribute(element, "Name"));
                 else if (element.starts_with("<SourceTexture"))
                 {
-                    const std::string place(Attribute(element, "OffsetAndScale"));
+                    const std::string place(XmlAttribute(element, "OffsetAndScale"));
                     float v[4];
                     if (sscanf(place.c_str(), "%f %f %f %f", &v[0], &v[1], &v[2], &v[3]) != 4)
                         continue;
                     places.insert(fmt::format("{} {} {} {} {} {}", page, lround(v[0] * 4096), lround(v[1] * 4096),
-                        lround(v[2] * 4096), lround(v[3] * 4096), Attribute(element, "OriginalImageSize")));
+                        lround(v[2] * 4096), lround(v[3] * 4096), XmlAttribute(element, "OriginalImageSize")));
                 }
             }
             return places;
@@ -363,9 +339,9 @@ namespace dao::mods
             for (size_t at = mao.find("<Texture"); at != std::string_view::npos; at = mao.find("<Texture", at + 1))
             {
                 const std::string_view element = mao.substr(at, mao.find('>', at) - at);
-                if (Lower(Attribute(element, "Name")).find("normal") == std::string::npos)
+                if (Lower(XmlAttribute(element, "Name")).find("normal") == std::string::npos)
                     continue;
-                const std::string texture = Lower(Attribute(element, "ResName"));
+                const std::string texture = Lower(XmlAttribute(element, "ResName"));
                 out.insert(texture.substr(0, texture.rfind('.')));
             }
         }
@@ -386,7 +362,7 @@ namespace dao::mods
             fs::path target;      // the 360 file
             TextureOptions texture;
             bool distant = false;   // a copy for distant models
-            fs::path temp;          // written here first
+            fs::path temp;          // converted, in the work folder
         };
 
         // Animation curves (CURV, in dialogs' and cutscenes' animations): the PC's have
@@ -400,14 +376,13 @@ namespace dao::mods
         constexpr uint32_t kKeyTime = 5370, kKeyValue = 5371, kTangentType = 5380;
         constexpr uint8_t kStraightTangent = 1;
 
-        // Converts the file's PC curves to the 360's form; the number whose tangents
-        // weren't straight (and became so).
-        size_t ConvertCurves(gff::File& file)
+        // Gives PC curve templates the 360's fields; their struct ids.
+        std::set<uint32_t> ConvertCurveTemplates(std::vector<gff::Template>& templates)
         {
-            std::set<uint32_t> curves;   // struct ids
-            for (uint32_t sid = 0; sid < file.templates.size(); ++sid)
+            std::set<uint32_t> curves;
+            for (uint32_t sid = 0; sid < templates.size(); ++sid)
             {
-                gff::Template& tpl = file.templates[sid];
+                gff::Template& tpl = templates[sid];
                 if (tpl.fourcc != kCurve || !tpl.Find(kCurveKeys) || tpl.Find(kCurveFloats))
                     continue;
                 std::erase_if(tpl.fields,
@@ -416,6 +391,14 @@ namespace dao::mods
                 std::ranges::sort(tpl.fields, {}, &gff::FieldDef::label);
                 curves.insert(sid);
             }
+            return curves;
+        }
+
+        // Converts the file's PC curves to the 360's form; the number whose tangents
+        // weren't straight (and became so).
+        size_t ConvertCurves(gff::File& file)
+        {
+            const std::set<uint32_t> curves = ConvertCurveTemplates(file.templates);
             if (curves.empty())
                 return 0;
             auto f32 = [](float value) {
@@ -472,27 +455,33 @@ namespace dao::mods
             return bent;
         }
 
-        std::variant<std::vector<uint8_t>, std::string> ConvertGff(std::span<const uint8_t> data, const Catalog& catalog)
+        std::variant<std::vector<uint8_t>, std::string> ConvertGff(std::span<const uint8_t> data,
+            const Catalog& catalog, const std::string& label)
         {
-            auto file = gff::Read(data);
-            if (!file)
-                return std::string("it isn't a well-formed GFF file");
-            if (const size_t bent = ConvertCurves(*file))
-                LOGW("Convert: {} animation curves had tangents other than straight ones, which they now have", bent);
-            if (file->type == gff::Fourcc{ 'M', 'E', 'S', 'H' })
-                if (auto error = ConvertMesh(*file))
-                    return *error;
-            std::vector<gff::Template> templates;
-            for (const gff::Template& tpl : file->templates)
-            {
-                auto layout = catalog.For(file->type, tpl, file->templates);
-                if (auto* error = std::get_if<std::string>(&layout))
-                    return *error;
-                templates.push_back(std::move(std::get<gff::Template>(layout)));
-            }
             try
             {
+                auto file = gff::Read(data);
+                if (!file)
+                    return std::string("it isn't a well-formed GFF file");
+                if (const size_t bent = ConvertCurves(*file))
+                    LOGW("Convert: {}: {} animation curves had tangents other than straight ones, which they now have",
+                        label, bent);
+                if (file->type == gff::Fourcc{ 'M', 'E', 'S', 'H' })
+                    if (auto error = ConvertMesh(*file))
+                        return *error;
+                std::vector<gff::Template> templates;
+                for (const gff::Template& tpl : file->templates)
+                {
+                    auto layout = catalog.For(file->type, tpl, file->templates);
+                    if (auto* error = std::get_if<std::string>(&layout))
+                        return *error;
+                    templates.push_back(std::move(std::get<gff::Template>(layout)));
+                }
                 return gff::WriteX360(*file, templates);
+            }
+            catch (const std::bad_alloc&)
+            {
+                return std::string("it's too big to convert");
             }
             catch (const std::exception& error)
             {
@@ -506,15 +495,10 @@ namespace dao::mods
             return file.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size())) && file.flush();
         }
 
-        // mods/.originals/<mod>, or "<mod> (2)" and so on if that's taken.
+        // mods/.originals/<mod> (converting a mod again adds to it).
         fs::path OriginalsFolder(const fs::path& modFolder)
         {
-            const fs::path root = modFolder.parent_path() / kOriginalsFolder;
-            fs::path folder = root / modFolder.filename();
-            std::error_code ec;
-            for (int n = 2; fs::exists(folder, ec); ++n)
-                folder = root / (modFolder.filename().native() + L" (" + std::to_wstring(n) + L")");
-            return folder;
+            return modFolder.parent_path() / kOriginalsFolder / modFolder.filename();
         }
 
         std::string Relative(const fs::path& path, const fs::path& base)
@@ -527,36 +511,30 @@ namespace dao::mods
         class Conversion
         {
         public:
-            Conversion(const fs::path& modFolder, const fs::path& gameRoot, std::stop_token stop, ConvertResult& result)
-                : mod_(modFolder), gameRoot_(gameRoot), stop_(stop), result_(result),
-                  unpackRoot_(modFolder.parent_path() / kUnpackFolder /
+            Conversion(const fs::path& modFolder, const fs::path& gameRoot, const GameFiles& game,
+                std::stop_token stop, ConvertResult& result)
+                : mod_(modFolder), gameRoot_(gameRoot), game_(game), stop_(stop), result_(result),
+                  work_(modFolder.parent_path() / kWorkFolder /
                       (modFolder.filename().native() + L"-" + std::to_wstring(GetCurrentProcessId())))
             {
-            }
-
-            ~Conversion()
-            {
-                RemoveTemps();
-                std::error_code ec;
-                fs::remove_all(unpackRoot_, ec);
-                fs::remove(unpackRoot_.parent_path(), ec);   // Only if empty.
             }
 
             void Run()
             {
                 Gather();
-                if (!result_.problems.empty())
+                if (!result_.problems.empty() || Stopped())
                     return;
-                const GameFiles game = GameFiles::Read(gameRoot_, stop_);
-                FixAtlases(game);
+                FixAtlases();
+                if (Stopped())
+                    return;
                 if (jobs_.empty() && aside_.empty())
                 {
                     result_.problems.push_back("It has no files in the PC version's formats.");
                     return;
                 }
                 MarkNormalMaps();
-                AddDistantCopies(game);
-                if (!ConvertAll())
+                AddDistantCopies();
+                if (Stopped() || !ConvertAll())
                     return;
                 PutInPlace();
                 if (result_.converted && manifest_)
@@ -564,6 +542,17 @@ namespace dao::mods
             }
 
         private:
+            // Whether to stop (said once).
+            bool Stopped()
+            {
+                if (stop_.stop_requested() && !stopped_)
+                {
+                    stopped_ = true;
+                    result_.problems.push_back("Stopped.");
+                }
+                return stopped_;
+            }
+
             void Gather()
             {
                 std::vector<fs::path> files;
@@ -571,7 +560,7 @@ namespace dao::mods
                 for (auto it = fs::recursive_directory_iterator(mod_, ec);
                      !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
                 {
-                    if (it->is_regular_file(ec))
+                    if (std::error_code fileEc; it->is_regular_file(fileEc))
                         files.push_back(it->path());
                 }
                 if (ec)
@@ -583,9 +572,12 @@ namespace dao::mods
                 std::vector<fs::path> archives, packages;
                 for (const fs::path& path : files)
                 {
+                    if (Stopped())
+                        return;
                     const fs::path relative = path.lexically_relative(mod_);
                     const std::string extension = Lower(Utf8(path.extension()));
-                    const auto head = ReadHead(path);
+                    // (Only those that may be PC files are read.)
+                    const auto head = extension == ".xds" || IsDocument(path) ? std::vector<uint8_t>() : ReadHead(path);
                     if (IsInAddinModule(relative))
                     {
                         // An installed package's module: of no use here.
@@ -605,7 +597,7 @@ namespace dao::mods
                         if (!fs::exists(target, ec))
                             AddJob({ Kind::Texture, path, -1, 0, Relative(path, mod_), target });
                     }
-                    else if (IsPcGffHead(head))
+                    else if (IsPcGff(head))
                     {
                         aside_.push_back(path);
                         AddJob({ Kind::Other, path, -1, 0, Relative(path, mod_), path });
@@ -626,6 +618,8 @@ namespace dao::mods
                 }
                 for (const fs::path& path : packages)
                 {
+                    if (Stopped())
+                        return;
                     aside_.push_back(path);
                     const fs::path into = IsUnder(path.lexically_relative(mod_).parent_path(), "override")
                         ? path.parent_path() / path.stem()
@@ -645,8 +639,8 @@ namespace dao::mods
                 const std::string key = Lower(Utf8(job.target));
                 if (const auto it = targets_.find(key); it != targets_.end())
                 {
-                    result_.notes.push_back(fmt::format("{} and {} both make {}: kept the first.", jobs_[it->second].label,
-                        job.label, Relative(job.target, mod_)));
+                    result_.notes.push_back(fmt::format("{} and {} both make {}: kept the first.",
+                        jobs_[it->second].label, job.label, Relative(job.target, mod_)));
                     return;
                 }
                 std::error_code ec;
@@ -703,25 +697,25 @@ namespace dao::mods
             void AddPackage(const fs::path& path, const fs::path& into)
             {
                 const std::string label = Relative(path, mod_);
-                const fs::path work = unpackRoot_ / std::to_wstring(++unpacked_);
+                const fs::path unpacked = work_.Dir() / L"packages" / std::to_wstring(++unpacked_);
                 std::error_code ec;
-                fs::create_directories(work, ec);
+                fs::create_directories(unpacked, ec);
                 std::string error;
-                if (ec || !UnpackArchive(path, work, stop_, error))
+                if (ec || !UnpackArchive(path, unpacked, stop_, error))
                 {
                     result_.leftOut.push_back(fmt::format("{}: {}", label, ec ? ec.message() : error));
                     return;
                 }
                 // Its files are in Contents/; Manifest.xml beside it describes it (the
                 // first package's describes the mod).
-                const fs::path contents = work / "Contents";
-                if (!manifest_ && fs::is_regular_file(work / "Manifest.xml", ec))
-                    manifest_ = work / "Manifest.xml";
+                const fs::path contents = unpacked / "Contents";
+                if (!manifest_ && fs::is_regular_file(unpacked / "Manifest.xml", ec))
+                    manifest_ = unpacked / "Manifest.xml";
                 std::vector<fs::path> archives;
                 for (auto it = fs::recursive_directory_iterator(contents, ec);
-                     !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+                     !ec && it != fs::recursive_directory_iterator() && !Stopped(); it.increment(ec))
                 {
-                    if (!it->is_regular_file(ec))
+                    if (std::error_code fileEc; !it->is_regular_file(fileEc))
                         continue;
                     const fs::path relative = it->path().lexically_relative(contents);
                     if (IsInAddinModule(relative))
@@ -731,8 +725,7 @@ namespace dao::mods
                     }
                     const std::string entryLabel = label + "/" + WideToUtf8(relative.generic_wstring());
                     fs::path target = into / relative;
-                    const auto head = ReadHead(it->path());
-                    if (IsPcArchive(head))
+                    if (IsPcArchive(ReadHead(it->path())))
                         archives.push_back(it->path());
                     else if (Lower(Utf8(target.extension())) == ".dds")
                     {
@@ -750,17 +743,48 @@ namespace dao::mods
                 }
             }
 
-            std::optional<std::vector<uint8_t>> Load(const Job& job) const
+            // What's read counts toward kMaxReadBytes; past it, nothing more is.
+            std::optional<std::vector<uint8_t>> Counted(std::optional<std::vector<uint8_t>> data)
             {
-                return job.archive >= 0 ? archives_[job.archive].Read(archives_[job.archive].Entries()[job.entry])
-                                        : ReadAll(job.source);
+                if (data && (readBytes_ += data->size()) > kMaxReadBytes)
+                {
+                    tooMuch_ = true;
+                    return std::nullopt;
+                }
+                return data;
+            }
+
+            // A job's file (unpacked).
+            std::optional<std::vector<uint8_t>> Load(const Job& job)
+            {
+                if (tooMuch_)
+                    return std::nullopt;
+                return Counted(job.archive >= 0
+                        ? archives_[job.archive].Read(archives_[job.archive].Entries()[job.entry])
+                        : ReadAll(job.source, kMaxFileBytes));
+            }
+
+            // Enough of a job's PC GFF file for its struct templates: a loose file's
+            // are before its data, so the rest isn't read.
+            std::optional<std::vector<uint8_t>> LoadTemplates(const Job& job)
+            {
+                constexpr size_t kGffHeaderBytes = 28, kDataOffsetAt = 24;
+                if (job.archive >= 0)
+                    return Load(job);
+                const auto header = mods::ReadHead(job.source, kGffHeaderBytes);
+                std::error_code ec;
+                const uintmax_t size = fs::file_size(job.source, ec);
+                if (header.size() < kGffHeaderBytes || !IsPcGff(header) || ec || tooMuch_)
+                    return std::nullopt;
+                const uintmax_t templatesEnd = std::min<uintmax_t>(ui::ReadLE32(header, kDataOffsetAt), size);
+                return Counted(mods::ReadHead(job.source, size_t(std::min<uintmax_t>(templatesEnd, kMaxFileBytes))));
             }
 
             // Menu atlases replacing the game's: the 360 version's menus name their pictures
             // differently, and use some the PC's don't have, so a PC layout fails them.
             // Where the mod's pages have every picture of the game's layout in its place,
             // the game's layout is used with them; otherwise the atlas is left out.
-            void FixAtlases(const GameFiles& game)
+            void FixAtlases()
             {
                 constexpr uint32_t kMaxLayoutBytes = 1 << 20;
                 struct Layout
@@ -771,7 +795,8 @@ namespace dao::mods
                 };
                 std::vector<Layout> layouts;
                 for (const fs::path& path : atlases_)
-                    layouts.push_back({ Lower(Utf8(path.filename())), Relative(path, mod_), ReadAll(path), path });
+                    layouts.push_back({ Lower(Utf8(path.filename())), Relative(path, mod_),
+                        ReadAll(path, kMaxLayoutBytes), path });
                 for (const Job& job : jobs_)
                 {
                     if (const std::string name = Lower(Utf8(job.target.filename())); IsAtlasLayout(name))
@@ -780,7 +805,9 @@ namespace dao::mods
                 std::set<std::string> drop;   // the lower-case names (without extensions) of jobs' targets
                 for (const Layout& layout : layouts)
                 {
-                    const auto own = game.ReadFile(layout.name, kMaxLayoutBytes);
+                    if (Stopped())
+                        return;
+                    const auto own = game_.ReadFile(layout.name, kMaxLayoutBytes);
                     if (!own || !layout.data)
                         continue;   // A new atlas, whose layout is the mod's own.
                     const auto text = [](const std::vector<uint8_t>& data) {
@@ -829,11 +856,14 @@ namespace dao::mods
                 };
                 for (const Job& job : jobs_)
                 {
-                    if (Lower(Utf8(job.target.extension())) == ".mao")
+                    if (Lower(Utf8(job.target.extension())) == ".mao" && !Stopped())
                         find(Load(job));
                 }
                 for (const fs::path& material : materials_)
-                    find(ReadAll(material));
+                {
+                    if (!Stopped())
+                        find(Counted(ReadAll(material, kMaxFileBytes)));
+                }
                 for (Job& job : jobs_)
                 {
                     const std::string stem = Lower(Utf8(job.target.stem()));
@@ -844,7 +874,7 @@ namespace dao::mods
 
             // Where the mod replaces a game file the 360 version has smaller copies of
             // (for distant models), the same copies of the mod's.
-            void AddDistantCopies(const GameFiles& game)
+            void AddDistantCopies()
             {
                 // The mod's own materials (XML, the same on both) are copied as they are.
                 const size_t count = jobs_.size();
@@ -856,7 +886,7 @@ namespace dao::mods
                 {
                     const Job base = i < count ? jobs_[i] : materials[i - count];
                     const std::string name = Lower(Utf8(base.target.filename()));
-                    if (!game.Has(name))
+                    if (!game_.Has(name))
                         continue;
                     const std::string stem = Lower(Utf8(base.target.stem()));
                     const std::string extension = Lower(Utf8(base.target.extension()));
@@ -878,7 +908,7 @@ namespace dao::mods
                     }
                     for (const auto& [copyName, drop] : copies)
                     {
-                        if (!game.Has(copyName))
+                        if (!game_.Has(copyName))
                             continue;
                         Job copy = base;
                         copy.target = copy.target.parent_path() / FromUtf8(copyName);
@@ -895,28 +925,36 @@ namespace dao::mods
                         added, added == 1 ? "y" : "ies"));
             }
 
-            // Converts every job to a temporary file next to its target; false if none could be.
+            // Converts every job to a file in the work folder; false if none could be.
             bool ConvertAll()
             {
                 const Catalog catalog = BuildCatalog();
+                const fs::path out = work_.Dir() / L"out";
+                std::error_code ec;
+                fs::create_directories(out, ec);
                 std::set<std::string> failed;   // labels, once each
-                for (Job& job : jobs_)
+                for (size_t i = 0; i < jobs_.size(); ++i)
                 {
-                    if (stop_.stop_requested())
-                    {
-                        result_.problems.push_back("Stopped.");
+                    Job& job = jobs_[i];
+                    if (Stopped())
                         return false;
-                    }
                     if (failed.contains(job.label))
                         continue;
                     const auto data = Load(job);
+                    if (tooMuch_)
+                    {
+                        result_.problems.push_back(fmt::format("It unpacks to more than {} GB, more than a mod "
+                                                               "could hold: it may be damaged.",
+                            kMaxReadBytes >> 30));
+                        return false;
+                    }
                     std::variant<std::vector<uint8_t>, std::string> converted;
                     if (!data)
                         converted = std::string("it can't be read");
                     else if (job.kind == Kind::Texture)
                         converted = ConvertTexture(*data, job.texture);
                     else if (IsPcGff(*data))
-                        converted = ConvertGff(*data, catalog);
+                        converted = ConvertGff(*data, catalog, job.label);
                     else
                         converted = *data;
                     if (auto* error = std::get_if<std::string>(&converted))
@@ -925,17 +963,21 @@ namespace dao::mods
                         result_.leftOut.push_back(fmt::format("{}: {}", job.label, *error));
                         continue;
                     }
-                    std::error_code ec;
-                    fs::create_directories(job.target.parent_path(), ec);
-                    job.temp = job.target;
-                    job.temp += kTempSuffix;
-                    if (ec || !WriteAll(job.temp, std::get<std::vector<uint8_t>>(converted)))
+                    const auto& bytes = std::get<std::vector<uint8_t>>(converted);
+                    const uintmax_t free = fs::space(out, ec).available;
+                    if (!ec && free < kMinFreeBytes + bytes.size())
+                    {
+                        result_.problems.push_back("The drive is nearly full.");
+                        return false;
+                    }
+                    job.temp = out / std::to_wstring(i);
+                    if (!WriteAll(job.temp, bytes))
                     {
                         result_.problems.push_back(fmt::format("Can't write {}.", Relative(job.target, mod_)));
                         return false;
                     }
                 }
-                if (!jobs_.empty() && std::ranges::none_of(jobs_, [](const Job& job) { return !job.temp.empty(); }))
+                if (!jobs_.empty() && std::ranges::all_of(jobs_, [](const Job& job) { return job.temp.empty(); }))
                 {
                     result_.problems.push_back("None of its files could be converted.");
                     return false;
@@ -944,21 +986,26 @@ namespace dao::mods
             }
 
             // The game's layouts for every struct of the mod's GFF files, from the game's
-            // files with the same extensions (stopping once every struct has an exact match).
+            // files with the same extensions: until every struct has an exact match, or
+            // kMaxFruitlessGameFiles in a row add none.
             Catalog BuildCatalog()
             {
                 std::set<std::string> extensions;
                 std::set<std::string> wanted;
                 for (const Job& job : jobs_)
                 {
+                    if (Stopped())
+                        return {};
                     if (job.kind != Kind::Other || job.distant)
                         continue;
-                    const auto data = Load(job);
+                    const auto data = LoadTemplates(job);
                     if (!data || !IsPcGff(*data))
                         continue;
-                    const auto templates = gff::ReadTemplates(*data);
+                    auto templates = gff::ReadTemplates(*data);
                     if (!templates)
                         continue;
+                    // As they'll be.
+                    ConvertCurveTemplates(*templates);
                     extensions.insert(Lower(Utf8(job.target.extension())));
                     gff::Fourcc type;
                     memcpy(type.data(), data->data() + 12, 4);
@@ -968,6 +1015,7 @@ namespace dao::mods
                 Catalog catalog;
                 if (extensions.empty())
                     return catalog;
+                int fruitless = 0;
                 std::error_code ec;
                 for (const auto& archive : fs::directory_iterator(gameRoot_ / "packages" / "core" / "data", ec))
                 {
@@ -978,7 +1026,7 @@ namespace dao::mods
                         continue;
                     for (const auto& entry : erf->Entries())
                     {
-                        if (stop_.stop_requested() || wanted.empty())
+                        if (Stopped() || wanted.empty() || fruitless >= kMaxFruitlessGameFiles)
                             return catalog;
                         const size_t dot = entry.name.rfind('.');
                         if (dot == std::string::npos || !extensions.contains(Lower(entry.name.substr(dot))))
@@ -987,7 +1035,9 @@ namespace dao::mods
                         if (!data || data->size() < 28 || memcmp(data->data(), "GFF V4.0", 8) != 0)
                             continue;
                         catalog.Add(*data);
+                        const size_t before = wanted.size();
                         std::erase_if(wanted, [&](const std::string& key) { return catalog.Has(key); });
+                        fruitless = wanted.size() < before ? 0 : fruitless + 1;
                     }
                 }
                 return catalog;
@@ -1027,7 +1077,9 @@ namespace dao::mods
                     if (job.temp.empty())
                         continue;
                     const bool replaces = std::ranges::find(aside_, job.target) != aside_.end();
-                    fs::rename(job.temp, job.target, ec);
+                    fs::create_directories(job.target.parent_path(), ec);
+                    if (!ec)
+                        fs::rename(job.temp, job.target, ec);
                     if (ec)
                     {
                         result_.problems.push_back(
@@ -1045,25 +1097,16 @@ namespace dao::mods
                     Utf8(mod_.filename()), result_.files, result_.leftOut.size(), Utf8(originals));
             }
 
-            void RemoveTemp(Job& job)
-            {
-                std::error_code ec;
-                if (!job.temp.empty())
-                    fs::remove(job.temp, ec);
-                job.temp.clear();
-            }
-
-            void RemoveTemps()
-            {
-                for (Job& job : jobs_)
-                    RemoveTemp(job);
-            }
-
             const fs::path mod_, gameRoot_;
+            const GameFiles& game_;
             const std::stop_token stop_;
             ConvertResult& result_;
-            const fs::path unpackRoot_;
+            bool stopped_ = false;
+            // Unpacked packages and converted files (removed at the end).
+            const LockedFolder work_;
             int unpacked_ = 0;
+            uint64_t readBytes_ = 0;
+            bool tooMuch_ = false;   // more than kMaxReadBytes
             std::vector<PcArchive> archives_;
             std::vector<Job> jobs_;
             std::unordered_map<std::string, size_t> targets_;   // lower-case target -> job
@@ -1076,31 +1119,19 @@ namespace dao::mods
         };
     }
 
-    ConvertResult ConvertPcMod(const fs::path& modFolder, const fs::path& gameRoot, std::stop_token stop)
+    ConvertResult ConvertPcMod(const fs::path& modFolder, const fs::path& gameRoot, std::stop_token stop,
+        const GameFiles* game)
     {
         ConvertResult result;
-        Conversion(modFolder, gameRoot, stop, result).Run();
+        std::optional<GameFiles> read;
+        if (!game)
+            game = &read.emplace(GameFiles::Read(gameRoot, stop));
+        Conversion(modFolder, gameRoot, *game, stop, result).Run();
         return result;
     }
 
     void CleanUpConversions(const fs::path& modsRoot)
     {
-        // Each conversion's folder ends in its process's ID: those of a running one stay.
-        const fs::path unpack = modsRoot / kUnpackFolder;
-        std::error_code ec;
-        for (const auto& entry : fs::directory_iterator(unpack, ec))
-        {
-            const std::wstring name = entry.path().filename().native();
-            const DWORD pid = wcstoul(name.c_str() + name.rfind(L'-') + 1, nullptr, 10);
-            if (HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid))
-            {
-                const bool running = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
-                CloseHandle(process);
-                if (running)
-                    continue;
-            }
-            fs::remove_all(entry.path(), ec);
-        }
-        fs::remove(unpack, ec); // Only if empty.
+        RemoveUnlockedFolders(modsRoot / kWorkFolder);
     }
 }

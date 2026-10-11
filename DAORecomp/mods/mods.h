@@ -9,7 +9,8 @@
 //
 // Mods made for the PC version are found by their files (PC models and other GFF
 // files, .dds textures, PC archives), which the Xbox 360 engine can't read, and
-// aren't loaded: a mod's other files usually refer to them.
+// aren't loaded: a mod's other files usually refer to them. The launcher can
+// convert them (mods/convert/convert.h).
 //
 // Other things in a mod that may not work on this version (PC menus, PC sound
 // banks, add-in modules, files the game won't see, ...) are found the same way and
@@ -54,24 +55,33 @@ namespace dao::mods
     // Where converting keeps a mod's PC files: mods/.originals/<mod folder>/.
     constexpr char kOriginalsFolder[] = ".originals";
 
+    // How much Describe finds out.
+    enum class Detail
+    {
+        Full,      // everything, for the launcher's list
+        Loading,   // whether it's for the PC version (and its name): all the game needs
+    };
+
     // A mod folder's description (mod.toml), file count, PC files and warnings.
     // With the game's file names, also warns of scripts and tables it replaces whole.
-    ModInfo Describe(const std::filesystem::path& folder, const GameFiles* game = nullptr);
+    ModInfo Describe(const std::filesystem::path& folder, const GameFiles* game = nullptr,
+        Detail detail = Detail::Full);
 
     // The folders under mods/ in the saved load order (see Describe). Folders not
     // in the saved list are appended (enabled); saved entries whose folder is gone
     // are dropped.
     std::vector<ModInfo> Scan(const std::filesystem::path& modsRoot, const std::vector<ModState>& saved,
-        const GameFiles* game = nullptr);
+        const GameFiles* game = nullptr, Detail detail = Detail::Full);
     std::vector<ModState> ToState(const std::vector<ModInfo>& mods);
 
     // Sets each loaded mod's overlap: the other loaded mods changing its files (of
     // which the game uses one each). Again after the load order or a mod changes.
     void FindOverlaps(std::vector<ModInfo>& mods);
 
-    // Moves a mod's folder (and the PC files kept from converting it) to the Recycle
-    // Bin; Windows asks first if it would have to delete them for good. False, and
-    // why in `error`, if it didn't.
+    // Moves a mod's folder (and the PC files kept from converting it, in
+    // mods/.originals/<folder>/) to the Recycle Bin; Windows asks first if it would
+    // have to delete them for good. A folder that's a link: only the link goes.
+    // False, and why in `error`, if it didn't.
     bool RecycleMod(const std::filesystem::path& modsRoot, const std::string& folder, std::string& error);
 
     // Whether a path in a mod or package is in an add-in's module (addins/<id>/module/):

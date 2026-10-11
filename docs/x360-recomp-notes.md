@@ -160,8 +160,31 @@ are DAO's; the patterns are what matter.
   - PC textures are `.dds` (Xbox 360 ones are `.xds`);
   - PC archives have UTF-16 headers.
 
-  Loading PC files crashes the engine, so detect them and refuse them. A converter
-  (byte-swap GFF, re-tile textures) is possible later.
+  Loading PC files crashes the engine, so detect them and refuse them, and offer to
+  convert them (`DAORecomp/mods/convert/`). What converting took:
+  - GFF: not just a byte swap. The 360's structs have other field offsets and
+    alignments, so the tree is read and written again. Take each struct's layout from
+    the game's own files of the same type; derive one the way the game lays them out
+    only when the game has none. The engine reads fields by label and falls back to a
+    default for a missing one, so extra or missing fields are safe.
+  - Some structs changed: the PC's animation curves (`CURV`) keep keyframes and
+    tangents as struct lists, the 360's as one float list.
+  - Meshes: vertices in the 360's formats (packed normals and tangents, half floats)
+    and declarations; vertex and index data padded as the game's own files are.
+  - Textures: `.dds` to `.xds` (tiled, with the trailer), PC normal maps (DXT5 with X
+    in alpha) to DXN, as the 360's are.
+  - Distant models: the 360 has smaller copies of models, materials and textures
+    (`_1`–`_3`, `_l2`/`_l3`, `l2`/`l3`). A mod replacing only the full one shows the
+    game's own from a distance, so the copies are made from the mod's too.
+  - Menu atlases name their pictures differently on the two versions; a PC layout
+    makes the 360's menus fail. Use the game's layout when the mod's pages have every
+    picture in the same place, otherwise leave the atlas out.
+  - Scripts (`.ncs`) are the same format on both, but a script may call engine
+    functions newer than the 360's (it has up to 871): decode the calls to warn.
+  - Mods are untrusted input: bound every archive, GFF and texture read, refuse
+    overlapping archive entries and device names, cap what a conversion unpacks,
+    check free space, and do the work aside so an interrupted conversion changes
+    nothing.
 - File-override mods layered over the disc in a load order (a VFS overlay) cover most
   needs, without touching game files.
 - Paths on Windows: never use `path::string()` for user or mod paths. It's in the ANSI
