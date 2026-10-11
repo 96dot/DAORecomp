@@ -22,10 +22,6 @@ DECLARE_int32(anisotropic_override);
 DECLARE_double(present_hdr_paper_white);
 DECLARE_double(present_hdr_peak);
 
-// The engine's Flash callbacks: the movie (as a ref-counted pointer) a callback
-// returns its value to.
-PPC_EXTERN_FUNC(sub_82282DE0);
-
 namespace dao::ui
 {
     namespace
@@ -80,14 +76,16 @@ namespace dao::ui
         constexpr double kSliderSteps = 10.0;
 
         // The engine's switches for the PC version's EnableShadows and
-        // EnableFrameBufferEffects options, which its options code (82274168) sets
-        // from those options: the shadows bit of the big-endian render flags word at
-        // 83211E54 (in its last byte) and a byte.
-        constexpr uint32_t kRenderFlagsLowByte = 0x83211E57;
+        // EnableFrameBufferEffects options, which its options code (82274168;
+        // 82293E88 in Title Update 6) sets from those options: the shadows bit of
+        // the big-endian render flags word at 83211E54 (832E238C; in its last
+        // byte) and a byte.
+        constexpr kernel::GameAddress kRenderFlagsLowByte{ 0x83211E57, 0x832E238F };
         constexpr uint8_t kRenderFlagShadows = 2;
-        constexpr uint32_t kFrameBufferEffects = 0x83211E0B;
-        // The options object (a pointer) and its two options (bytes).
-        constexpr uint32_t kOptions = 0x83211BB8;
+        constexpr kernel::GameAddress kFrameBufferEffects{ 0x83211E0B, 0x832E23D4 };
+        // The options object (a pointer) and its two options (bytes, at the same
+        // offsets in both builds).
+        constexpr kernel::GameAddress kOptions{ 0x83211BB8, 0x832E20F0 };
         constexpr uint32_t kOptionEnableShadows = 0x510;
         constexpr uint32_t kOptionEnableFrameBufferEffects = 0x520;
 
@@ -418,8 +416,12 @@ namespace dao::ui
             return std::string_view(text, strnlen(text, kMaxGuestString));
         }
 
+        // The engine's Flash callbacks: the movie (as a ref-counted pointer) a
+        // callback returns its value to, f(&slot, handler).
+        constexpr kernel::GameAddress kCallbackMovie{ 0x82282DE0, 0x822A3BF8 };
+
         // Returns a value to the Flash call being handled, as the engine's own
-        // callbacks do (GetNumber, 825B5410): the movie from 82282DE0(&slot,
+        // callbacks do (GetNumber, 825B5410): the movie from kCallbackMovie(&slot,
         // handler), its vtable+0xA0 given the value, then released.
         void ReturnValue(PPCContext& ctx, uint8_t* base, uint32_t handler, uint32_t type, double number)
         {
@@ -435,7 +437,7 @@ namespace dao::ui
 
             ctx.r3.u64 = slot;
             ctx.r4.u64 = handler;
-            sub_82282DE0(ctx, base);
+            kernel::g_memory.Call(kCallbackMovie.Get(), ctx);
             const uint32_t movie = PPC_LOAD_U32(slot);
             if (movie)
             {
@@ -444,10 +446,10 @@ namespace dao::ui
                 PPC_STORE_U64(value + 8, std::bit_cast<uint64_t>(number));
                 ctx.r3.u64 = movie;
                 ctx.r4.u64 = value;
-                PPC_CALL_INDIRECT_FUNC(PPC_LOAD_U32(PPC_LOAD_U32(movie) + 0xA0));
+                kernel::g_memory.Call(PPC_LOAD_U32(PPC_LOAD_U32(movie) + 0xA0), ctx);
                 ctx.r3.u64 = movie;
                 ctx.r4.u64 = 0;
-                PPC_CALL_INDIRECT_FUNC(PPC_LOAD_U32(PPC_LOAD_U32(movie + 8) + 4));
+                kernel::g_memory.Call(PPC_LOAD_U32(PPC_LOAD_U32(movie + 8) + 4), ctx);
             }
             ctx.r1.u64 = stack;
         }
@@ -473,12 +475,12 @@ namespace dao::ui
             return;
 
         // Switched back on: the engine's own option, as its options code applies it.
-        const uint32_t options = PPC_LOAD_U32(kOptions);
+        const uint32_t options = PPC_LOAD_U32(kOptions.Get());
         auto option = [&](uint32_t offset) { return !options || PPC_LOAD_U8(options + offset) != 0; };
 
         // The flags' other bits are the engine's, changed as it renders: only this
         // one changes, atomically.
-        std::atomic_ref<uint8_t> flags(base[kRenderFlagsLowByte]);
+        std::atomic_ref<uint8_t> flags(base[kRenderFlagsLowByte.Get()]);
         if (!shadows)
         {
             if (flags.load(std::memory_order_relaxed) & kRenderFlagShadows)
@@ -497,15 +499,15 @@ namespace dao::ui
 
         if (!effects)
         {
-            if (PPC_LOAD_U8(kFrameBufferEffects))
-                PPC_STORE_U8(kFrameBufferEffects, 0);
+            if (PPC_LOAD_U8(kFrameBufferEffects.Get()))
+                PPC_STORE_U8(kFrameBufferEffects.Get(), 0);
             if (!s_effectsForced)
                 LOGI("Engine graphics: post-processing off");
             s_effectsForced = true;
         }
         else if (s_effectsForced)
         {
-            PPC_STORE_U8(kFrameBufferEffects, uint8_t(option(kOptionEnableFrameBufferEffects)));
+            PPC_STORE_U8(kFrameBufferEffects.Get(), uint8_t(option(kOptionEnableFrameBufferEffects)));
             s_effectsForced = false;
             LOGI("Engine graphics: post-processing on");
         }
@@ -514,8 +516,7 @@ namespace dao::ui
 
 // FSCommand SendMessage (ExternalCommands.SendMessage): r4 = the message. The
 // tab's own messages stop here; the menu's commit also saves its settings.
-extern "C" PPC_FUNC(__imp__sub_825AF710);
-PPC_FUNC(sub_825AF710)
+static void SendMessageHook(PPCContext& ctx, uint8_t* base, PPCFunc* original)
 {
     using namespace dao::ui;
     std::string_view message = GuestString(base, ctx.r4.u32);
@@ -526,13 +527,13 @@ PPC_FUNC(sub_825AF710)
     }
     if (message == "ClientOptions.CommitOptions")
         SaveMenuSettings();
-    __imp__sub_825AF710(ctx, base);
+    original(ctx, base);
 }
+GAME_HOOK(sub_825AF710, tu6_sub_825E47B0, SendMessageHook)
 
 // ExternalInterface GetNumber: r3 = the handler, r4 = the arguments (GFx values:
 // type at +0, data at +8), r5 = their count. Answers "DAORecomp.<name>".
-extern "C" PPC_FUNC(__imp__sub_825B5410);
-PPC_FUNC(sub_825B5410)
+static void GetNumberHook(PPCContext& ctx, uint8_t* base, PPCFunc* original)
 {
     using namespace dao::ui;
     if (ctx.r5.u32 == 1 && PPC_LOAD_U32(ctx.r4.u32) == kGfxString)
@@ -547,5 +548,6 @@ PPC_FUNC(sub_825B5410)
             return;
         }
     }
-    __imp__sub_825B5410(ctx, base);
+    original(ctx, base);
 }
+GAME_HOOK(sub_825B5410, tu6_sub_825E8C28, GetNumberHook)

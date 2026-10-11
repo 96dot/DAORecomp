@@ -5,6 +5,7 @@
 #include "module.h"
 #include "thread.h"
 #include "vfs.h"
+#include "content/content.h"
 
 #include "input/input.h"
 #include "ui/keyboard.h"
@@ -82,7 +83,7 @@ namespace dao::imp
 
     uint32_t XamFree(uint32_t address)
     {
-        if (address >= 0x80000000 && address < PPC_IMAGE_BASE)
+        if (address >= 0x80000000 && address < g_build.info.imageBase)
             KernelFree(address);
         else if (address)
             VirtualHeap4K().Release(address);
@@ -686,6 +687,8 @@ namespace dao::imp
     };
     static_assert(sizeof(XCONTENT_DATA) == 0x134);
 
+    static_assert(sizeof(XCONTENT_DATA::displayName) == content::kDisplayNameSize);
+
     constexpr uint32_t kHddDeviceId = 1;
 
     static std::string ContentFileName(const XCONTENT_DATA& data)
@@ -695,8 +698,7 @@ namespace dao::imp
 
     static fs::path ContentPath(uint32_t contentType, const std::string& fileName)
     {
-        return VfsUserRoot() / "content" / fmt::format("{:08X}", g_module.titleId) /
-            fmt::format("{:08X}", contentType) / fileName;
+        return content::ContentFolder(VfsUserRoot(), g_module.titleId, contentType) / fileName;
     }
 
     static std::string RootName(const char* root)
@@ -748,13 +750,10 @@ namespace dao::imp
         if (result == X_ERROR_SUCCESS)
         {
             fs::create_directories(path, ec);
-            // Display name, for enumeration later.
-            FILE* f = _wfopen((path.parent_path() / (fileName + ".name")).c_str(), L"wb");
-            if (f)
-            {
-                fwrite(data->displayName, 1, sizeof(data->displayName), f);
-                fclose(f);
-            }
+            // Display name, for enumeration later. Only for new content: opening a
+            // save keeps its name (the game passes a fresh one, e.g. the time now).
+            if (disposition == 1)
+                content::WriteDisplayName(path.parent_path(), fileName, data->displayName);
             const std::string device = "\\Device\\Content\\" + root.substr(0, root.size() - 1);
             VfsMountDevice(device, path);
             VfsCreateSymlink(root, device);
@@ -764,8 +763,11 @@ namespace dao::imp
             uint32_t(data->contentType), fileName, flags, result, disposition);
         if (dispositionOut)
             *dispositionOut = disposition;
+        // The game loads a DLC package's files only when this licence covers its
+        // manifest's LicenseMask. The packages are the player's own (installed from
+        // their console): all of their licences are granted.
         if (licenseOut)
-            *licenseOut = 0;
+            *licenseOut = data->contentType == content::kContentMarketplace ? 0xFFFFFFFF : 0;
         return Finish(overlapped, result);
     }
 

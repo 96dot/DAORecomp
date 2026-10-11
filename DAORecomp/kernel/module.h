@@ -19,8 +19,10 @@ namespace dao::kernel
     extern ModuleInfo g_module;
 
     // Decrypts/decompresses the XEX into guest memory, fills kernel variable
-    // imports and sets up TLS. Returns false on failure.
-    bool LoadXex(const std::filesystem::path& path);
+    // imports and sets up TLS. With a patch (a title update's default.xexp), the
+    // patched executable is loaded. The image must be the running build's
+    // (game_build.h). Returns false on failure.
+    bool LoadXex(const std::filesystem::path& path, const std::filesystem::path& patchPath = {});
 
     // RtlImageXexHeaderField semantics on a guest XEX header.
     uint32_t XexHeaderField(uint32_t header, uint32_t key);

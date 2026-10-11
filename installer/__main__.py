@@ -37,6 +37,8 @@ def main():
     parser.add_argument("--iso", help="the Dragon Age: Origins (Xbox 360) disc image (not needed to update an "
                                       "install whose game files are extracted)")
     parser.add_argument("--dest", help="install folder (game files go into its game/ folder)")
+    parser.add_argument("--title-update", help="Title Update 6's package (optional: needed by Awakening and the "
+                                               "DLC campaigns; kept in the install's title_update/ folder)")
     parser.add_argument("--accept-msvc-license", action="store_true",
                         help=f"accept the license of the Microsoft build tools ({deps.MSVC_LICENSE_URL})")
     parser.add_argument("--llvm", default="auto",
@@ -75,8 +77,8 @@ def main():
         parser.error("--dest is needed (and --iso, unless the game files are already extracted there)")
     # Accepted on an earlier run if the CRT/SDK are already set up.
     accept = args.accept_msvc_license or toolchain.winsysroot_ready() or ask_license()
-    options = pipeline.Options(iso=args.iso, dest=args.dest, accept_license=accept, llvm=args.llvm,
-                               jobs=args.jobs, shortcuts=args.shortcuts)
+    options = pipeline.Options(iso=args.iso, dest=args.dest, title_update=args.title_update,
+                               accept_license=accept, llvm=args.llvm, jobs=args.jobs, shortcuts=args.shortcuts)
     reporter = Reporter()
     try:
         if args.prepare_only:

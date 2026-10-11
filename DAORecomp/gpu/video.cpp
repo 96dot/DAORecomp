@@ -247,13 +247,13 @@ namespace dao::imp
 // check; returns nonzero to keep waiting. The render thread spent half its time
 // spinning in it, keeping a core busy (and on handhelds taking power from the
 // GPU): between the checks it now sleeps briefly.
-extern "C" PPC_FUNC(__imp__sub_82CC4338);
-PPC_FUNC(sub_82CC4338)
+static void FenceWaitStepHook(PPCContext& ctx, uint8_t* base, PPCFunc* original)
 {
-    __imp__sub_82CC4338(ctx, base);
+    original(ctx, base);
     if (ctx.r3.u32)
         dao::kernel::ShortSleep(dao::kernel::kSpinSleepMicroseconds);
 }
+GAME_HOOK(sub_82CC4338, tu6_sub_82D8E218, FenceWaitStepHook)
 
 // D3D's swap interrupt handler (runs when the GPU reaches a swap). Its argument
 // packs the front buffer address (high bits), the presentation interval (bits
@@ -266,14 +266,14 @@ PPC_FUNC(sub_82CC4338)
 // dropping to the next vblank, so a frame taking a bit longer than a vblank costs
 // that bit rather than a whole vblank. The guest flip only chooses which frame
 // the host presents next; tearing is up to the host's own vsync setting.
-extern "C" PPC_FUNC(__imp__sub_82CD4218);
-PPC_FUNC(sub_82CD4218)
+static void SwapInterruptHook(PPCContext& ctx, uint8_t* base, PPCFunc* original)
 {
     const uint32_t interval = (ctx.r3.u32 >> 8) & 0xF;
     if (interval >= 1 && dao::gpu::FrameRateUnlocked())
         ctx.r3.u64 = (ctx.r3.u64 & ~uint64_t(0xFFF)) | 0x100 | 100;
-    __imp__sub_82CD4218(ctx, base);
+    original(ctx, base);
 }
+GAME_HOOK(sub_82CD4218, tu6_sub_82D9E0F8, SwapInterruptHook)
 
 DAO_IMPORT_AS(VdQueryVideoMode, dao::imp::VdQueryVideoMode)
 DAO_IMPORT_AS(VdQueryVideoFlags, dao::imp::VdQueryVideoFlags)
@@ -300,29 +300,30 @@ DAO_IMPORT_AS(VdSwap, dao::imp::VdSwap)
 // tile without the game's 2xMSAA: the second predicated tile and the
 // multisampling only cost GPU time (a GPU-bound 4K frame 10.4 -> 9.3 ms).
 // sub_82661640 gives the scene's tile count, and its tile rectangles at *r4:
-// with 2xMSAA, 2 tiles, 1280x512 and 1280x208, at 82144D64. It's called every
-// frame, sets the MSAA type global itself, and the engine makes its render
-// targets from the result, so the scene can go back to 2xMSAA (the upscaler
-// failing) from one frame to the next.
-constexpr uint32_t kSceneMsaaType = 0x8316E35C; // D3DMULTISAMPLE_TYPE, 0: none
-constexpr uint32_t kSceneTileRects = 0x82144D64; // D3DRECT {x1, y1, x2, y2}[2]
-extern "C" PPC_FUNC(__imp__sub_82661640);
-PPC_FUNC(sub_82661640)
+// with 2xMSAA, 2 tiles, 1280x512 and 1280x208, at 82144D64 (8215E5A8 in Title
+// Update 6). It's called every frame, sets the MSAA type global itself, and the
+// engine makes its render targets from the result, so the scene can go back to
+// 2xMSAA (the upscaler failing) from one frame to the next.
+constexpr dao::kernel::GameAddress kSceneMsaaType{ 0x8316E35C, 0x8323E83C }; // D3DMULTISAMPLE_TYPE, 0: none
+constexpr dao::kernel::GameAddress kSceneTileRects{ 0x82144D64, 0x8215E5A8 }; // D3DRECT {x1, y1, x2, y2}[2]
+static void SceneTilesHook(PPCContext& ctx, uint8_t* base, PPCFunc* original)
 {
     dao::ui::ApplyEngineGraphicsOptions(base);
     const uint32_t rectsOut = ctx.r4.u32;
-    __imp__sub_82661640(ctx, base);
+    original(ctx, base);
     if (ctx.r3.s32 != 2)
         return;
+    const uint32_t rects = kSceneTileRects.Get();
     if (dao::gpu::XeniaActive() && dao::gpu::XeniaWantsSingleSampleScene())
     {
-        PPC_STORE_U32(kSceneMsaaType, 0);
-        PPC_STORE_U32(kSceneTileRects + 12, 720); // the first tile covers the screen
-        PPC_STORE_U32(rectsOut, kSceneTileRects);
+        PPC_STORE_U32(kSceneMsaaType.Get(), 0);
+        PPC_STORE_U32(rects + 12, 720); // the first tile covers the screen
+        PPC_STORE_U32(rectsOut, rects);
         ctx.r3.u64 = 1;
     }
     else
     {
-        PPC_STORE_U32(kSceneTileRects + 12, 512);
+        PPC_STORE_U32(rects + 12, 512);
     }
 }
+GAME_HOOK(sub_82661640, tu6_sub_826955E8, SceneTilesHook)

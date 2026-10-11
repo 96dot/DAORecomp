@@ -3,8 +3,11 @@
 *.xex
 /game/
 /ppc/
+/ppc_tu6/
 /analysis/
 /userdata/
+/dlc/
+/title_update/
 /mods/*
 !/mods/README.txt
 
@@ -19,5 +22,5 @@
 __pycache__/
 *.orig
 *.pyc
-/config/DAO.gen.toml
+/config/*.gen.toml
 /dist/

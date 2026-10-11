@@ -143,7 +143,7 @@ namespace dao::imp
             return X_PAGE_READWRITE;
         PageHeap* heap = LookupHeap(address);
         if (!heap)
-            return (address >= PPC_IMAGE_BASE && address < PPC_IMAGE_BASE + PPC_IMAGE_SIZE) ? X_PAGE_READWRITE : 0;
+            return (address - g_build.info.imageBase < g_build.info.imageSize) ? X_PAGE_READWRITE : 0;
         return heap->QueryProtect(address);
     }
 
@@ -208,7 +208,7 @@ namespace dao::imp
         stats->title.physicalPages = uint32_t(physicalUsed / 0x1000);
         stats->title.poolPages = 0x10;
         stats->title.stackPages = 0x100;
-        stats->title.imagePages = PPC_IMAGE_SIZE / 0x1000;
+        stats->title.imagePages = g_build.info.imageSize / 0x1000;
         stats->title.heapPages = 0x100;
         stats->title.virtualPages = uint32_t(committed / 0x1000);
         stats->title.pageTablePages = 0x100;

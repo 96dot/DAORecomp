@@ -221,6 +221,7 @@ int main(int argc, char** argv)
     std::set_terminate(TerminateHandler);
     timeBeginPeriod(1);
 
+    SelectBuild(gameRoot);
     if (!g_memory.Init())
     {
         LOGE("Failed to reserve the 4 GB guest address space");
@@ -228,16 +229,23 @@ int main(int argc, char** argv)
     }
 
     // Every code address without a recompiled function gets a reporting trampoline.
-    for (uint32_t address = PPC_CODE_BASE; address < PPC_CODE_BASE + PPC_CODE_SIZE; address += 4)
+    PPCFunc** const slots = g_memory.FunctionSlot(g_build.info.codeBase);
+    for (uint32_t i = 0; i < g_build.info.codeSize / 4; i++)
     {
-        if (!g_memory.FindFunction(address))
-            g_memory.InsertFunction(address, UnknownIndirectCall);
+        if (!slots[i])
+            slots[i] = UnknownIndirectCall;
     }
 
     g_processBlock = KernelAlloc(0x60);
     VfsInit(gameRoot, userRoot);
+    if (IsTu6())
+    {
+        // The console mounts a title update's package as update:.
+        VfsMountDevice("\\Device\\Update", UpdateRoot(gameRoot));
+        VfsCreateSymlink("update:", "\\Device\\Update");
+    }
 
-    if (!LoadXex(gameRoot / "default.xex"))
+    if (!LoadXex(gameRoot / "default.xex", IsTu6() ? UpdateRoot(gameRoot) / "default.xexp" : fs::path()))
         return 1;
     StartTimeStampThread();
 

@@ -12,6 +12,7 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
   code patches
 - a Graphics tab in the game's own Options menu (title and pause menus)
 - an on-screen keyboard for naming characters, usable with a gamepad
+- the downloadable content (Awakening and the rest), installed from your own packages
 
 **This repository contains no game code or data.** You need your own copy of the
 game: an ISO image of the Xbox 360 disc. The installer extracts it, translates the
@@ -46,6 +47,28 @@ to get the space back.
 
 Windows may warn about the installer because it isn't code-signed (*More info* →
 *Run anyway*).
+
+#### Title Update 6 and downloadable content
+
+*Awakening*, *Leliana's Song*, *The Darkspawn Chronicles*, *The Golems of Amgarrak* and
+*Witch Hunt* need the game's Title Update 6 (the other DLC work without it). To use them,
+copy the title update's package and the DLC packages from a console (or your backup of
+them) and:
+
+- give the installer the title update's package: *Title Update 6 (optional)* in the
+  window, or `--title-update <package>`. It is checked (it must be the one for the
+  English disc, media ID 186A1115), extracted to `title_update/` in the install folder,
+  and the game's code is translated a second time from the updated executable (about as
+  long again). The program then holds both versions and runs the updated one while
+  `title_update/` is there.
+- drop the DLC packages, or the folder holding them, on the launcher window. They are
+  extracted to `userdata/content/454108C0/00000002/`, where the game finds them. A title
+  update dropped there is installed too; if the program was built without it, it takes
+  effect after running the installer again on the same folder.
+
+Only packages in the read-only format Xbox Live delivers them in (LIVE/PIRS) are read;
+the packages themselves are left as they are. At start, `title_update/default.xexp` is
+checked to be Title Update 6's; anything else is passed over for the disc's version.
 
 ### Linux (or from the source on Windows)
 
@@ -100,7 +123,8 @@ Everything is pinned to exact versions and checked (`installer/deps.py`):
   are asked to accept. No Visual Studio installation is needed.
 
 The install folder gets the game files (`game/`), the program, `userdata/` (settings,
-saves, logs, the shader cache, and the Options menu it generates) and `mods/`.
+saves, installed DLC, logs, the shader cache, and the Options menu it generates),
+`mods/`, and with the title update, `title_update/`.
 
 ## Playing
 
@@ -150,6 +174,17 @@ start, so this happens once per place.
 - `config/DAO.toml` and `config/DAO_switch_tables.toml` tell XenonRecomp where the game's
   functions and jump tables are; `scripts/patch_recompiler.py` adds the PowerPC
   instructions XenonRecomp lacked.
+- Title Update 6 is a second build of the game in the same program:
+  `config/DAO_tu6.toml` and `config/DAO_tu6_switch_tables.toml` describe it,
+  `scripts/recomp.cmd tu6` translates it into `ppc_tu6/` (built when that folder exists),
+  and `scripts/prefix_symbols.py` gives its functions names of their own (`tu6_sub_...`).
+  The runtime picks the build at start (`DAORecomp/kernel/game_build.h`); code hooks are
+  given both builds' functions with `GAME_HOOK`, and addresses both builds' with
+  `GameAddress`. `scripts/match_build.py` finds a disc function's counterpart in the
+  updated executable, and the analysis scripts take `DAO_VARIANT=tu6`.
+- `scripts/stfs.py` lists and extracts Xbox 360 packages (`info`/`extract`); the
+  installer uses it. `DAORecomp/content/stfs.cpp` is the same reader for the launcher
+  (which has no Python): keep the two in step.
 - `scripts/` also has the development tools used to analyse the game and build the
   shaders (`build_xenia_shaders.py` needs FXC from the Windows SDK and xenia-canary's
   FidelityFX-CAS/FSR submodules; the compiled shaders are committed).
@@ -171,14 +206,15 @@ start, so this happens once per place.
     read) as `launcher_0.bmp` to `launcher_5.bmp`, and the Update page as
     `launcher_6.bmp` when the update check finds a release, then quits.
   - `DAO_LAUNCHER_DROP=<path>|<path>...`: with `DAO_LAUNCHER_SCREENSHOTS`, adds those
-    as mods as if dropped on the window (tests adding mods).
+    as if dropped on the window (tests adding mods and installing packages).
+  - `DAO_BUILD=disc`: runs the disc's build even when Title Update 6 is installed.
   - `DAO_CONVERT_MOD=<mod folder>`: converts that PC mod as the launcher's Convert does,
     logs the outcome to `userdata/dao.log` and quits (tests the converter).
   - `DAO_TEST_KEYBOARD=<seconds>`: shows the on-screen keyboard that long after the
     game starts and logs what was entered (tests it without creating a character).
 
-Never commit game files or anything generated from them (`game/`, `ppc/`, `analysis/`,
-built executables); `.gitignore` excludes them.
+Never commit game files or anything generated from them (`game/`, `ppc/`, `ppc_tu6/`,
+`analysis/`, `title_update/`, `dlc/`, built executables); `.gitignore` excludes them.
 
 ## License
 

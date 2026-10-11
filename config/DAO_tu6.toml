@@ -1,0 +1,80 @@
+# XenonRecomp config for Dragon Age: Origins with Title Update 6 (version 0x601):
+# the disc's default.xex with title_update/default.xexp applied. Needed by Awakening and
+# the DLC campaigns after it. The generated code goes to ppc_tu6/ with its names
+# prefixed (scripts/recomp.cmd tu6), so both builds link into one executable.
+[main]
+file_path = "../game/default.xex"
+patch_file_path = "../title_update/default.xexp"
+out_directory_path = "../ppc_tu6"
+switch_table_file_path = "DAO_tu6_switch_tables.toml"
+
+# As DAO.toml.
+skip_lr = false
+skip_msr = false
+ctr_as_local = false
+xer_as_local = false
+reserved_as_local = false
+cr_as_local = false
+non_argument_as_local = false
+non_volatile_as_local = false
+
+# AUTO-FUNCTIONS (scripts/fix_functions.py)
+functions = [
+    { address = 0x82216488, size = 0xD8 },
+    { address = 0x8223E790, size = 0x1AC },
+    { address = 0x82330EA8, size = 0xB0 },
+    { address = 0x82579540, size = 0xA0 },
+    { address = 0x825A0600, size = 0x11C },
+    { address = 0x826317D0, size = 0x60 },
+    { address = 0x82633530, size = 0x80 },
+    { address = 0x82635CE8, size = 0x248 },
+    { address = 0x82648930, size = 0x80 },
+    { address = 0x826AE7F0, size = 0x9C },
+    { address = 0x826D0380, size = 0xDC },
+    { address = 0x82754B88, size = 0x810 },
+    { address = 0x82757190, size = 0x188 },
+    { address = 0x82757E20, size = 0x188 },
+    { address = 0x82759168, size = 0x318 },
+    { address = 0x82759DF8, size = 0x108 },
+    { address = 0x8275B708, size = 0xDC },
+    { address = 0x8275D198, size = 0x8C4 },
+    { address = 0x82788E98, size = 0x11C },
+    { address = 0x827A6A60, size = 0x150 },
+    { address = 0x82A94630, size = 0xA0 },
+    { address = 0x82AEF7E8, size = 0x100 },
+    { address = 0x82B010C0, size = 0xD8 },
+    { address = 0x82B5A9F0, size = 0x44 },
+    { address = 0x82B5AA38, size = 0x44 },
+    { address = 0x82E009F0, size = 0x110 },
+    { address = 0x82E27AD8, size = 0x114 },
+    { address = 0x82EE51B0, size = 0x80 },
+    { address = 0x82FE12B8, size = 0x68 },
+    { address = 0x82FE1320, size = 0x64 },
+    { address = 0x82FE1388, size = 0x5C },
+    { address = 0x82FE13E8, size = 0x198 },
+    { address = 0x82FE1580, size = 0x16C },
+]
+# END AUTO-FUNCTIONS
+
+# Found by byte pattern (scripts/find_helpers.py), one hit each.
+restgprlr_14_address = 0x82A940C0
+savegprlr_14_address = 0x82A94070
+restfpr_14_address = 0x82A98CEC
+savefpr_14_address = 0x82A98CA0
+restvmx_14_address = 0x831E0028
+savevmx_14_address = 0x831DFD90
+restvmx_64_address = 0x831E00BC
+savevmx_64_address = 0x831DFE24
+
+# longjmp calls RtlUnwind; setjmp follows it (stores f14.. into the jmp_buf).
+# Matched to the disc executable's by their code.
+longjmp_address = 0x831E02C0
+setjmp_address = 0x831E0700
+
+# Data that sits between functions: exception-handler records (handler, scope data).
+invalid_instructions = [
+    { data = 0x00000000, size = 4 }, # padding
+    { data = 0x82A9D5D0, size = 8 }, # __CxxFrameHandler record
+    { data = 0x831F408C, size = 8 }, # __C_specific_handler record
+    { data = 0x00485645, size = 0x13C }, # data block at the end of .text (0x831F4930-0x831F4A6C)
+]

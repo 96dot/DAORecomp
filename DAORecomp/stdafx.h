@@ -28,6 +28,12 @@
 
 #include <ppc_config.h>
 #include <ppc_context.h>
+// The disc build's values; the runtime reads the running build's from
+// kernel/game_build.h instead (so a leftover use doesn't compile).
+#undef PPC_IMAGE_BASE
+#undef PPC_IMAGE_SIZE
+#undef PPC_CODE_BASE
+#undef PPC_CODE_SIZE
 
 #include <byteswap.h>
 #include <xbox.h>

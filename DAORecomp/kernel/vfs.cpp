@@ -68,7 +68,8 @@ namespace dao::kernel
         std::lock_guard lock(s_vfsMutex);
         const std::string key = Lower(Normalize(devicePath));
         std::erase_if(s_devices, [&](const Device& d) { return d.path == key; });
-        const bool readOnly = key == "\\device\\cdrom0";
+        // The disc and the title update, as on the console.
+        const bool readOnly = key == "\\device\\cdrom0" || key == "\\device\\update";
         s_devices.push_back({ key, hostRoot, readOnly });
         // Longest prefix first.
         std::sort(s_devices.begin(), s_devices.end(),

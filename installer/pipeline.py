@@ -15,6 +15,8 @@ from .util import (EXE, FROZEN, IS_WINDOWS, REPO, SOURCE, VERSION, InstallError,
 
 sys.path.insert(0, str(SOURCE / "scripts"))
 import patch_recompiler  # noqa: E402
+import prefix_symbols  # noqa: E402
+import stfs  # noqa: E402
 import sync_dir  # noqa: E402
 import xiso  # noqa: E402
 
@@ -28,6 +30,8 @@ SKIP_PREFIXES = ("$SystemUpdate/",)
 class Options:
     iso: Path = None
     dest: Path = None
+    # Title Update 6's package (optional; an install keeps it in dest/title_update).
+    title_update: Path = None
     accept_license: bool = False
     llvm: str = "auto"
     jobs: int = 0  # 0 = Ninja's default
@@ -101,7 +105,7 @@ def check_iso(reporter, iso):
 
 
 NO_GAME_FILES = "No game files in {} yet: choose the disc image."
-_extracted = {}  # (default.xex, size, mtime) -> whether it's the supported one
+_extracted = {}  # (default.xex or default.xexp, size, mtime) -> whether it's the supported one
 
 
 def game_extracted(game):
@@ -143,6 +147,54 @@ def extract_game(reporter, iso, game):
     if _file_sha1(xex) != deps.GAME_XEX_SHA1:
         raise InstallError(f"{xex} does not match after extraction; the disc image may be damaged.")
     (game / GAME_MARKER).write_text(f"Extracted from {iso.name} by install.py\n")
+
+
+UPDATE_FOLDER = "title_update"
+
+
+def title_update_installed(update):
+    """Whether title_update/ holds Title Update 6 (its default.xexp, hashed once per version
+    of the file)."""
+    xexp = Path(update) / "default.xexp"
+    if not xexp.is_file():
+        return False
+    stat = xexp.stat()
+    key = (str(xexp.resolve()), stat.st_size, stat.st_mtime_ns)
+    if key not in _extracted:
+        _extracted[key] = _file_sha1(xexp) == deps.TU6_XEXP_SHA1
+    return _extracted[key]
+
+
+def install_title_update(reporter, package, update):
+    """Extracts Title Update 6's package (the player's file, checked first) into title_update/."""
+    try:
+        with stfs.Package(package) as pkg:
+            if pkg.title_id != deps.GAME_TITLE_ID or pkg.content_type != stfs.CONTENT_INSTALLER:
+                raise InstallError(f"{package.name} is not a title update for {deps.GAME_TITLE}.")
+            if pkg.media_id != deps.GAME_MEDIA_ID:
+                raise InstallError(f"{package.name} is the title update for another edition of the game (disc "
+                                   f"{pkg.media_id:08X}); yours needs the one for disc {deps.GAME_MEDIA_ID:08X}.")
+            work = update.with_name(update.name + ".partial")
+            if work.exists():
+                shutil.rmtree(work)
+            reporter.log(f"Extracting {pkg.display_name} ({len(pkg.files)} files) to {update}")
+
+            def progress(fraction):
+                reporter.progress(fraction)
+                reporter.check_cancel()
+
+            pkg.extract(work, progress)
+    except stfs.Error as e:
+        raise InstallError(f"{package.name}: {e}.")
+    except OSError as e:
+        raise InstallError(f"Can't extract {package} to {work}: {e}")
+    xexp = work / "default.xexp"
+    if not xexp.is_file() or _file_sha1(xexp) != deps.TU6_XEXP_SHA1:
+        shutil.rmtree(work)
+        raise InstallError(f"{package.name} is not Title Update 6, the one this recompilation is made for.")
+    if update.exists():
+        shutil.rmtree(update)
+    work.rename(update)
 
 
 def _existing_parent(path):
@@ -201,43 +253,56 @@ def build_recompiler(reporter, tc, jobs):
     return build / "XenonRecomp" / ("XenonRecomp" + EXE)
 
 
-def recompile(reporter, recompiler, game):
-    """Translates default.xex to C++ in ppc/."""
-    out = BUILD / "ppc_gen"
+def recompile(reporter, recompiler, game, update=None):
+    """Translates default.xex to C++ in ppc/; with title_update/ (Title Update 6), the
+    patched executable to ppc_tu6/, its names prefixed so both builds link together."""
+    name = "ppc_tu6" if update else "ppc"
+    config_name = "DAO_tu6" if update else "DAO"
+    out = BUILD / f"{name}_gen"
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    config = (REPO / "config" / "DAO.toml").read_text(encoding="utf-8")
+    config = (REPO / "config" / f"{config_name}.toml").read_text(encoding="utf-8")
     replacements = {
         "file_path": game / "default.xex",
         "out_directory_path": out,
-        "switch_table_file_path": REPO / "config" / "DAO_switch_tables.toml",
+        "switch_table_file_path": REPO / "config" / f"{config_name}_switch_tables.toml",
     }
+    if update:
+        replacements["patch_file_path"] = update / "default.xexp"
     for key, value in replacements.items():
         config, n = re.subn(rf"^{key}\s*=.*$", lambda m: f"{key} = {_toml_string(value.as_posix())}", config,
                             count=1, flags=re.M)
         if n != 1:
-            raise InstallError(f"config/DAO.toml has no {key} setting.")
-    gen_config = BUILD / "DAO.gen.toml"
+            raise InstallError(f"config/{config_name}.toml has no {key} setting.")
+    gen_config = BUILD / f"{config_name}.gen.toml"
     gen_config.write_text(config, encoding="utf-8")
 
     reporter.progress(None)
     # XenonRecomp prefixes the config file's directory to the paths in it as text, so
     # pass the config by bare name (from its directory) for the absolute paths to work.
+    log_file = BUILD / f"recomp_{name}.log"
     run(reporter, [recompiler, gen_config.name, REPO / "tools" / "XenonRecomp" / "XenonUtils" / "ppc_context.h"],
-        cwd=BUILD, log_file=BUILD / "recomp.log", quiet=True)
+        cwd=BUILD, log_file=log_file, quiet=True)
     if not (out / "ppc_func_mapping.cpp").exists():
-        raise InstallError(f"XenonRecomp produced no code (see {BUILD / 'recomp.log'}).")
+        raise InstallError(f"XenonRecomp produced no code (see {log_file}).")
+    if update:
+        # The prefix DAORecompLib/CMakeLists.txt (PPCFuncMappings_tu6) and the hooks
+        # (GAME_HOOK's tu6_sub_...) expect, as scripts/recomp.cmd gives it.
+        prefix_symbols.apply(out, "tu6")
     # Copy only what changed, so rebuilding after an update recompiles little.
-    changed, removed, unchanged = sync_dir.sync(out, REPO / "ppc")
-    reporter.log(f"Generated code: {changed} files updated, {removed} removed, {unchanged} unchanged")
+    changed, removed, unchanged = sync_dir.sync(out, REPO / name)
+    reporter.log(f"Generated code ({name}): {changed} files updated, {removed} removed, {unchanged} unchanged")
 
 
 # ------------------------------------------------------------------- building
 
-def build_game(reporter, tc, jobs):
+def build_game(reporter, tc, jobs, with_tu6=False):
     build = BUILD / "release"
-    _configure(reporter, tc, REPO, build, {"DAO_PPC_DIR": (REPO / "ppc").as_posix(), "DAO_VERSION": VERSION})
+    # Without Title Update 6, none of its (possibly old) generated code is built in.
+    tu6 = (REPO / "ppc_tu6").as_posix() if with_tu6 else ""
+    _configure(reporter, tc, REPO, build, {"DAO_PPC_DIR": (REPO / "ppc").as_posix(), "DAO_PPC_TU6_DIR": tu6,
+                                           "DAO_VERSION": VERSION})
     _build(reporter, tc, build, "DAORecomp", jobs)
     return build / "DAORecomp"
 
@@ -343,13 +408,21 @@ def run_all(reporter, options):
 
     _step(reporter, 2, "Extracting the game files")
     extract_game(reporter, iso, game)
+    update = dest / UPDATE_FOLDER
+    if options.title_update:
+        install_title_update(reporter, Path(options.title_update).expanduser().absolute(), update)
+    with_tu6 = title_update_installed(update)
+    if update.exists() and not with_tu6:
+        reporter.log(f"Warning: {update} doesn't hold Title Update 6; the game is built without it.")
 
     tc, recompiler = _prepare(reporter, options, 3)
     reporter.status(f"[5/{STEPS}] Recompiling the game code (a few minutes)")
     recompile(reporter, recompiler, game)
+    if with_tu6:
+        recompile(reporter, recompiler, game, update)
 
     _step(reporter, 6, "Building the game (this takes a while)")
-    built = build_game(reporter, tc, options.jobs)
+    built = build_game(reporter, tc, options.jobs, with_tu6)
 
     _step(reporter, 7, "Installing")
     install(reporter, built, dest, options.shortcuts)

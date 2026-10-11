@@ -7,7 +7,9 @@
 //   0x40000000-0x7EFFFFFF  virtual, 64 KB pages (thread stacks come from the top)
 //   0x80000000-0x81FFFFFF  kernel data + kernel heap (our objects, PCRs, TLS)
 //   0x82000000-...         XEX image, then the recompiled-function lookup table
+//                          (its place and size depend on the build: game_build.h)
 //   0xA0000000/0xC0000000/0xE0000000  three views of the same 512 MB physical memory (0xE is offset by +0x1000)
+#include "game_build.h"
 
 namespace dao::kernel
 {
@@ -33,16 +35,32 @@ namespace dao::kernel
             return host >= base && host < base + PPC_MEMORY_SIZE;
         }
 
+        // The running build's table, where its recompiled code looks up indirect
+        // calls (PPC_LOOKUP_FUNC with that build's ppc_config.h): an 8-byte slot per
+        // 4-byte instruction, hence * 2.
+        PPCFunc** FunctionSlot(uint32_t guest) const noexcept
+        {
+            const DaoBuildInfo& build = g_build.info;
+            return reinterpret_cast<PPCFunc**>(
+                base + build.imageBase + build.imageSize + uint64_t(guest - build.codeBase) * 2);
+        }
+
         PPCFunc* FindFunction(uint32_t guest) const noexcept
         {
-            if (guest < PPC_CODE_BASE || guest >= PPC_CODE_BASE + PPC_CODE_SIZE)
+            if (guest - g_build.info.codeBase >= g_build.info.codeSize)
                 return nullptr;
-            return PPC_LOOKUP_FUNC(base, guest);
+            return *FunctionSlot(guest);
         }
 
         void InsertFunction(uint32_t guest, PPCFunc* host) noexcept
         {
-            PPC_LOOKUP_FUNC(base, guest) = host;
+            *FunctionSlot(guest) = host;
+        }
+
+        // Calls guest code (PPC_CALL_INDIRECT_FUNC for the runtime).
+        void Call(uint32_t guest, PPCContext& ctx) const
+        {
+            (*FunctionSlot(guest))(ctx, base);
         }
     };
 

@@ -9,6 +9,7 @@
 
 #include <rapidjson/document.h>
 
+#include "hash.h"
 #include "program.h"
 #include "version.h"
 
@@ -168,33 +169,9 @@ namespace dao::launcher
         // The SHA-256 of an open file, read from its start, and its size.
         std::optional<std::array<uint8_t, 32>> FileSha256(HANDLE file, uint64_t& size)
         {
-            BCRYPT_ALG_HANDLE algorithm = nullptr;
-            BCRYPT_HASH_HANDLE hash = nullptr;
-            std::optional<std::array<uint8_t, 32>> digest;
-            if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0 &&
-                BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) >= 0)
-            {
-                std::vector<uint8_t> buffer(1 << 20);
-                size = 0;
-                DWORD read = 0;
-                bool ok = true;
-                while ((ok = ReadFile(file, buffer.data(), DWORD(buffer.size()), &read, nullptr)) && read > 0)
-                {
-                    size += read;
-                    if (BCryptHashData(hash, buffer.data(), read, 0) < 0)
-                    {
-                        ok = false;
-                        break;
-                    }
-                }
-                std::array<uint8_t, 32> out;
-                if (ok && BCryptFinishHash(hash, out.data(), ULONG(out.size()), 0) >= 0)
-                    digest = out;
-            }
-            if (hash)
-                BCryptDestroyHash(hash);
-            if (algorithm)
-                BCryptCloseAlgorithmProvider(algorithm, 0);
+            std::array<uint8_t, 32> digest;
+            if (!HashFile(file, BCRYPT_SHA256_ALGORITHM, digest, size))
+                return std::nullopt;
             return digest;
         }
 

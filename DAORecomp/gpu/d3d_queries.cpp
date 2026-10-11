@@ -20,18 +20,20 @@
 
 namespace
 {
-    constexpr uint32_t kQueriesDisabledFlag = 0x83211EC3;
-}
+    constexpr dao::kernel::GameAddress kQueriesDisabledFlag{ 0x83211EC3, 0x832E2404 };
 
-// Renderer initialisation (runs once; computes the flag among other setup).
-extern "C" PPC_FUNC(__imp__sub_8263BBF0);
-PPC_FUNC(sub_8263BBF0)
-{
-    __imp__sub_8263BBF0(ctx, base);
-    static const bool keepQueries = getenv("DAO_OCCLUSION_QUERIES") != nullptr;
-    if (!keepQueries && !base[kQueriesDisabledFlag])
+    // Renderer initialisation (runs once; computes the flag among other setup).
+    void RendererInitHook(PPCContext& ctx, uint8_t* base, PPCFunc* original)
     {
-        base[kQueriesDisabledFlag] = 1;
-        LOGI("Occlusion-query culling disabled (Xenia's ZPD counts are unreliable for it)");
+        original(ctx, base);
+        static const bool keepQueries = getenv("DAO_OCCLUSION_QUERIES") != nullptr;
+        const uint32_t flag = kQueriesDisabledFlag.Get();
+        if (!keepQueries && !base[flag])
+        {
+            base[flag] = 1;
+            LOGI("Occlusion-query culling disabled (Xenia's ZPD counts are unreliable for it)");
+        }
     }
 }
+
+GAME_HOOK(sub_8263BBF0, tu6_sub_8266F388, RendererInitHook)

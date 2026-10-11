@@ -94,11 +94,12 @@ namespace dao::kernel
 
         // Fill the recompiled-function lookup table.
         size_t count = 0;
-        for (size_t i = 0; PPCFuncMappings[i].guest != 0; i++)
+        const PPCFuncMapping* mappings = g_build.info.mappings;
+        for (size_t i = 0; mappings[i].guest != 0; i++)
         {
-            if (PPCFuncMappings[i].host != nullptr)
+            if (mappings[i].host != nullptr)
             {
-                InsertFunction(PPCFuncMappings[i].guest, PPCFuncMappings[i].host);
+                InsertFunction(uint32_t(mappings[i].guest), mappings[i].host);
                 count++;
             }
         }

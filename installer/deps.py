@@ -6,6 +6,13 @@ from dataclasses import dataclass
 # exactly this default.xex.
 GAME_XEX_SHA1 = "532c0ec164f44bc8784cc0e8f6f67f72c1ed3751"
 GAME_TITLE = "Dragon Age: Origins (Xbox 360, title 454108C0)"
+GAME_TITLE_ID = 0x454108C0
+# That disc's media ID: title updates are made for one disc (other languages'
+# discs have their own).
+GAME_MEDIA_ID = 0x186A1115
+# Title Update 6 (needed by Awakening and the DLC campaigns after it): the
+# default.xexp in its package; config/DAO_tu6.toml belongs to exactly this one.
+TU6_XEXP_SHA1 = "4141b608e44c4ed35eb4e24ba2c05844a2f57a54"
 
 
 @dataclass(frozen=True)

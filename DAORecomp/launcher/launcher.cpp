@@ -14,6 +14,7 @@
 #include <backends/imgui_impl_sdl3.h>
 #include <backends/imgui_impl_sdlrenderer3.h>
 
+#include "content/install.h"
 #include "mods/convert/convert.h"
 #include "mods/mod_install.h"
 #include "mods/mods.h"
@@ -805,9 +806,19 @@ namespace dao::launcher
                 return;
             }
             st.modMessages.clear();
+            // Xbox 360 packages (DLC, the title update) are installed; the rest are mods.
             st.modInstall = std::async(std::launch::async,
-                [root = st.modsRoot, dropped = std::move(dropped), stop = st.modStop.get_token(),
-                    game = st.gameFiles] { return mods::Install(root, dropped, stop, game.get()); });
+                [root = st.modsRoot, gameRoot = st.gameRoot, userRoot = st.userRoot, dropped = std::move(dropped),
+                    stop = st.modStop.get_token(), game = st.gameFiles]() mutable {
+                    const std::vector<content::DroppedPackage> packages = content::TakePackages(dropped);
+                    std::vector<mods::InstallResult::Line> installed;
+                    content::InstallPackages(gameRoot, userRoot, packages, stop, installed);
+                    mods::InstallResult result;
+                    if (!dropped.empty())
+                        result = mods::Install(root, dropped, stop, game.get());
+                    result.lines.insert(result.lines.begin(), installed.begin(), installed.end());
+                    return result;
+                });
         }
 
         // When the background install is done: the new mods at the end of the list
@@ -1334,6 +1345,9 @@ namespace dao::launcher
                     ? "To add a mod, drop its archive (.zip, .7z, .rar), folder or files on this window: its files "
                       "are sorted into place."
                     : "To add a mod, drop its folder or files on this window: its files are sorted into place.");
+            ImGui::Spacing();
+            HelpText("Downloadable content and Title Update 6 copied from an Xbox 360 are installed the same way: "
+                     "drop the packages, or the folder holding them.");
             ImGui::Spacing();
             if (ReadingMods(st))
             {
@@ -2021,7 +2035,7 @@ namespace dao::launcher
         if (const char* dir = getenv("DAO_LAUNCHER_SCREENSHOTS"))
         {
             st.screenshotDir = dir;
-            // A drop to test adding mods with: paths separated by |.
+            // A drop to test adding mods and installing packages with: paths separated by |.
             if (const wchar_t* drop = _wgetenv(L"DAO_LAUNCHER_DROP"))
             {
                 for (const auto part : std::views::split(std::wstring_view(drop), L'|'))

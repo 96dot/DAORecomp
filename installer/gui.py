@@ -48,11 +48,16 @@ class App:
         ttk.Entry(frame, textvariable=self.dest).grid(row=2, column=1, sticky="ew", padx=6)
         self.dest_button = ttk.Button(frame, text="Browse...", command=self.pick_dest)
         self.dest_button.grid(row=2, column=2)
+        self.title_update = tk.StringVar()
+        ttk.Label(frame, text="Title Update 6 (optional):").grid(row=3, column=0, sticky="w")
+        ttk.Entry(frame, textvariable=self.title_update).grid(row=3, column=1, sticky="ew", padx=6)
+        self.update_button = ttk.Button(frame, text="Browse...", command=self.pick_title_update)
+        self.update_button.grid(row=3, column=2)
 
         # Accepted on an earlier run if the CRT/SDK are already set up.
         self.accept = tk.BooleanVar(value=toolchain.winsysroot_ready())
         license_row = ttk.Frame(frame)
-        license_row.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        license_row.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Checkbutton(license_row, variable=self.accept,
                         text="I accept the license of the Microsoft Visual C++ build tools and Windows SDK "
                              "(downloaded to build the game)").pack(side="left")
@@ -64,27 +69,28 @@ class App:
         self.make_shortcuts = tk.BooleanVar(value=IS_WINDOWS and (shortcuts.exist() if update else True))
         if IS_WINDOWS:
             ttk.Checkbutton(frame, variable=self.make_shortcuts, text="Create Start menu and desktop shortcuts").grid(
-                row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
+                row=5, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
         note = ttk.Label(frame, text="Needs about 25 GB: 8 GB for the game, the rest for the tools and the "
                                      f"build in {REPO} (keep it for quick updates, or delete it after "
-                                     "installing). The first build takes 30-60 minutes.", foreground="#666")
-        note.grid(row=5, column=0, columnspan=3, sticky="w", pady=6)
+                                     "installing). The first build takes 30-60 minutes; with the title update, "
+                                     "about twice as long, and more space.", foreground="#666")
+        note.grid(row=6, column=0, columnspan=3, sticky="w", pady=6)
         # Wrap the texts at the window width (in real pixels, whatever the display scaling).
         frame.bind("<Configure>", lambda e: [w.configure(wraplength=max(e.width - 30, 200)) for w in (intro, note)])
 
         self.status = tk.StringVar(value="Ready.")
-        ttk.Label(frame, textvariable=self.status).grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 2))
+        ttk.Label(frame, textvariable=self.status).grid(row=7, column=0, columnspan=3, sticky="w", pady=(6, 2))
         self.bar = ttk.Progressbar(frame, mode="determinate", maximum=1.0)
-        self.bar.grid(row=7, column=0, columnspan=3, sticky="ew")
+        self.bar.grid(row=8, column=0, columnspan=3, sticky="ew")
 
         self.log = ScrolledText(frame, height=16, state="disabled", wrap="none",
                                 font=("Consolas" if IS_WINDOWS else "Monospace", 9))
-        self.log.grid(row=8, column=0, columnspan=3, sticky="nsew", pady=8)
-        frame.rowconfigure(8, weight=1)
+        self.log.grid(row=9, column=0, columnspan=3, sticky="nsew", pady=8)
+        frame.rowconfigure(9, weight=1)
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=9, column=0, columnspan=3, sticky="e")
+        buttons.grid(row=10, column=0, columnspan=3, sticky="e")
         self.open_button = ttk.Button(buttons, text="Open install folder", command=self.open_dest,
                                       state="disabled")
         self.open_button.pack(side="left", padx=4)
@@ -106,6 +112,14 @@ class App:
                                           filetypes=[("Disc images", "*.iso"), ("All files", "*")])
         if path:
             self.iso.set(path)
+
+    def pick_title_update(self):
+        # Its package from the console (e.g. tu00000001_00000000): needed by Awakening
+        # and the DLC campaigns after it; an install keeps it.
+        path = filedialog.askopenfilename(title="Dragon Age: Origins Title Update 6 package",
+                                          filetypes=[("All files", "*")])
+        if path:
+            self.title_update.set(path)
 
     def pick_dest(self):
         path = filedialog.askdirectory(title="Install folder", mustexist=False)
@@ -131,14 +145,17 @@ class App:
         if not self.accept.get():
             messagebox.showerror("Installer", "The build tools license must be accepted to build the game.")
             return
-        options = pipeline.Options(iso=Path(iso) if iso else None, dest=Path(dest), accept_license=True,
-                                   shortcuts=self.make_shortcuts.get())
+        title_update = self.title_update.get().strip()
+        options = pipeline.Options(iso=Path(iso) if iso else None, dest=Path(dest),
+                                   title_update=Path(title_update) if title_update else None,
+                                   accept_license=True, shortcuts=self.make_shortcuts.get())
         self.reporter = Reporter(log=lambda t: self.events.put(("log", t)),
                                  status=lambda t: self.events.put(("status", t)),
                                  progress=lambda f: self.events.put(("progress", f)))
         self.install_button.configure(state="disabled")
         self.play_button.configure(state="disabled")
         self.iso_button.configure(state="disabled")
+        self.update_button.configure(state="disabled")
         self.dest_button.configure(state="disabled")
         self.cancel_button.configure(text="Cancel")
         self.worker = threading.Thread(target=self.work, args=(options,), daemon=True)
@@ -189,6 +206,7 @@ class App:
         self.worker = None
         self.install_button.configure(state="normal")
         self.iso_button.configure(state="normal")
+        self.update_button.configure(state="normal")
         self.dest_button.configure(state="normal")
         self.cancel_button.configure(text="Close")
         if ok:

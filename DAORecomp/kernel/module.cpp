@@ -7,6 +7,7 @@
 #include <file.h>
 #include <image.h>
 #include <xex.h>
+#include <xex_patcher.h>
 
 namespace dao::kernel
 {
@@ -111,13 +112,27 @@ namespace dao::kernel
         return 0;
     }
 
-    bool LoadXex(const std::filesystem::path& path)
+    bool LoadXex(const std::filesystem::path& path, const std::filesystem::path& patchPath)
     {
-        const auto file = LoadFile(path);
+        auto file = LoadFile(path);
         if (file.empty())
         {
             LOGE("Failed to read {}", Utf8(path));
             return false;
+        }
+        if (!patchPath.empty())
+        {
+            const auto patch = LoadFile(patchPath);
+            std::vector<uint8_t> patched;
+            constexpr bool kSkipData = false; // the data patches too, not only the code
+            const auto result = patch.empty() ? XexPatcher::Result::FileOpenFailed
+                : XexPatcher::apply(file.data(), file.size(), patch.data(), patch.size(), patched, kSkipData);
+            if (result != XexPatcher::Result::Success)
+            {
+                LOGE("Failed to apply {} to {} (error {})", Utf8(patchPath), Utf8(path), int(result));
+                return false;
+            }
+            file = std::move(patched);
         }
 
         Image image = Image::ParseImage(file.data(), file.size());
@@ -126,9 +141,12 @@ namespace dao::kernel
             LOGE("Failed to parse {}", Utf8(path));
             return false;
         }
-        if (image.base != PPC_IMAGE_BASE)
+        // Another executable (another title update) doesn't match the recompiled code.
+        const DaoBuildInfo& build = g_build.info;
+        if (image.base != build.imageBase || image.size != build.imageSize)
         {
-            LOGE("Unexpected image base {:08X} (recompiled for {:08X})", image.base, PPC_IMAGE_BASE);
+            LOGE("Unexpected image {:08X}+{:#x} (recompiled for {:08X}+{:#x})", image.base, image.size,
+                build.imageBase, build.imageSize);
             return false;
         }
 
@@ -143,8 +161,8 @@ namespace dao::kernel
             for (size_t i = 0; i < n; i++)
                 valid += blocks[i].dataSize + blocks[i].zeroSize;
         }
-        valid = std::min<size_t>({ valid, image.size, PPC_IMAGE_SIZE });
-        memcpy(g_memory.Translate(PPC_IMAGE_BASE), image.data.get(), valid);
+        valid = std::min<size_t>(valid, image.size);
+        memcpy(g_memory.Translate(build.imageBase), image.data.get(), valid);
         LOGI("Loaded image {:08X}+{:#x} ({:#x} bytes of data), entry {:08X}", image.base, image.size, valid, image.entry_point);
 
         const auto* header = reinterpret_cast<const Xex2Header*>(file.data());
@@ -167,8 +185,8 @@ namespace dao::kernel
 
         // Loader data table entry, the module "handle".
         g_module.ldrEntry = KernelAlloc(0x80);
-        W32(g_module.ldrEntry + 0x18, PPC_IMAGE_BASE);  // dll_base
-        W32(g_module.ldrEntry + 0x1C, PPC_IMAGE_BASE);  // image_base
+        W32(g_module.ldrEntry + 0x18, build.imageBase);  // dll_base
+        W32(g_module.ldrEntry + 0x1C, build.imageBase);  // image_base
         W32(g_module.ldrEntry + 0x20, image.size);      // image_size
         W32(g_module.ldrEntry + 0x34, 0x40000000);      // flags
         W32(g_module.ldrEntry + 0x38, image.size);      // full_image_size

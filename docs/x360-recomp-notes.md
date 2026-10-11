@@ -193,6 +193,29 @@ are DAO's; the patterns are what matter.
 - Windows' `tar.exe` unpacks zip, 7z and rar, but can't read zip entry names outside
   the ANSI code page. Run it detached, in a kill-on-close job, with a time limit.
 
+## Title updates and DLC
+
+- When newer DLC needs a title update, build both executables into one program rather
+  than choosing one: recompile the patched image (XenonRecomp's `patch_file_path`) into
+  a second folder, prefix its symbols (`sub_`, `__imp__sub_`, the save/restore helpers,
+  the entry point and the function table), and pick the build's function table at
+  start. Each build's generated code finds its table at its own image's end.
+- Most hooks move with the update: find the counterparts by matching code with branch
+  offsets and address loads masked (`scripts/match_build.py`), then check by hand.
+- A title update is made for one disc (media ID); other languages' discs have their own.
+- Mount the title update as `update:` (read-only), apart from the disc: the game reads
+  updated files from there itself.
+- DLC packages (content type 2) need a licence mask of all ones from
+  `XamContentCreateEx`, or the game ignores them.
+- Opening existing content must keep its display name. The game passes a fresh one
+  (e.g. the time now), and rewriting it made saves show as corrupt.
+- DAO's TU6 shows a "don't remove the storage device" notice before it lists DLC, and
+  waits for A: scripted test input has to press it.
+- Read packages as untrusted: check every name, folder index, block number and size,
+  and keep extracted paths under MAX_PATH (the game opens files without `\\?\`).
+- Don't put the title update in a folder the updater owns: the launcher empties
+  `update/` at every start, so the title update lives in `title_update/`.
+
 ## Distribution
 
 - **No game files in the repo or the installer.** The installer:

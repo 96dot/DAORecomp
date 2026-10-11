@@ -1,12 +1,29 @@
-"""Shared helpers for poking at the dumped DAO image."""
+"""Shared helpers for poking at the dumped DAO image.
+
+DAO_VARIANT picks the image: unset for the disc's executable (analysis/), "tu6"
+for Title Update 6's (analysis/tu6/). Both are dumps by tools/xexdump (image.bin
+and info.txt, whose sections give the code and .pdata ranges)."""
+import os
 import re
 import struct
 import capstone
 
+VARIANT = os.environ.get('DAO_VARIANT', '')
+ANALYSIS = __file__.rsplit('scripts', 1)[0] + 'analysis/' + (VARIANT + '/' if VARIANT else '')
 BASE = 0x82000000
-IMG = open(__file__.rsplit('scripts', 1)[0] + 'analysis/image.bin', 'rb').read()
-TEXT = (0x821F0000, 0x821F0000 + 0xF3AB84)
-BINK = (0x8312AC00, 0x8312AC00 + 0xFC08)
+IMG = open(ANALYSIS + 'image.bin', 'rb').read()
+
+
+def _sections():
+    out = {}
+    for m in re.finditer(r'^section (\S+)\s.*?(0x[0-9A-F]+) (0x[0-9A-F]+)', open(ANALYSIS + 'info.txt').read(), re.M):
+        out[m.group(1)] = (int(m.group(2), 16), int(m.group(3), 16))
+    return out
+
+
+SECTIONS = _sections()
+TEXT = (SECTIONS['.text'][0], SECTIONS['.text'][0] + SECTIONS['.text'][1])
+BINK = (SECTIONS['BINK'][0], SECTIONS['BINK'][0] + SECTIONS['BINK'][1])
 _cs = capstone.Cs(capstone.CS_ARCH_PPC, capstone.CS_MODE_32 | capstone.CS_MODE_BIG_ENDIAN)
 
 
@@ -16,7 +33,7 @@ def u32(a):
 
 def imports():
     out = {}
-    info = open(__file__.rsplit('scripts', 1)[0] + 'analysis/info.txt').read()
+    info = open(ANALYSIS + 'info.txt').read()
     for m in re.finditer(r'thunk (0x[0-9A-F]+) __imp__(\w+)', info):
         out[m.group(2)] = int(m.group(1), 16)
     return out
@@ -54,7 +71,7 @@ def dis(a, n=16):
 
 def pdata():
     """[(start, length_bytes)] from .pdata (start, packed: prolog:8 len:22 flags:2)."""
-    lo, size = 0x82194C00, 0x4D098
+    lo, size = SECTIONS['.pdata']
     out = []
     for o in range(lo, lo + size, 8):
         start, packed = struct.unpack_from('>II', IMG, o - BASE)
