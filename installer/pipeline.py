@@ -5,11 +5,13 @@ import os
 import re
 import shutil
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import deps, sources, toolchain
-from .util import EXE, FROZEN, IS_WINDOWS, REPO, SOURCE, InstallError, check_host, clean_env, human_size, run
+from . import deps, shortcuts, sources, toolchain
+from .util import (EXE, FROZEN, IS_WINDOWS, REPO, SOURCE, VERSION, InstallError, check_host, clean_env, human_size,
+                   run)
 
 sys.path.insert(0, str(SOURCE / "scripts"))
 import patch_recompiler  # noqa: E402
@@ -29,6 +31,8 @@ class Options:
     accept_license: bool = False
     llvm: str = "auto"
     jobs: int = 0  # 0 = Ninja's default
+    # Start menu and desktop shortcuts to the game (Windows).
+    shortcuts: bool = False
 
 
 # --------------------------------------------------------------------- source
@@ -41,7 +45,9 @@ def sync_source(reporter):
     only files that differ (so rebuilds stay incremental) and removing ones it dropped."""
     if not FROZEN or SOURCE == REPO:
         return
-    files = sorted(p.relative_to(SOURCE).as_posix() for p in SOURCE.rglob("*") if p.is_file())
+    # Not VERSION: the executable's own (util.VERSION), which doesn't belong in a checkout.
+    files = sorted(rel for p in SOURCE.rglob("*") if p.is_file() and (rel := p.relative_to(SOURCE).as_posix())
+                   != "VERSION")
     REPO.mkdir(parents=True, exist_ok=True)
     manifest = REPO / SOURCE_MANIFEST
     old = set(manifest.read_text(encoding="utf-8").splitlines()) if manifest.exists() else set()
@@ -94,12 +100,30 @@ def check_iso(reporter, iso):
     reporter.log(f"{iso.name}: {deps.GAME_TITLE}")
 
 
+NO_GAME_FILES = "No game files in {} yet: choose the disc image."
+_extracted = {}  # (default.xex, size, mtime) -> whether it's the supported one
+
+
+def game_extracted(game):
+    """Whether game/ holds a finished extraction of the supported game (default.xex is
+    hashed once per version of the file)."""
+    xex = Path(game) / "default.xex"
+    if not (Path(game) / GAME_MARKER).exists() or not xex.exists():
+        return False
+    stat = xex.stat()
+    key = (str(xex.resolve()), stat.st_size, stat.st_mtime_ns)
+    if key not in _extracted:
+        _extracted[key] = _file_sha1(xex) == deps.GAME_XEX_SHA1
+    return _extracted[key]
+
+
 def extract_game(reporter, iso, game):
-    marker = game / GAME_MARKER
     xex = game / "default.xex"
-    if marker.exists() and xex.exists() and _file_sha1(xex) == deps.GAME_XEX_SHA1:
+    if game_extracted(game):
         reporter.log(f"Game files: already extracted to {game}")
         return
+    if iso is None:
+        raise InstallError(NO_GAME_FILES.format(game))
     with open(iso, "rb") as f:
         _, entries = xiso.read_entries(f)
     wanted = {p for p, d, _, _ in entries if not d and not p.startswith(SKIP_PREFIXES)}
@@ -118,7 +142,7 @@ def extract_game(reporter, iso, game):
     xiso.extract(iso, game, wanted, progress)
     if _file_sha1(xex) != deps.GAME_XEX_SHA1:
         raise InstallError(f"{xex} does not match after extraction; the disc image may be damaged.")
-    marker.write_text(f"Extracted from {iso.name} by install.py\n")
+    (game / GAME_MARKER).write_text(f"Extracted from {iso.name} by install.py\n")
 
 
 def _existing_parent(path):
@@ -213,7 +237,7 @@ def recompile(reporter, recompiler, game):
 
 def build_game(reporter, tc, jobs):
     build = BUILD / "release"
-    _configure(reporter, tc, REPO, build, {"DAO_PPC_DIR": (REPO / "ppc").as_posix()})
+    _configure(reporter, tc, REPO, build, {"DAO_PPC_DIR": (REPO / "ppc").as_posix(), "DAO_VERSION": VERSION})
     _build(reporter, tc, build, "DAORecomp", jobs)
     return build / "DAORecomp"
 
@@ -227,11 +251,25 @@ exec "${WINE:-wine}" DAORecomp.exe "$@"
 """
 
 
-def install(reporter, built, dest):
+def _copy_when_free(reporter, src, dst, wait=30.0, interval=0.5):
+    """Copies over dst, waiting up to `wait` seconds while it's in use (the launcher
+    closing after starting an update)."""
+    for attempt in range(int(wait / interval)):
+        try:
+            shutil.copy2(src, dst)
+            return
+        except PermissionError:
+            if attempt == 0:
+                reporter.log(f"{dst.name} is in use; waiting for it to close")
+            time.sleep(interval)
+    raise InstallError(f"{dst} is in use. Close the game and run the installer again.")
+
+
+def install(reporter, built, dest, with_shortcuts=False):
     dest.mkdir(parents=True, exist_ok=True)
     files = ["DAORecomp.exe", "amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll"]
     for name in files:
-        shutil.copy2(built / name, dest / name)
+        _copy_when_free(reporter, built / name, dest / name)
     ffx = REPO / "tools" / "FidelityFX-SDK" / "Kits" / "FidelityFX" / "docs" / "license.md"
     if ffx.exists():
         shutil.copy2(ffx, dest / "amd_fidelityfx_license.md")
@@ -242,7 +280,9 @@ def install(reporter, built, dest):
         run_sh = dest / "run.sh"
         run_sh.write_text(RUN_SH)
         run_sh.chmod(0o755)
-    reporter.log(f"Installed to {dest}")
+    if with_shortcuts and IS_WINDOWS:
+        shortcuts.create(reporter, dest)
+    reporter.log(f"Installed {VERSION} to {dest}")
 
 
 # ----------------------------------------------------------------------- all
@@ -284,12 +324,18 @@ def prepare_only(reporter, options):
 
 
 def run_all(reporter, options):
-    iso, dest = Path(options.iso).expanduser().absolute(), Path(options.dest).expanduser().absolute()
+    """Installs, or updates an install (the disc image is needed until the game files are
+    extracted)."""
+    iso = Path(options.iso).expanduser().absolute() if options.iso else None
+    dest = Path(options.dest).expanduser().absolute()
     game = dest / "game"
 
-    _step(reporter, 1, "Checking the disc image")
+    _step(reporter, 1, "Checking the disc image" if iso else "Checking the game files")
     check_host()
-    check_iso(reporter, iso)
+    if iso:
+        check_iso(reporter, iso)
+    elif not game_extracted(game):
+        raise InstallError(NO_GAME_FILES.format(game))
     _check_license(options)
     free = shutil.disk_usage(_existing_parent(REPO)).free
     if free < 12 * 2**30:
@@ -306,7 +352,7 @@ def run_all(reporter, options):
     built = build_game(reporter, tc, options.jobs)
 
     _step(reporter, 7, "Installing")
-    install(reporter, built, dest)
+    install(reporter, built, dest, options.shortcuts)
     reporter.progress(1.0)
     launch = "DAORecomp.exe" if IS_WINDOWS else "run.sh"
     reporter.status(f"Done. Start the game with {dest / launch}")

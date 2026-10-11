@@ -1,5 +1,5 @@
 # Builds DAORecomp-Installer.exe. Run it from the Actions tab (the exe is an artifact
-# of the run), or push a version tag (v1.0 ...) to publish it on a release.
+# of the run), or push a version tag (vX.Y.Z, as the launcher's update check reads them) to publish it on a release.
 name: Windows installer
 
 on:

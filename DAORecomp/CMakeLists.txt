@@ -13,9 +13,15 @@ set_source_files_properties(${DAO_IMGUI_BACKENDS} PROPERTIES SKIP_PRECOMPILE_HEA
 
 add_executable(DAORecomp ${DAO_RUNTIME_SOURCES} ${DAO_IMGUI_BACKENDS})
 
+# The release the installer builds (its tag), for the launcher's update check.
+set(DAO_VERSION "dev" CACHE STRING "The release this is built from (e.g. v0.2.0)")
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/version.cpp PROPERTIES
+    SKIP_PRECOMPILE_HEADERS ON COMPILE_DEFINITIONS "DAO_VERSION=\"${DAO_VERSION}\"")
+
 target_include_directories(DAORecomp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${XENON_ROOT}/XenonUtils)
+    ${XENON_ROOT}/XenonUtils
+    ${DAO_XENIA_THIRD_PARTY}/rapidjson/include)
 
 target_compile_definitions(DAORecomp PRIVATE
     NOMINMAX
@@ -39,7 +45,9 @@ target_link_libraries(DAORecomp PRIVATE
     onecore
     xinput
     shell32
-    winmm)
+    winmm
+    winhttp
+    bcrypt)
 
 # Recompiled code recurses on the host stack as deeply as the guest does.
 target_link_options(DAORecomp PRIVATE /STACK:16777216 /MAP)

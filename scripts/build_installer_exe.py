@@ -6,6 +6,7 @@
 Only files tracked by git are bundled (no game data, tools or build output).
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,7 +34,16 @@ def main():
         dst = staging / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO / rel, dst)
-    print(f"bundling {len(files)} source files")
+    # The release it is: the tag CI builds it for, else as installer/util.py names a
+    # checkout (its tag, -dirty if changed, or "dev").
+    if os.environ.get("GITHUB_REF_TYPE") == "tag":
+        version = os.environ["GITHUB_REF_NAME"]
+    else:
+        version = subprocess.run(["git", "-C", str(REPO), "describe", "--tags", "--exact-match", "--dirty"],
+                                 capture_output=True, text=True).stdout.strip()
+    version = re.sub(r"[^A-Za-z0-9._+-]", "", version) or "dev"
+    (staging / "VERSION").write_text(version + "\n", encoding="utf-8")
+    print(f"bundling {len(files)} source files ({version})")
 
     env_dir = WORK / "venv"
     python = env_dir / "Scripts" / "python.exe"

@@ -46,6 +46,9 @@ GIT_SOURCES = [
               "407c905e45ad75fc29bf0f9bb7c5c2fd3475976f"),
     GitSource(f"{XENIA_TP}/imgui", "https://github.com/ocornut/imgui.git",
               "4806a1924ff6181180bf5e4b8b79ab4394118875"),
+    # The launcher reads GitHub's release list with it (update check).
+    GitSource(f"{XENIA_TP}/rapidjson", "https://github.com/Tencent/rapidjson.git",
+              "7c73dd7de7c4f14379b781418c6e947ad464c818", sparse=("license.txt", "include")),
     GitSource(f"{XENIA_TP}/snappy", "https://github.com/google/snappy.git",
               "6af9287fbdb913f0794d0148c6aa43b58e63c8e3"),
     GitSource(f"{XENIA_TP}/tomlplusplus", "https://github.com/marzer/tomlplusplus.git",

@@ -2,6 +2,7 @@
 import hashlib
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -36,6 +37,33 @@ REPO = _work_root()
 
 # git to run; toolchain.ensure_git may switch it to a downloaded MinGit.
 GIT = ["git"]
+
+
+def _version():
+    """The release this installer is (its tag), for the build and the launcher's update
+    check: the executable carries it in VERSION; a source checkout of a tag is that tag
+    (with -dirty if changed, which the launcher treats as a dev build); anything else is "dev".
+    It goes into the build as a C++ string, so only plain characters are kept."""
+    stamp = SOURCE / "VERSION"
+    if stamp.exists():
+        return _plain(stamp.read_text(encoding="utf-8"))
+    # The system's git: this runs before any is downloaded, and only in a checkout
+    # (which has git).
+    try:
+        tag = subprocess.run(["git", "-C", str(SOURCE), "describe", "--tags", "--exact-match", "--dirty"],
+                             capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                             creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0).stdout.strip()
+    except OSError:
+        tag = ""
+    return _plain(tag)
+
+
+def _plain(version):
+    version = re.sub(r"[^A-Za-z0-9._+-]", "", version.strip())
+    return version or "dev"
+
+
+VERSION = _version()
 
 
 class InstallError(Exception):

@@ -29,12 +29,13 @@ You need:
 
 Run **DAORecomp-Installer.exe**. Pick the ISO and an install folder, accept the build
 tools license, and press **Install**. Nothing else needs to be installed first: the
-installer downloads what it needs (including a portable git if you have none).
+installer downloads what it needs (including a portable git if you have none). When it
+is done, **Play** starts the game; it can also add Start menu and desktop shortcuts.
 
 From a terminal instead:
 
 ```
-DAORecomp-Installer.exe --iso "D:\Games\Dragon Age Origins.iso" --dest "D:\Games\DAORecomp"
+DAORecomp-Installer.exe --iso "D:\Games\Dragon Age Origins.iso" --dest "D:\Games\DAORecomp" --shortcuts
 ```
 
 The tools and the build go into `%LOCALAPPDATA%\DAORecomp-build` (set `DAO_WORK_DIR` to
@@ -62,12 +63,33 @@ after a `git pull` the installer rebuilds only what changed.
 
 Running the installer again resumes an interrupted install.
 
+### Updating
+
+The launcher looks for a newer release when it opens and, if there is one, shows an
+**Update** item with the release notes. It downloads the new installer into `update/`
+in the install folder, checks it against the SHA-256 GitHub lists for it, and runs it
+on the same folder; the installer rebuilds only what changed (the disc image isn't
+needed again) and keeps your saves, settings and mods. The checksum catches a damaged
+or altered download; like the release itself, it comes from this GitHub repository.
+While the version is 0.x, pre-releases are offered too.
+
+The check asks `api.github.com/repos/96dot/DAORecomp/releases` for the list of releases;
+the request carries only the program's version. Turn it off in *Configure → Advanced*
+or with `check_updates = false` in the `[launcher]` section of `userdata/config.toml`.
+Builds that aren't releases (`dev`, or a changed checkout of a release) don't check.
+With the launcher hidden there is no check: open it now and then (hold Shift).
+
+To update by hand, run a newer installer and choose the same install folder (or
+`--dest` alone from a terminal). Under Wine or Proton the launcher only links to the
+release page: update the checkout (`git pull`, or check out the new tag) and run
+`python3 install.py --dest <install folder>`.
+
 ### What it downloads
 
 Everything is pinned to exact versions and checked (`installer/deps.py`):
 
-- Source code: Xenia's third-party libraries, XenonRecomp, SDL 3, the AMD FidelityFX SDK
-  (headers and the signed FSR DLLs).
+- Source code: Xenia's third-party libraries (and rapidjson, for the update check),
+  XenonRecomp, SDL 3, the AMD FidelityFX SDK (headers and the signed FSR DLLs).
 - LLVM/Clang 22 (or your system's LLVM 18+ if it has `clang-cl`, `lld-link`, `llvm-lib`
   and `llvm-rc`), CMake and Ninja, and on Windows without git, MinGit.
 - The Microsoft C/C++ runtime headers/libraries and the Windows SDK, fetched by
@@ -133,7 +155,8 @@ start, so this happens once per place.
   - `DAO_DRED=1`: when the GPU device is lost, the operations it was running and the
     memory it faulted on (Direct3D 12 DRED).
   - `DAO_LAUNCHER_SCREENSHOTS=<folder>`: saves each launcher view (the title screen,
-    the four Configure tabs, Mods) as `launcher_0.bmp` to `launcher_5.bmp` and quits.
+    the four Configure tabs, Mods) as `launcher_0.bmp` to `launcher_5.bmp`, and the
+    Update page as `launcher_6.bmp` when the update check finds a release, then quits.
 
 Never commit game files or anything generated from them (`game/`, `ppc/`, `analysis/`,
 built executables); `.gitignore` excludes them.

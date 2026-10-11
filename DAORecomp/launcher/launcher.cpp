@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "launcher/launcher.h"
 #include "launcher/game_art.h"
+#include "launcher/updater.h"
 
 #include <shellapi.h>
 
@@ -13,6 +14,7 @@
 #include "mods/mods.h"
 #include "patches/patches.h"
 #include "settings.h"
+#include "version.h"
 
 namespace dao::launcher
 {
@@ -44,6 +46,8 @@ namespace dao::launcher
         constexpr ImU32 kGoldBright = IM_COL32(232, 204, 140, 255);
         constexpr ImU32 kShadow = IM_COL32(0, 0, 0, 200);
         constexpr ImU32 kSky = IM_COL32(26, 16, 9, 255);
+        // Messages about something wrong (no game data, a failed download).
+        constexpr ImU32 kError = IM_COL32(242, 115, 89, 255);
 
         // The game's screens are laid out on a 1280x720 stage.
         constexpr float kStageWidth = 1280.0f, kStageHeight = 720.0f;
@@ -198,7 +202,7 @@ namespace dao::launcher
         constexpr std::string_view kAtlases[] = { "atl_startmenu2_dxt5", "atl_startmenu2_dxt1",
             "atl_optionsmen_dxt5", "atl_shared_dxt5" };
 
-        enum class View { Main, Configure, Mods };
+        enum class View { Main, Configure, Mods, Update };
         // Graphics, Display, Patches, Advanced.
         constexpr int kConfigureTabs = 4;
         constexpr float kFadeSeconds = 0.2f;
@@ -207,6 +211,21 @@ namespace dao::launcher
         {
             SDL_Texture* texture = nullptr;
             float width = 0, height = 0;
+        };
+
+        // A line of release notes, ready to show.
+        struct NoteLine
+        {
+            enum class Kind
+            {
+                Blank,
+                Heading,
+                Text,
+                Item,
+            } kind;
+            // Nesting (indentation steps).
+            int level = 0;
+            std::string text;
         };
 
         struct State
@@ -221,6 +240,10 @@ namespace dao::launcher
             int configureTab = 0;
             // Whether default.xex is in gameRoot (checked once, at startup).
             bool gameFound = false;
+            std::unique_ptr<Updater> updater;
+            // The release the updater found and its notes, taken from it once.
+            std::optional<Release> release;
+            std::vector<NoteLine> releaseNotes;
             // The menus' serif fonts: the title screen's items, titles, section
             // headings, help.
             ImFont* menuFont = nullptr;
@@ -243,6 +266,20 @@ namespace dao::launcher
 
         // The state, for the settings tabs' helpers.
         const State* g_state = nullptr;
+
+        std::vector<NoteLine> ParseNotes(std::string_view notes);
+
+        // The newer release the updater found, if any (copied once: it doesn't
+        // change after).
+        const Release* FoundRelease(State& st)
+        {
+            if (!st.release && st.updater->HasRelease())
+            {
+                st.release = st.updater->GetRelease();
+                st.releaseNotes = ParseNotes(st.release->notes);
+            }
+            return st.release ? &*st.release : nullptr;
+        }
 
         // Where the game's screens go in the window: the scene covers it; the menus fit
         // in it, anchored to its sides.
@@ -656,7 +693,11 @@ namespace dao::launcher
                 SetView(st, View::Configure);
             if (MenuItem(st, layout, "Mods", kMenuTop + 2 * kMenuStep))
                 SetView(st, View::Mods);
-            if (MenuItem(st, layout, "Exit", kMenuTop + 3 * kMenuStep))
+            // Update appears above Exit once a newer release is found.
+            const bool update = FoundRelease(st) != nullptr;
+            if (update && MenuItem(st, layout, "Update", kMenuTop + 3 * kMenuStep))
+                SetView(st, View::Update);
+            if (MenuItem(st, layout, "Exit", kMenuTop + (update ? 4 : 3) * kMenuStep))
                 st.quit = true;
             Hint(st, layout, kButtonA, "Select", layout.Right(kContentsRight, kFooterHintY), true, false);
 
@@ -670,7 +711,7 @@ namespace dao::launcher
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, st.fade);
             if (!gameFound)
             {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.45f, 0.35f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_Text, kError);
                 ImGui::Text("Game data not found in %s", Utf8(st.gameRoot).c_str());
                 ImGui::PopStyleColor();
             }
@@ -678,8 +719,8 @@ namespace dao::launcher
             {
                 const auto enabledMods =
                     std::count_if(st.mods.begin(), st.mods.end(), [](auto& m) { return m.enabled; });
-                Label(fmt::format("{}x{}  \xC2\xB7  {}  \xC2\xB7  {}  \xC2\xB7  {} mod{} on",
-                    1280 * st.settings.resolutionScale, 720 * st.settings.resolutionScale,
+                Label(fmt::format("{}  \xC2\xB7  {}x{}  \xC2\xB7  {}  \xC2\xB7  {}  \xC2\xB7  {} mod{} on",
+                    Version(), 1280 * st.settings.resolutionScale, 720 * st.settings.resolutionScale,
                     st.settings.unlockFrameRate ? "60 fps" : "30 fps",
                     st.settings.temporalUpscaler != TemporalUpscaler::Off ? "temporal FSR" : "no temporal upscaling",
                     enabledMods, enabledMods == 1 ? "" : "s")
@@ -810,6 +851,180 @@ namespace dao::launcher
                 OpenFile(st.userRoot / "config.toml");
             HelpText("Extra Xenia GPU options go in the [xenia] section. Settings are saved when you press Play "
                      "or close the launcher.");
+
+            Section("Updates");
+            Label(fmt::format("Version {}", Version()).c_str());
+            if (!Updater::IsRelease())
+            {
+                HelpText("A development build: it's updated by building the source, not from the releases.");
+                return;
+            }
+            ImGui::Checkbox("Check for updates when the launcher opens", &st.settings.checkForUpdates);
+            Updater& updater = *st.updater;
+            if (const Release* release = FoundRelease(st))
+            {
+                ImGui::Text("%s is available.", release->tag.c_str());
+                ImGui::SameLine();
+                if (ImGui::Button("See the update"))
+                    SetView(st, View::Update);
+            }
+            else
+            {
+                const Updater::State state = updater.GetState();
+                ImGui::BeginDisabled(state == Updater::State::Checking);
+                if (ImGui::Button("Check now"))
+                    updater.Check();
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (state == Updater::State::Checking)
+                    ImGui::TextUnformatted("Checking...");
+                else if (state == Updater::State::UpToDate)
+                    ImGui::TextUnformatted("Up to date.");
+                else if (state == Updater::State::Failed)
+                    ImGui::Text("Can't check: %s.", updater.GetError().c_str());
+            }
+            HelpText("Asks github.com/96dot/DAORecomp for its list of releases; the request carries only this "
+                     "version number.");
+        }
+
+        // Text without Markdown's emphasis and code marks, links as their text.
+        std::string PlainText(std::string_view text)
+        {
+            std::string out;
+            // The next "](" (searched forward only, so this stays linear).
+            size_t close = text.find("](");
+            for (size_t i = 0; i < text.size(); i++)
+            {
+                if (text[i] == '*' || text[i] == '`')
+                    continue;
+                if (text[i] == '[' && close != std::string_view::npos)
+                {
+                    if (close < i)
+                        close = text.find("](", i);
+                    const size_t end = close == std::string_view::npos ? close : text.find(')', close);
+                    if (end == std::string_view::npos)
+                        close = std::string_view::npos; // No more links.
+                    else
+                    {
+                        out += text.substr(i + 1, close - i - 1);
+                        i = end;
+                        continue;
+                    }
+                }
+                out += text[i];
+            }
+            return out;
+        }
+
+        // A release's notes (GitHub Markdown), simply: headings as sections, list
+        // items as bullets, nesting by indentation (two spaces a level, up to four).
+        std::vector<NoteLine> ParseNotes(std::string_view notes)
+        {
+            std::vector<NoteLine> lines;
+            while (!notes.empty())
+            {
+                const size_t end = notes.find('\n');
+                std::string_view line = notes.substr(0, end);
+                notes.remove_prefix(end == std::string_view::npos ? notes.size() : end + 1);
+                const size_t indent = line.find_first_not_of(' ');
+                if (indent == std::string_view::npos)
+                {
+                    lines.push_back({ NoteLine::Kind::Blank });
+                    continue;
+                }
+                line.remove_prefix(indent);
+                if (line.starts_with('#'))
+                {
+                    line.remove_prefix(std::min(line.find_first_not_of('#'), line.size()));
+                    line.remove_prefix(std::min(line.find_first_not_of(' '), line.size()));
+                    lines.push_back({ NoteLine::Kind::Heading, 0, PlainText(line) });
+                    continue;
+                }
+                const bool item = line.starts_with("- ") || line.starts_with("* ");
+                if (item)
+                    line.remove_prefix(2);
+                const int level = int(std::min<size_t>(indent / 2, 4));
+                lines.push_back({ item ? NoteLine::Kind::Item : NoteLine::Kind::Text, level, PlainText(line) });
+            }
+            return lines;
+        }
+
+        void ReleaseNotes(const std::vector<NoteLine>& lines)
+        {
+            for (const NoteLine& line : lines)
+            {
+                if (line.kind == NoteLine::Kind::Blank)
+                {
+                    ImGui::Spacing();
+                    continue;
+                }
+                if (line.kind == NoteLine::Kind::Heading)
+                {
+                    Section(line.text.c_str());
+                    continue;
+                }
+                const float shift = float(line.level) * ImGui::GetStyle().IndentSpacing;
+                if (shift > 0.0f)
+                    ImGui::Indent(shift);
+                if (line.kind == NoteLine::Kind::Item)
+                {
+                    ImGui::Bullet();
+                    ImGui::SameLine();
+                }
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(line.text.c_str());
+                ImGui::PopTextWrapPos();
+                if (shift > 0.0f)
+                    ImGui::Unindent(shift);
+            }
+        }
+
+        // The update's page: what it is, downloading and starting its installer
+        // (the launcher then closes, see Run), what's new.
+        void UpdateContents(State& st)
+        {
+            Updater& updater = *st.updater;
+            const Release& release = *FoundRelease(st);
+            const Updater::State state = updater.GetState();
+            Section(release.name.c_str());
+            ImGui::Text("This is %s; %s is available.", Version(), release.tag.c_str());
+            ImGui::Spacing();
+            if (!updater.CanInstall())
+            {
+                if (ImGui::Button("Open the release page"))
+                    updater.OpenReleasePage();
+                HelpText("The launcher can't run its installer here (under Wine or Proton, or in a folder the "
+                         "installer didn't make): see the README's \"Updating\".");
+            }
+            else if (state == Updater::State::Downloading)
+            {
+                const float progress = updater.GetProgress();
+                ImGui::ProgressBar(progress, ImVec2(RowWidth(), 0),
+                    fmt::format("Downloading {}%", int(progress * 100.0f)).c_str());
+            }
+            else if (state == Updater::State::Ready)
+                ImGui::TextUnformatted("Starting the installer...");
+            else
+            {
+                if (state == Updater::State::Failed)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, kError);
+                    ImGui::TextWrapped("The download failed: %s.", updater.GetError().c_str());
+                    ImGui::PopStyleColor();
+                }
+                if (ImGui::Button(state == Updater::State::Failed ? "Try again" : "Download and install"))
+                    updater.Download();
+                ImGui::SameLine();
+                if (ImGui::Button("Release page"))
+                    updater.OpenReleasePage();
+                HelpText(fmt::format("Downloads its installer ({:.0f} MB) from GitHub, checks it against its "
+                                     "published checksum and runs it on this folder: it rebuilds the game in a few "
+                                     "minutes and keeps your saves, settings and mods. The launcher closes while it "
+                                     "runs.",
+                    double(release.installerSize) / (1 << 20))
+                             .c_str());
+            }
+            ReleaseNotes(st.releaseNotes);
         }
 
         void ModsList(State& st)
@@ -1048,6 +1263,12 @@ namespace dao::launcher
             ShowContents(st, layout, kModsLeft, ModsList);
         }
 
+        void UpdateView(State& st, const Layout& layout)
+        {
+            PanelFrame(st, layout, "Update", nullptr);
+            ShowContents(st, layout, kModsLeft, UpdateContents);
+        }
+
         void ApplyStyle(float scale)
         {
             ImGui::StyleColorsDark();
@@ -1101,10 +1322,25 @@ namespace dao::launcher
 
         ImFont* LoadFont(const char* const* files, float size)
         {
+            // Latin, and the punctuation and arrows of release notes (dashes, quotes,
+            // ellipses).
+            static constexpr ImWchar kGlyphs[] = { 0x0020, 0x00FF, 0x2010, 0x2027, 0x2190, 0x21FF, 0 };
+            // The serif fonts have no arrows; Segoe UI's fill in.
+            static constexpr ImWchar kArrows[] = { 0x2190, 0x21FF, 0 };
+            static constexpr const char* kArrowFont = "C:\\Windows\\Fonts\\segoeui.ttf";
+            ImFontAtlas& fonts = *ImGui::GetIO().Fonts;
             for (const char* const* file = files; *file; file++)
             {
-                if (fs::exists(*file))
-                    return ImGui::GetIO().Fonts->AddFontFromFileTTF(*file, size);
+                if (!fs::exists(*file))
+                    continue;
+                ImFont* font = fonts.AddFontFromFileTTF(*file, size, nullptr, kGlyphs);
+                if (font && fs::exists(kArrowFont))
+                {
+                    ImFontConfig merge;
+                    merge.MergeMode = true;
+                    fonts.AddFontFromFileTTF(kArrowFont, size, &merge, kArrows);
+                }
+                return font;
             }
             return nullptr;
         }
@@ -1280,7 +1516,17 @@ namespace dao::launcher
             return true;
         }
         SDL_SetWindowMinimumSize(window, int(kMinWidth * scale), int(kMinHeight * scale));
-        SDL_SetRenderVSync(renderer, 1);
+        if (!SDL_SetRenderVSync(renderer, 1))
+            LOGW("Launcher: vsync is unavailable ({})", SDL_GetError());
+        // The driver can turn vsync off anyway, so frames are also capped: the menus'
+        // slow animations need no more than 60 fps (saving power on a handheld). The
+        // cap is 5% above the refresh rate when that's lower, so a vsynced frame is
+        // never held back; with no refresh rate known, 60 Hz.
+        constexpr float kMaxMenuFps = 60.0f;
+        const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
+        const float refresh = mode && mode->refresh_rate > 0 ? mode->refresh_rate : kMaxMenuFps;
+        const float maxFps = std::min(refresh, kMaxMenuFps) * 1.05f;
+        const Uint64 minFrameNs = Uint64(1e9 / std::max(maxFps, 20.0f));
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -1335,14 +1581,20 @@ namespace dao::launcher
         if (const char* dir = getenv("DAO_LAUNCHER_SCREENSHOTS"))
             st.screenshotDir = dir;
         LoadArt(st, renderer);
+        st.updater = std::make_unique<Updater>();
+        if (st.settings.checkForUpdates)
+            st.updater->Check();
 
         // Screenshot mode: kFramesPerShot frames per shot (main, the configure tabs,
-        // mods), captured on the last one, after the view has faded in.
+        // mods, and the update's page if the check finds one), captured on the last
+        // one, after the view has faded in.
         constexpr int kFramesPerShot = 20;
-        constexpr int kShots = 1 + kConfigureTabs + 1;
+        constexpr int kModsShot = 1 + kConfigureTabs;
+        constexpr int kUpdateShot = kModsShot + 1;
         // While minimized or in the background: at most this often, to save power.
         constexpr int kIdleWaitMs = 100;
 
+        Uint64 frameStart = SDL_GetTicksNS();
         while (!st.play && !st.quit)
         {
             const SDL_WindowFlags flags = SDL_GetWindowFlags(window);
@@ -1373,13 +1625,19 @@ namespace dao::launcher
             const int shot = st.screenshotDir.empty() ? -1 : st.screenshotFrame / kFramesPerShot;
             const bool shotStart = shot >= 0 && st.screenshotFrame % kFramesPerShot == 0;
             const bool shotNow = shot >= 0 && st.screenshotFrame % kFramesPerShot == kFramesPerShot - 1;
-            if (shotStart)
+            // The update's page waits for the check.
+            const bool updateShot = shot == kUpdateShot;
+            const bool shotWaits = updateShot && st.updater->GetState() == Updater::State::Checking;
+            if (shotStart && !shotWaits)
             {
-                SetView(st, shot == 0 ? View::Main : shot == kShots - 1 ? View::Mods : View::Configure);
+                SetView(st, shot == 0 ? View::Main
+                        : shot == kModsShot ? View::Mods
+                        : updateShot ? View::Update
+                        : View::Configure);
                 if (shot >= 1 && shot <= kConfigureTabs)
                     st.configureTab = shot - 1;
             }
-            if (shot >= kShots)
+            if (shot > kUpdateShot || (updateShot && !shotWaits && !FoundRelease(st)))
                 st.quit = true;
 
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -1408,11 +1666,17 @@ namespace dao::launcher
             case View::Mods:
                 ModsView(st, layout);
                 break;
+            case View::Update:
+                UpdateView(st, layout);
+                break;
             }
             // Focus moves to the new view's first item in the frame it's shown.
             if (viewChanged && st.view == view)
                 st.viewChanged = false;
             ImGui::End();
+            // A downloaded update: its installer replaces the game's files, so close.
+            if (st.updater->GetState() == Updater::State::Ready && st.updater->Launch())
+                st.quit = true;
 
             ImGui::Render();
             SDL_SetRenderScale(renderer, io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y);
@@ -1427,9 +1691,12 @@ namespace dao::launcher
                     LOGW("Launcher: can't save {}: {}", path, SDL_GetError());
                 SDL_DestroySurface(surface);
             }
-            if (!st.screenshotDir.empty())
+            if (!st.screenshotDir.empty() && !shotWaits)
                 st.screenshotFrame++;
             SDL_RenderPresent(renderer);
+            if (const Uint64 elapsed = SDL_GetTicksNS() - frameStart; elapsed < minFrameNs)
+                SDL_DelayNS(minFrameNs - elapsed);
+            frameStart = SDL_GetTicksNS();
         }
 
         st.settings.mods = mods::ToState(st.mods);

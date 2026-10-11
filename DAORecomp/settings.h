@@ -26,6 +26,8 @@ namespace dao
     {
         // Show the launcher window before starting the game.
         bool showLauncher = true;
+        // Look for a newer release on GitHub when the launcher opens.
+        bool checkForUpdates = true;
 
         // Internal rendering resolution multiplier (the game renders at 1280x720):
         // 2 = 2560x1440, 3 = 3840x2160.

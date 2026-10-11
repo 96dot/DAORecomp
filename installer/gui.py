@@ -9,8 +9,8 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
-from . import deps, pipeline
-from .util import IS_WINDOWS, REPO, Cancelled, InstallError, Reporter
+from . import deps, pipeline, shortcuts, toolchain
+from .util import IS_WINDOWS, REPO, VERSION, Cancelled, InstallError, Reporter
 
 
 def default_dest():
@@ -18,20 +18,24 @@ def default_dest():
 
 
 class App:
-    def __init__(self, root, iso="", dest=""):
+    def __init__(self, root, iso="", dest="", update=False):
         self.root = root
         self.events = queue.Queue()
         self.worker = None
         self.reporter = None
         self.result = None
 
-        root.title("Dragon Age: Origins Recompiled - Installer")
+        root.title(f"Dragon Age: Origins Recompiled - Installer {VERSION}")
         root.minsize(720, 480)
         frame = ttk.Frame(root, padding=12)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(1, weight=1)
 
-        intro = ttk.Label(frame, text=f"Builds the game from your own copy of {deps.GAME_TITLE}.")
+        intro = ttk.Label(frame, text=(
+            f"Updates the game in {dest or 'the install folder'} to {VERSION}; your saves, settings and mods are "
+            "kept." if update else
+            f"Builds the game from your own copy of {deps.GAME_TITLE}. To update an install, choose its "
+            "folder: the disc image is needed only the first time."))
         intro.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
 
         self.iso = tk.StringVar(value=str(iso))
@@ -45,7 +49,8 @@ class App:
         self.dest_button = ttk.Button(frame, text="Browse...", command=self.pick_dest)
         self.dest_button.grid(row=2, column=2)
 
-        self.accept = tk.BooleanVar(value=False)
+        # Accepted on an earlier run if the CRT/SDK are already set up.
+        self.accept = tk.BooleanVar(value=toolchain.winsysroot_ready())
         license_row = ttk.Frame(frame)
         license_row.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Checkbutton(license_row, variable=self.accept,
@@ -55,28 +60,36 @@ class App:
         link.pack(side="left", padx=6)
         link.bind("<Button-1>", lambda e: webbrowser.open(deps.MSVC_LICENSE_URL))
 
+        # An update keeps the install's choice.
+        self.make_shortcuts = tk.BooleanVar(value=IS_WINDOWS and (shortcuts.exist() if update else True))
+        if IS_WINDOWS:
+            ttk.Checkbutton(frame, variable=self.make_shortcuts, text="Create Start menu and desktop shortcuts").grid(
+                row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
         note = ttk.Label(frame, text="Needs about 25 GB: 8 GB for the game, the rest for the tools and the "
                                      f"build in {REPO} (keep it for quick updates, or delete it after "
                                      "installing). The first build takes 30-60 minutes.", foreground="#666")
-        note.grid(row=4, column=0, columnspan=3, sticky="w", pady=6)
+        note.grid(row=5, column=0, columnspan=3, sticky="w", pady=6)
         # Wrap the texts at the window width (in real pixels, whatever the display scaling).
         frame.bind("<Configure>", lambda e: [w.configure(wraplength=max(e.width - 30, 200)) for w in (intro, note)])
 
         self.status = tk.StringVar(value="Ready.")
-        ttk.Label(frame, textvariable=self.status).grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 2))
+        ttk.Label(frame, textvariable=self.status).grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 2))
         self.bar = ttk.Progressbar(frame, mode="determinate", maximum=1.0)
-        self.bar.grid(row=6, column=0, columnspan=3, sticky="ew")
+        self.bar.grid(row=7, column=0, columnspan=3, sticky="ew")
 
         self.log = ScrolledText(frame, height=16, state="disabled", wrap="none",
                                 font=("Consolas" if IS_WINDOWS else "Monospace", 9))
-        self.log.grid(row=7, column=0, columnspan=3, sticky="nsew", pady=8)
-        frame.rowconfigure(7, weight=1)
+        self.log.grid(row=8, column=0, columnspan=3, sticky="nsew", pady=8)
+        frame.rowconfigure(8, weight=1)
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=8, column=0, columnspan=3, sticky="e")
+        buttons.grid(row=9, column=0, columnspan=3, sticky="e")
         self.open_button = ttk.Button(buttons, text="Open install folder", command=self.open_dest,
                                       state="disabled")
         self.open_button.pack(side="left", padx=4)
+        self.play_button = ttk.Button(buttons, text="Play", command=self.play, state="disabled")
+        self.play_button.pack(side="left", padx=4)
         self.install_button = ttk.Button(buttons, text="Install", command=self.start)
         self.install_button.pack(side="left", padx=4)
         self.cancel_button = ttk.Button(buttons, text="Close", command=self.close)
@@ -84,6 +97,9 @@ class App:
 
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.after(100, self.pump)
+        # From the launcher's Update: go ahead if nothing needs choosing.
+        if update and self.accept.get() and dest and pipeline.game_extracted(Path(dest).expanduser() / "game"):
+            root.after(300, self.start)
 
     def pick_iso(self):
         path = filedialog.askopenfilename(title="Dragon Age: Origins disc image",
@@ -105,18 +121,23 @@ class App:
         self.log.configure(state="disabled")
 
     def start(self):
-        if not self.iso.get().strip() or not self.dest.get().strip():
-            messagebox.showerror("Installer", "Choose the disc image and the install folder.")
+        iso, dest = self.iso.get().strip(), self.dest.get().strip()
+        if not dest:
+            messagebox.showerror("Installer", "Choose the install folder.")
+            return
+        if not iso and not pipeline.game_extracted(Path(dest).expanduser() / "game"):
+            messagebox.showerror("Installer", "Choose the disc image (the install folder has no game files yet).")
             return
         if not self.accept.get():
             messagebox.showerror("Installer", "The build tools license must be accepted to build the game.")
             return
-        options = pipeline.Options(iso=Path(self.iso.get().strip()), dest=Path(self.dest.get().strip()),
-                                   accept_license=True)
+        options = pipeline.Options(iso=Path(iso) if iso else None, dest=Path(dest), accept_license=True,
+                                   shortcuts=self.make_shortcuts.get())
         self.reporter = Reporter(log=lambda t: self.events.put(("log", t)),
                                  status=lambda t: self.events.put(("status", t)),
                                  progress=lambda f: self.events.put(("progress", f)))
         self.install_button.configure(state="disabled")
+        self.play_button.configure(state="disabled")
         self.iso_button.configure(state="disabled")
         self.dest_button.configure(state="disabled")
         self.cancel_button.configure(text="Cancel")
@@ -172,13 +193,28 @@ class App:
         self.cancel_button.configure(text="Close")
         if ok:
             self.open_button.configure(state="normal")
-            messagebox.showinfo("Installer", f"Installed. Start the game with\n{self.result}")
+            self.play_button.configure(state="normal")
+            self.play_button.focus_set()
+            self.status.set(f"Installed {VERSION}. Press Play to start the game (or run {self.result}).")
         else:
             self.status.set(message)
             self.append("!! " + message)
             if message != "Cancelled.":
                 messagebox.showerror("Installer", message + "\n\nRunning the installer again resumes "
                                                             "where it stopped.")
+
+    def play(self):
+        """Starts the installed game (its launcher) and closes the installer."""
+        game = Path(self.result)
+        try:
+            if IS_WINDOWS:
+                subprocess.Popen([str(game)], cwd=game.parent, creationflags=subprocess.DETACHED_PROCESS)
+            else:
+                subprocess.Popen([str(game)], cwd=game.parent, start_new_session=True)
+        except OSError as e:
+            messagebox.showerror("Installer", f"Can't start {game}: {e}")
+            return
+        self.root.destroy()
 
     def open_dest(self):
         path = str(Path(self.dest.get()).expanduser())
@@ -196,7 +232,7 @@ class App:
         self.root.destroy()
 
 
-def main(iso="", dest=""):
+def main(iso="", dest="", update=False):
     if IS_WINDOWS:
         try:  # sharp text on scaled displays
             import ctypes
@@ -208,5 +244,5 @@ def main(iso="", dest=""):
         ttk.Style(root).theme_use("vista" if IS_WINDOWS else "clam")
     except tk.TclError:
         pass
-    App(root, iso, dest)
+    App(root, iso, dest, update)
     root.mainloop()

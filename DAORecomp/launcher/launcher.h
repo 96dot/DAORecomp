@@ -1,5 +1,6 @@
 #pragma once
-// The launcher window shown before the game: Play, Settings, Mods, Patches.
+// The launcher window shown before the game: Play, Configure (graphics, display,
+// patches, advanced), Mods, and Update when a newer release is out.
 // It edits userdata/config.toml; the game reads that file once the launcher closes.
 
 namespace dao::launcher
