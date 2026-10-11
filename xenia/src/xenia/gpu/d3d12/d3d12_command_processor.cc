@@ -41,6 +41,8 @@ DEFINE_bool(d3d12_submit_on_primary_buffer_end, true,
             "D3D12");
 
 DECLARE_bool(clear_memory_page_state);
+DECLARE_double(present_hdr_paper_white);
+DECLARE_double(present_hdr_gamma);
 DECLARE_bool(readback_resolve_half_pixel_offset);
 
 namespace xe {
@@ -1324,6 +1326,15 @@ bool D3D12CommandProcessor::SetupContext() {
     XELOGE("Failed to create the gamma ramp application root signature");
     return false;
   }
+  apply_gamma_root_parameters[UINT(ApplyGammaRootParameter::kConstants)]
+      .Constants.Num32BitValues = sizeof(DaoPqCopyConstants) / sizeof(uint32_t);
+  *(dao_pq_copy_root_signature_.ReleaseAndGetAddressOf()) =
+      ui::d3d12::util::CreateRootSignature(provider,
+                                           apply_gamma_root_signature_desc);
+  if (!dao_pq_copy_root_signature_) {
+    XELOGE("Failed to create the PQ copy root signature");
+    return false;
+  }
   *(apply_gamma_table_pipeline_.ReleaseAndGetAddressOf()) =
       ui::d3d12::util::CreateComputePipeline(
           device, shaders::apply_gamma_table_cs,
@@ -1369,7 +1380,7 @@ bool D3D12CommandProcessor::SetupContext() {
   *(dao_pq_copy_pipeline_.ReleaseAndGetAddressOf()) =
       ui::d3d12::util::CreateComputePipeline(
           device, shaders::dao_pq_copy_cs, sizeof(shaders::dao_pq_copy_cs),
-          apply_gamma_root_signature_.Get());
+          dao_pq_copy_root_signature_.Get());
   if (!dao_pq_copy_pipeline_) {
     XELOGE("Failed to create the PQ copy compute pipeline");
     return false;
@@ -1735,6 +1746,7 @@ void D3D12CommandProcessor::ShutdownContext() {
   fxaa_root_signature_.Reset();
 
   dao_pq_copy_pipeline_.Reset();
+  dao_pq_copy_root_signature_.Reset();
   apply_gamma_pwl_fxaa_luma_pipeline_.Reset();
   apply_gamma_pwl_pipeline_.Reset();
   apply_gamma_table_fxaa_luma_pipeline_.Reset();
@@ -2508,15 +2520,31 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         gamma_ramp_buffer_state_ =
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
-        deferred_command_list_.D3DSetComputeRootSignature(
-            apply_gamma_root_signature_.Get());
-        ApplyGammaConstants apply_gamma_constants;
-        apply_gamma_constants.size[0] = uint32_t(swap_texture_desc.Width);
-        apply_gamma_constants.size[1] = uint32_t(swap_texture_desc.Height);
-        deferred_command_list_.D3DSetComputeRoot32BitConstants(
-            UINT(ApplyGammaRootParameter::kConstants),
-            sizeof(apply_gamma_constants) / sizeof(uint32_t),
-            &apply_gamma_constants, 0);
+        if (dao_pq) {
+          deferred_command_list_.D3DSetComputeRootSignature(
+              dao_pq_copy_root_signature_.Get());
+          DaoPqCopyConstants dao_pq_constants;
+          dao_pq_constants.size[0] = uint32_t(swap_texture_desc.Width);
+          dao_pq_constants.size[1] = uint32_t(swap_texture_desc.Height);
+          dao_pq_constants.paper_white =
+              float(std::max(cvars::present_hdr_paper_white, 80.0));
+          dao_pq_constants.gamma = float(cvars::present_hdr_gamma);
+          dao_pq_constants.use_ramp = use_pwl_gamma_ramp ? 0 : 1;
+          deferred_command_list_.D3DSetComputeRoot32BitConstants(
+              UINT(ApplyGammaRootParameter::kConstants),
+              sizeof(dao_pq_constants) / sizeof(uint32_t), &dao_pq_constants,
+              0);
+        } else {
+          deferred_command_list_.D3DSetComputeRootSignature(
+              apply_gamma_root_signature_.Get());
+          ApplyGammaConstants apply_gamma_constants;
+          apply_gamma_constants.size[0] = uint32_t(swap_texture_desc.Width);
+          apply_gamma_constants.size[1] = uint32_t(swap_texture_desc.Height);
+          deferred_command_list_.D3DSetComputeRoot32BitConstants(
+              UINT(ApplyGammaRootParameter::kConstants),
+              sizeof(apply_gamma_constants) / sizeof(uint32_t),
+              &apply_gamma_constants, 0);
+        }
         deferred_command_list_.D3DSetComputeRootDescriptorTable(
             UINT(ApplyGammaRootParameter::kDestination),
             apply_gamma_descriptors[0].second);

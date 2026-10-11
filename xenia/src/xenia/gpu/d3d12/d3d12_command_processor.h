@@ -725,6 +725,13 @@ class D3D12CommandProcessor final : public CommandProcessor {
   struct ApplyGammaConstants {
     uint32_t size[2];
   };
+  // DAO: dao_pq_copy.cs.
+  struct DaoPqCopyConstants {
+    uint32_t size[2];
+    float paper_white;
+    float gamma;
+    uint32_t use_ramp;
+  };
   enum class ApplyGammaRootParameter : UINT {
     kConstants,
     kDestination,
@@ -740,7 +747,9 @@ class D3D12CommandProcessor final : public CommandProcessor {
   Microsoft::WRL::ComPtr<ID3D12PipelineState> apply_gamma_pwl_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState>
       apply_gamma_pwl_fxaa_luma_pipeline_;
-  // DAO: copies a PQ (HDR) frame in place of the gamma ramp.
+  // DAO: copies a PQ (HDR) frame in place of the gamma ramp pass (the
+  // apply_gamma root signature with DaoPqCopyConstants).
+  Microsoft::WRL::ComPtr<ID3D12RootSignature> dao_pq_copy_root_signature_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> dao_pq_copy_pipeline_;
 
   struct FxaaConstants {
