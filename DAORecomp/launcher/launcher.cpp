@@ -1076,7 +1076,7 @@ namespace dao::launcher
             SliderRow("Peak brightness", &s.hdrPeak, s.hdrPaperWhite, 4000.0f, "%.0f nits");
             ImGui::EndDisabled();
             HelpText("On an HDR display, 3D scenes are rendered in HDR, their highlights up to the "
-                     "peak brightness; the rest is shown at paper white.");
+                     "peak brightness; menus are shown at paper white.");
         }
 
         void PatchesTab(State& st)

@@ -1326,6 +1326,7 @@ bool D3D12CommandProcessor::SetupContext() {
     XELOGE("Failed to create the gamma ramp application root signature");
     return false;
   }
+  // The same layout with more constants (the descriptor above is done with).
   apply_gamma_root_parameters[UINT(ApplyGammaRootParameter::kConstants)]
       .Constants.Num32BitValues = sizeof(DaoPqCopyConstants) / sizeof(uint32_t);
   *(dao_pq_copy_root_signature_.ReleaseAndGetAddressOf()) =
@@ -2308,8 +2309,8 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   }
   D3D12_SHADER_RESOURCE_VIEW_DESC dao_upscaled_srv_desc;
   // FSR sharpens; at the front buffer's size it didn't scale the UI either,
-  // so the presenter's 1:1 sharpening would only add to it (not for frames
-  // only PQ-encoded).
+  // so the presenter's 1:1 sharpening would only add to it. Frames the
+  // upscaler only encoded aren't sharpened.
   bool dao_sharpened = false;
   // The image is the game's HDR, PQ-encoded: not for the gamma ramp.
   bool dao_pq = false;
@@ -2410,6 +2411,19 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         if (!(use_pwl_gamma_ramp ? gamma_ramp_pwl_up_to_date_
                                  : gamma_ramp_256_entry_table_up_to_date_)) {
           uint32_t gamma_ramp_offset_bytes = use_pwl_gamma_ramp ? 256 * 4 : 0;
+          if (!use_pwl_gamma_ramp) {
+            const reg::DC_LUT_30_COLOR* table = gamma_ramp_256_entry_table();
+            dao_gamma_ramp_identity_ = true;
+            for (uint32_t i = 0; i < 256; ++i) {
+              const uint32_t identity = (i * 1023 + 127) / 255;
+              for (uint32_t value :
+                   {table[i].color_10_red, table[i].color_10_green,
+                    table[i].color_10_blue}) {
+                dao_gamma_ramp_identity_ &=
+                    value + 1 >= identity && value <= identity + 1;
+              }
+            }
+          }
           uint32_t gamma_ramp_upload_offset_bytes =
               uint32_t(frame_current_ % kQueueFrames) * ((256 + 128 * 3) * 4) +
               gamma_ramp_offset_bytes;
@@ -2528,8 +2542,10 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
           dao_pq_constants.size[1] = uint32_t(swap_texture_desc.Height);
           dao_pq_constants.paper_white =
               float(std::max(cvars::present_hdr_paper_white, 80.0));
-          dao_pq_constants.gamma = float(cvars::present_hdr_gamma);
-          dao_pq_constants.use_ramp = use_pwl_gamma_ramp ? 0 : 1;
+          dao_pq_constants.gamma =
+              float(std::clamp(cvars::present_hdr_gamma, 1.0, 3.0));
+          dao_pq_constants.use_ramp =
+              !use_pwl_gamma_ramp && !dao_gamma_ramp_identity_;
           deferred_command_list_.D3DSetComputeRoot32BitConstants(
               UINT(ApplyGammaRootParameter::kConstants),
               sizeof(dao_pq_constants) / sizeof(uint32_t), &dao_pq_constants,

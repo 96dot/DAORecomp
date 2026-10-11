@@ -51,7 +51,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     // On the green curve (the least tinted): its linear part continued, from
     // the slope just below the knee (the same for the whole screen, so cached
     // by the texture unit), against the curve itself.
-    // 4 of the curve's entries.
+    // About 4 of the curve's 255 entries.
     const float step = 1.0 / 64.0;
     float knee = Curve(dao_knee).g;
     float slope = max(knee - Curve(dao_knee - step).g, 0.0) / step;

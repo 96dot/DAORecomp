@@ -1171,8 +1171,9 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
     const bool display_hdr = paint_context_.display_hdr;
     const float paper_white =
         float(std::max(cvars::present_hdr_paper_white, 80.0));
-    // Per scRGB unit (80 nits): SDR white on HDR displays, else 1; a PQ image
-    // is in nits.
+    // The scale to scRGB (1 = 80 nits): an SDR image's white is paper_white
+    // on HDR displays and 1 on SDR ones; a PQ image is in nits, scaled by
+    // 1/80 (HDR) or 1/paper_white (SDR).
     const bool pq = guest_output_properties.pq;
     float scale = display_hdr ? paper_white / 80.0f : 1.0f;
     if (pq) {

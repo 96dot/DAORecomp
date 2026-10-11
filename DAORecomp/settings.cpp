@@ -212,8 +212,8 @@ vsync = {}
 unlock_frame_rate = {}
 # HDR output. On an HDR display, SDR white is shown at hdr_paper_white nits and
 # highlights go up to hdr_peak nits: the 3D scenes are rendered in HDR (the
-# highlights the game compresses), the rest of the image is the game's at
-# paper white. Harmless on SDR displays (the SDR image, linearized).
+# highlights the game compresses), menus are the game's image at paper white.
+# Harmless on SDR displays (the SDR image, linearized).
 hdr = {}
 hdr_paper_white = {}
 hdr_peak = {}

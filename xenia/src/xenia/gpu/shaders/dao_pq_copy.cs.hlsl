@@ -1,8 +1,8 @@
 // DAO: in place of the gamma ramp pass for a PQ-encoded (HDR) frame: copies it
 // to the presenter's guest output, with the game's 256-entry gamma ramp (its
-// brightness) applied where the image is within SDR white, as on the SDR
-// output; brighter values are left as they are (the ramp ends at white).
-// The bindings of apply_gamma_table.cs, with more constants.
+// brightness) applied per channel up to SDR white, as on the SDR output, and
+// above it the ramp's gain at white (continuous at white). The bindings of
+// apply_gamma_table.cs, with more constants.
 Buffer<float4> dao_ramp : register(t0);  // BGR in RGB.
 Texture2D<float4> dao_source : register(t1);
 RWTexture2D<float4> dao_dest : register(u0);
@@ -11,7 +11,7 @@ cbuffer DaoPqCopyConstants : register(b0) {
   uint2 dao_size;
   float dao_paper_white;  // Nits.
   float dao_gamma;        // Of the game's output.
-  // 0: the ramp isn't a 256-entry table; copied unchanged.
+  // 0: the ramp is the identity, or not a 256-entry table: copied unchanged.
   uint dao_use_ramp;
 };
 
@@ -46,8 +46,9 @@ void main(uint3 id : SV_DispatchThreadID) {
   if (dao_use_ramp) {
     float3 relative = PqToNits(color) / dao_paper_white;
     float3 ramped = pow(Ramp(pow(relative, 1.0 / dao_gamma)), dao_gamma);
-    color = NitsToPq(
-        (relative <= 1.0 ? ramped : relative) * dao_paper_white);
+    float3 white_gain = pow(Ramp(1.0), dao_gamma);
+    color = NitsToPq(lerp(ramped, relative * white_gain, step(1.0, relative)) *
+                     dao_paper_white);
   }
   dao_dest[id.xy] = float4(color, 1.0);
 }

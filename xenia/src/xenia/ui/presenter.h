@@ -355,7 +355,8 @@ class Presenter {
   void RequestUIPaintFromUIThread();
 
  protected:
-  // DAO: see IsDisplayHdr.
+  // DAO: see IsDisplayHdr. Set when the surface connects (a display's HDR
+  // turned on or off later isn't followed until it reconnects).
   std::atomic<bool> display_hdr_{false};
 
   enum class PaintResult {
