@@ -134,6 +134,8 @@ class DaoUpscalerImpl {
     uint32_t previous_offset;
     uint32_t current_counter;
     uint32_t previous_counter;
+    uint32_t current_in_buffer;
+    uint32_t previous_in_buffer;
     float viewport_offset[2];
     float viewport_extent[2];
     float render_size[2];
@@ -148,6 +150,9 @@ class DaoUpscalerImpl {
     uint64_t key;
     uint64_t constants_hash;
     std::vector<uint32_t> constants;
+    // Sum of the constants (infinity if any isn't finite): the difference of
+    // two is at most the distance between their constants.
+    double constants_sum;
     // Stream output, right after the draw.
     ID3D12PipelineState* stream_out_pipeline;
     ID3D12PipelineState* pipeline;
@@ -159,10 +164,15 @@ class DaoUpscalerImpl {
     D3D12_GPU_VIRTUAL_ADDRESS unjittered_system_constants;
     bool indexed;
     uint32_t host_vertex_count;
-    // Triangle list vertices written by each pass (0 if no motion vectors),
-    // and the space for them.
+    // Triangle list vertices written by each pass (0 if no motion vectors).
     uint32_t output_vertex_count;
-    uint32_t output_size;
+    // Stream output passes: with the current constants and, unless they're
+    // the same as in the previous frame, with the previous ones.
+    uint32_t stream_out_passes;
+    // Stream output buffers to bind: none (appending to the bound one), one
+    // for all passes, or one for each.
+    uint32_t stream_out_bind_count;
+    D3D12_STREAM_OUTPUT_BUFFER_VIEW stream_out_views[2];
     MotionConstants motion;
   };
   // The motion vector pass at the swap.
@@ -204,6 +214,10 @@ class DaoUpscalerImpl {
                      uint32_t host_vertex_count);
   static void ExecuteStreamOut(void* context,
                                ID3D12GraphicsCommandList* command_list);
+  // Unbinds the stream output buffers, if bound.
+  void CloseStreamOut();
+  static void ExecuteCloseStreamOut(void* context,
+                                    ID3D12GraphicsCommandList* command_list);
   void RecordMotionPass(uint32_t width, uint32_t height);
   static void ExecuteMotionPass(void* context,
                                 ID3D12GraphicsCommandList* command_list);
@@ -284,11 +298,23 @@ class DaoUpscalerImpl {
   // are read by its commands until they're executed after the swap).
   std::deque<MotionDraw> motion_draws_[2];
   uint32_t motion_frame_ = 0;
-  std::unordered_multimap<uint64_t, const MotionDraw*> previous_motion_draws_;
+  // The previous frame's draws of each object, in order of constants_sum.
+  std::unordered_map<uint64_t, std::vector<const MotionDraw*>>
+      previous_motion_draws_;
   std::unordered_set<uint64_t> motion_seen_;
+  // The constants of the current draw (kept to reuse the allocation).
+  std::vector<uint32_t> motion_constants_;
   uint32_t stream_out_used_ = 0;
   uint32_t stream_out_counters_used_ = 0;
   bool stream_out_reset_ = false;
+  // Draws are appended to one stream output buffer (rebinding it for every
+  // draw is slow): where it starts, its filled-size counter, and the
+  // submission it was bound in (UINT64_MAX if not bound).
+  uint32_t stream_out_append_start_ = 0;
+  uint32_t stream_out_append_counter_ = 0;
+  uint64_t stream_out_append_submission_ = UINT64_MAX;
+  // Whether draws since the last CloseStreamOut bound stream output buffers.
+  bool stream_out_bound_ = false;
   uint32_t motion_unmatched_ = 0;
   uint32_t motion_skipped_ = 0;
   bool motion_logged_ = false;
@@ -959,7 +985,8 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
 
   // The float constants as the vertex shader gets them.
   const RegisterFile& regs = rtc_.register_file();
-  std::vector<uint32_t> constants;
+  std::vector<uint32_t>& constants = motion_constants_;
+  constants.clear();
   const Shader::ConstantRegisterMap& constant_map =
       vertex_shader.constant_register_map();
   for (uint32_t i = 0; i < 4; ++i) {
@@ -991,29 +1018,82 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     return;
   }
 
-  // The previous frame's draw of it: the one with the closest constants.
+  // The previous frame's draw of it: the one with the closest constants (sum
+  // of absolute differences). Searched from the closest constants_sum
+  // outwards, until the difference of the sums alone is too much.
+  double constants_sum = 0.0;
+  for (uint32_t value : constants) {
+    constants_sum += double(std::bit_cast<float>(value));
+  }
+  if (!std::isfinite(constants_sum)) {
+    constants_sum = INFINITY;
+  }
   const MotionDraw* previous = nullptr;
-  float best_distance = INFINITY;
-  auto range = previous_motion_draws_.equal_range(key);
-  for (auto it = range.first; it != range.second; ++it) {
-    const MotionDraw& candidate = *it->second;
-    if (candidate.constants.size() != constants.size()) {
-      continue;
-    }
-    if (candidate.constants_hash == constants_hash) {
-      previous = &candidate;
-      break;
-    }
-    float distance = 0.0f;
-    for (size_t i = 0; i < constants.size(); ++i) {
-      float a, b;
-      std::memcpy(&a, &constants[i], sizeof(float));
-      std::memcpy(&b, &candidate.constants[i], sizeof(float));
-      distance += std::abs(a - b);
-    }
-    if (distance < best_distance) {
-      best_distance = distance;
-      previous = &candidate;
+  auto found = previous_motion_draws_.find(key);
+  if (found != previous_motion_draws_.end()) {
+    const std::vector<const MotionDraw*>& candidates = found->second;
+    float best_distance = INFINITY;
+    // Takes the candidate if it's the closest so far (stops summing past the
+    // closest).
+    auto try_candidate = [&](const MotionDraw& candidate) {
+      if (candidate.constants.size() != constants.size()) {
+        return;
+      }
+      if (candidate.constants_hash == constants_hash) {
+        previous = &candidate;
+        best_distance = 0.0f;
+        return;
+      }
+      float distance = 0.0f;
+      for (size_t i = 0; i < constants.size(); ++i) {
+        distance += std::abs(std::bit_cast<float>(constants[i]) -
+                             std::bit_cast<float>(candidate.constants[i]));
+        if ((i & 15) == 15 && !(distance < best_distance)) {
+          return;
+        }
+      }
+      if (distance < best_distance) {
+        best_distance = distance;
+        previous = &candidate;
+      }
+    };
+    if (constants_sum == INFINITY) {
+      // Only the same constants (the distance to any others isn't finite).
+      for (const MotionDraw* candidate : candidates) {
+        if (candidate->constants_hash == constants_hash) {
+          try_candidate(*candidate);
+          break;
+        }
+      }
+    } else {
+      size_t above = size_t(
+          std::lower_bound(candidates.begin(), candidates.end(), constants_sum,
+                           [](const MotionDraw* draw, double sum) {
+                             return draw->constants_sum < sum;
+                           }) -
+          candidates.begin());
+      size_t below = above;
+      // With some slack for the rounding of the float distances.
+      auto out_of_reach = [&](const MotionDraw* candidate) {
+        return std::abs(candidate->constants_sum - constants_sum) >
+               double(best_distance) * 1.001 + 1e-3;
+      };
+      while (best_distance > 0.0f) {
+        const bool up =
+            above < candidates.size() && !out_of_reach(candidates[above]);
+        const bool down = below > 0 && !out_of_reach(candidates[below - 1]);
+        if (!up && !down) {
+          break;
+        }
+        // The nearer sum first.
+        if (up && (!down || candidates[above]->constants_sum - constants_sum <=
+                                constants_sum -
+                                    candidates[below - 1]->constants_sum)) {
+          try_candidate(*candidates[above++]);
+        } else {
+          try_candidate(*candidates[--below]);
+        }
+      }
     }
   }
 
@@ -1022,7 +1102,8 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   draw.self = this;
   draw.key = key;
   draw.constants_hash = constants_hash;
-  draw.constants = std::move(constants);
+  draw.constants = constants;
+  draw.constants_sum = constants_sum;
   draw.output_vertex_count = 0;
   if (!previous) {
     // New this frame: motion unknown, left at zero (kept for the next frame).
@@ -1030,31 +1111,53 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     return;
   }
 
-  const uint32_t output_size =
-      (output_vertex_count * 16 + 255) & ~uint32_t(255);
+  // Both passes are appended to the shared stream output buffer, except for
+  // strips with cuts: they write fewer triangles than counted, so where their
+  // positions end is unknown, and they get buffers of their own.
+  const bool own_buffers =
+      cp_.primitive_topology_ == D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP &&
+      description.strip_cut_index != PipelineCache::PipelineStripCutIndex::kNone;
+  const uint64_t submission = cp_.GetCurrentSubmission();
+  const bool new_append_buffer =
+      !own_buffers && stream_out_append_submission_ == UINT64_MAX;
+  const uint32_t output_size = output_vertex_count * 16;
+  const uint32_t own_size = (output_size + 255) & ~uint32_t(255);
+  uint32_t offset = stream_out_used_;
+  if (own_buffers || new_append_buffer) {
+    offset = (offset + 255) & ~uint32_t(255);
+  }
+  // With unchanged constants, the previous positions are the current ones.
+  const uint32_t passes = previous->constants_hash == constants_hash ? 1 : 2;
+  const uint32_t new_counters =
+      own_buffers ? passes : (new_append_buffer ? 1 : 0);
   ID3D12PipelineState* stream_out_pipeline = GetStreamOutPipeline(*pipeline);
   if (!stream_out_pipeline || output_vertex_count > (1u << 20) ||
-      stream_out_used_ + uint64_t(output_size) * 2 > kStreamOutDataSize ||
-      stream_out_counters_used_ + 2 > kStreamOutCounterCount) {
+      offset + uint64_t(own_buffers ? own_size : output_size) * passes >
+          kStreamOutDataSize ||
+      stream_out_counters_used_ + new_counters > kStreamOutCounterCount) {
     ++motion_skipped_;
     return;
   }
 
   // Constants: the previous frame's floats, and the system constants without
   // the jitter (for both passes).
-  D3D12_GPU_VIRTUAL_ADDRESS previous_float_constants;
+  D3D12_GPU_VIRTUAL_ADDRESS previous_float_constants =
+      cp_.cbuffer_binding_float_vertex_.address;
   D3D12_GPU_VIRTUAL_ADDRESS unjittered_system_constants;
   ui::d3d12::D3D12UploadBufferPool& pool = *cp_.constant_buffer_pool_;
-  uint8_t* mapping = pool.Request(
-      cp_.frame_current_,
-      std::max(previous->constants.size() * sizeof(uint32_t), size_t(16)),
-      D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, nullptr, nullptr,
-      &previous_float_constants);
-  if (!mapping) {
-    return;
+  uint8_t* mapping;
+  if (passes > 1) {
+    mapping = pool.Request(
+        cp_.frame_current_,
+        std::max(previous->constants.size() * sizeof(uint32_t), size_t(16)),
+        D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, nullptr, nullptr,
+        &previous_float_constants);
+    if (!mapping) {
+      return;
+    }
+    std::memcpy(mapping, previous->constants.data(),
+                previous->constants.size() * sizeof(uint32_t));
   }
-  std::memcpy(mapping, previous->constants.data(),
-              previous->constants.size() * sizeof(uint32_t));
   DxbcShaderTranslator::SystemConstants system_constants =
       cp_.system_constants_;
   system_constants.ndc_offset[0] -= motion_ndc_jitter_[0];
@@ -1096,51 +1199,112 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   draw.indexed = indexed;
   draw.host_vertex_count = host_vertex_count;
   draw.output_vertex_count = output_vertex_count;
-  draw.output_size = output_size;
   draw.motion = motion_viewport_;
-  draw.motion.current_offset = stream_out_used_;
-  draw.motion.previous_offset = stream_out_used_ + output_size;
-  draw.motion.current_counter =
-      kStreamOutDataSize + stream_out_counters_used_ * 16;
-  draw.motion.previous_counter = draw.motion.current_counter + 16;
-  stream_out_used_ += output_size * 2;
-  stream_out_counters_used_ += 2;
+  const D3D12_GPU_VIRTUAL_ADDRESS buffer =
+      stream_out_buffer_->GetGPUVirtualAddress();
+  if (own_buffers) {
+    for (uint32_t pass = 0; pass < passes; ++pass) {
+      const uint32_t pass_offset = offset + own_size * pass;
+      const uint32_t counter =
+          kStreamOutDataSize + (stream_out_counters_used_ + pass) * 16;
+      D3D12_STREAM_OUTPUT_BUFFER_VIEW& view = draw.stream_out_views[pass];
+      view.BufferLocation = buffer + pass_offset;
+      view.SizeInBytes = own_size;
+      view.BufferFilledSizeLocation = buffer + counter;
+      (pass ? draw.motion.previous_offset : draw.motion.current_offset) =
+          pass_offset;
+      (pass ? draw.motion.previous_counter : draw.motion.current_counter) =
+          counter;
+      (pass ? draw.motion.previous_in_buffer : draw.motion.current_in_buffer) =
+          0;
+    }
+    draw.stream_out_bind_count = passes;
+    stream_out_used_ = offset + own_size * passes;
+    stream_out_counters_used_ += passes;
+    // Appending draws after this bind their buffer again (a new one).
+    stream_out_append_submission_ = UINT64_MAX;
+  } else {
+    if (new_append_buffer) {
+      stream_out_append_start_ = offset;
+      stream_out_append_counter_ =
+          kStreamOutDataSize + stream_out_counters_used_ * 16;
+      ++stream_out_counters_used_;
+    }
+    draw.stream_out_bind_count = 0;
+    if (stream_out_append_submission_ != submission) {
+      // Not bound yet, or bound in an earlier command list: bound again, it
+      // continues where its counter is.
+      D3D12_STREAM_OUTPUT_BUFFER_VIEW& view = draw.stream_out_views[0];
+      view.BufferLocation = buffer + stream_out_append_start_;
+      view.SizeInBytes = kStreamOutDataSize - stream_out_append_start_;
+      view.BufferFilledSizeLocation = buffer + stream_out_append_counter_;
+      draw.stream_out_bind_count = 1;
+      stream_out_append_submission_ = submission;
+    }
+    draw.motion.current_offset = offset;
+    draw.motion.previous_offset = offset + output_size;
+    draw.motion.current_counter = stream_out_append_counter_;
+    draw.motion.previous_counter = stream_out_append_counter_;
+    draw.motion.current_in_buffer = offset - stream_out_append_start_;
+    draw.motion.previous_in_buffer =
+        draw.motion.current_in_buffer + output_size;
+    stream_out_used_ = offset + output_size * passes;
+  }
+  if (passes == 1) {
+    draw.motion.previous_offset = draw.motion.current_offset;
+    draw.motion.previous_counter = draw.motion.current_counter;
+    draw.motion.previous_in_buffer = draw.motion.current_in_buffer;
+  }
+  draw.stream_out_passes = passes;
+  if (draw.stream_out_bind_count) {
+    stream_out_bound_ = true;
+  }
   cp_.GetDeferredCommandList().DaoCallback(ExecuteStreamOut, &draw);
 }
 
 void DaoUpscalerImpl::ExecuteStreamOut(
     void* context, ID3D12GraphicsCommandList* command_list) {
   const MotionDraw& draw = *static_cast<const MotionDraw*>(context);
-  const D3D12_GPU_VIRTUAL_ADDRESS buffer =
-      draw.self->stream_out_buffer_->GetGPUVirtualAddress();
   command_list->SetPipelineState(draw.stream_out_pipeline);
   command_list->SetGraphicsRootConstantBufferView(
       draw.system_parameter, draw.unjittered_system_constants);
-  for (uint32_t pass = 0; pass < 2; ++pass) {
+  if (draw.stream_out_bind_count == 1) {
+    command_list->SOSetTargets(0, 1, &draw.stream_out_views[0]);
+  }
+  for (uint32_t pass = 0; pass < draw.stream_out_passes; ++pass) {
     command_list->SetGraphicsRootConstantBufferView(
         draw.float_parameter,
         pass ? draw.previous_float_constants : draw.float_constants);
-    D3D12_STREAM_OUTPUT_BUFFER_VIEW view;
-    view.BufferLocation = buffer + (pass ? draw.motion.previous_offset
-                                         : draw.motion.current_offset);
-    view.SizeInBytes = draw.output_size;
-    view.BufferFilledSizeLocation =
-        buffer + (pass ? draw.motion.previous_counter
-                       : draw.motion.current_counter);
-    command_list->SOSetTargets(0, 1, &view);
+    if (draw.stream_out_bind_count > 1) {
+      command_list->SOSetTargets(0, 1, &draw.stream_out_views[pass]);
+    }
     if (draw.indexed) {
       command_list->DrawIndexedInstanced(draw.host_vertex_count, 1, 0, 0, 0);
     } else {
       command_list->DrawInstanced(draw.host_vertex_count, 1, 0, 0);
     }
   }
-  command_list->SOSetTargets(0, 1, nullptr);
-  // Back to the draw's state.
+  // Back to the draw's state (the stream output buffer stays bound, unused by
+  // the other pipelines).
   command_list->SetGraphicsRootConstantBufferView(draw.float_parameter,
                                                   draw.float_constants);
   command_list->SetGraphicsRootConstantBufferView(draw.system_parameter,
                                                   draw.system_constants);
   command_list->SetPipelineState(draw.pipeline);
+}
+
+void DaoUpscalerImpl::CloseStreamOut() {
+  stream_out_append_submission_ = UINT64_MAX;
+  if (!stream_out_bound_) {
+    return;
+  }
+  stream_out_bound_ = false;
+  cp_.GetDeferredCommandList().DaoCallback(ExecuteCloseStreamOut, nullptr);
+}
+
+void DaoUpscalerImpl::ExecuteCloseStreamOut(
+    void* context, ID3D12GraphicsCommandList* command_list) {
+  command_list->SOSetTargets(0, 1, nullptr);
 }
 
 void DaoUpscalerImpl::RecordMotionPass(uint32_t width, uint32_t height) {
@@ -1179,6 +1343,7 @@ void DaoUpscalerImpl::RecordMotionPass(uint32_t width, uint32_t height) {
     motion_pass_.draws = &draws;
     motion_pass_.positions = descriptors[0].second;
     motion_pass_.depth = descriptors[1].second;
+    CloseStreamOut();
     TransitionStreamOut(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     Transition(depth_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -1626,11 +1791,18 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   // reading them are executed at this swap).
   previous_motion_draws_.clear();
   for (const MotionDraw& draw : motion_draws) {
-    previous_motion_draws_.emplace(draw.key, &draw);
+    previous_motion_draws_[draw.key].push_back(&draw);
+  }
+  for (auto& [key, candidates] : previous_motion_draws_) {
+    std::sort(candidates.begin(), candidates.end(),
+              [](const MotionDraw* a, const MotionDraw* b) {
+                return a->constants_sum < b->constants_sum;
+              });
   }
   motion_frame_ ^= 1;
   motion_draws_[motion_frame_].clear();
   motion_seen_.clear();
+  CloseStreamOut();
   stream_out_used_ = 0;
   stream_out_counters_used_ = 0;
   stream_out_reset_ = false;

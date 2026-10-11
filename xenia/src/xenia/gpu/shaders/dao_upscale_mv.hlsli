@@ -9,11 +9,15 @@ Texture2D<float> dao_mv_scene_depth : register(t1);
 
 cbuffer DaoMvConstants : register(b0) {
   // Byte offsets of this draw's current and previous positions (float4 each)
-  // and of their stream output filled-size counters.
+  // and of the filled-size counters of the stream output buffers they were
+  // written into, and where in those buffers they are (the counters count
+  // from the buffer start; draws are appended).
   uint dao_mv_current_offset;
   uint dao_mv_previous_offset;
   uint dao_mv_current_counter;
   uint dao_mv_previous_counter;
+  uint dao_mv_current_in_buffer;
+  uint dao_mv_previous_in_buffer;
   // Host viewport of the draw, in pixels relative to the screen (the window
   // offset of the tile removed).
   float2 dao_mv_viewport_offset;

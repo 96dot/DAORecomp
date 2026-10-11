@@ -4,8 +4,10 @@ DaoMvInterpolators main(uint vertex_id : SV_VertexID) {
   DaoMvInterpolators output;
   uint byte_index = vertex_id * 16;
   // Vertices past what stream output wrote (strip cuts) are culled.
-  if (byte_index >= dao_mv_positions.Load(dao_mv_current_counter) ||
-      byte_index >= dao_mv_positions.Load(dao_mv_previous_counter)) {
+  if (dao_mv_current_in_buffer + byte_index >=
+          dao_mv_positions.Load(dao_mv_current_counter) ||
+      dao_mv_previous_in_buffer + byte_index >=
+          dao_mv_positions.Load(dao_mv_previous_counter)) {
     output.position = asfloat(0x7FC00000).xxxx;
     output.previous = float3(0.0, 0.0, 1.0);
     return output;
