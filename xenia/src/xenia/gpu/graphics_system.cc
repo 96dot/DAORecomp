@@ -115,22 +115,11 @@ X_STATUS GraphicsSystem::Setup(Memory* memory,
                                        1000.0 / static_cast<double>(
                                                     normalized_framerate_limit))
                     : 1.0;
-            uint64_t last_frame_time = Clock::QueryGuestTickCount();
-            // Deadline the Linux branch paces to, and the most lateness it
-            // will try to make up before giving the missed beats up.
+            // Deadline the period is paced to, and the most lateness it will
+            // try to make up before giving the missed beats up.
             using steady_time_point = std::chrono::steady_clock::time_point;
             steady_time_point next_vblank_deadline{};
             constexpr auto kMaxVblankCatchUp = std::chrono::seconds(1);
-            (void)next_vblank_deadline;
-            (void)kMaxVblankCatchUp;
-    // Sleep for 90% of the vblank duration on Windows, spin for 10%
-    // Linux uses full sleep duration due to scheduler quantum issues
-#if XE_PLATFORM_WIN32
-            constexpr double duration_scalar = 0.90;
-#endif
-#if XE_PLATFORM_LINUX
-            constexpr double duration_scalar = 1.0;
-#endif
 
             while (frame_limiter_worker_running_) {
               if (paused_) {
@@ -140,43 +129,6 @@ X_STATUS GraphicsSystem::Setup(Memory* memory,
 
               register_file()->values[XE_GPU_REG_D1MODE_V_COUNTER] +=
                   GetResolution().second;
-
-#if XE_PLATFORM_WIN32
-              if (cvars::vsync) {
-                const uint64_t current_time = Clock::QueryGuestTickCount();
-                const uint64_t tick_freq = Clock::guest_tick_frequency();
-                const uint64_t time_delta = current_time - last_frame_time;
-                const double elapsed_d =
-                    static_cast<double>(time_delta) /
-                    (static_cast<double>(tick_freq) / 1000.0);
-                if (elapsed_d >= vsync_duration_d) {
-                  last_frame_time = current_time;
-
-                  MarkVblank();
-                  const uint64_t estimated_nanoseconds = static_cast<uint64_t>(
-                      (vsync_duration_d * 1000000.0) *
-                      duration_scalar);  // 1000 microseconds = 1 ms
-
-                  threading::NanoSleep(estimated_nanoseconds);
-                }
-              }
-
-              if (!cvars::vsync) {
-                MarkVblank();
-                if (normalized_framerate_limit > 0) {
-                  // framerate_limit is over 0, vsync disabled
-                  //  - No VSYNC + limited frames defined by user
-                  uint64_t framerate_limited_sleep_time =
-                      1000000000 / normalized_framerate_limit;
-                  xe::threading::NanoSleep(framerate_limited_sleep_time);
-                } else {
-                  // framerate_limit is 0, vsync disabled
-                  //  - No VSYNC + unlimited frames
-                  xe::threading::Sleep(std::chrono::milliseconds(1));
-                }
-              }
-#endif
-#if XE_PLATFORM_LINUX
               MarkVblank();
 
               if (cvars::vsync || normalized_framerate_limit > 0) {
@@ -191,7 +143,11 @@ X_STATUS GraphicsSystem::Setup(Memory* memory,
                 // ever made up. Audio drains at the device's own fixed rate,
                 // so a beat the guest does not get is picture time lost
                 // against the sound for good. Pace to a deadline instead and
-                // deliver the missed beats.
+                // deliver the missed beats. Only sleeping, also on Windows
+                // (where the sleep is accurate to the millisecond timer
+                // resolution, and a late beat is made up by the next):
+                // spinning for the end of each period kept a core busy,
+                // which on handhelds takes power from the GPU.
                 const auto period = std::chrono::nanoseconds(std::max<int64_t>(
                     1, static_cast<int64_t>(
                            static_cast<double>(sleep_duration_ns) /
@@ -222,7 +178,6 @@ X_STATUS GraphicsSystem::Setup(Memory* memory,
               } else {
                 xe::threading::Sleep(std::chrono::milliseconds(1));
               }
-#endif
             }
             return 0;
           });
