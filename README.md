@@ -81,10 +81,6 @@ saves, logs, and the shader cache) and `mods/`.
 
 - **Windows:** run `DAORecomp.exe` in the install folder. The launcher opens first
   (hold Shift while starting to show it when it is turned off).
-- Shaders are compiled the first time something is drawn; meanwhile it is left out,
-  so new places can show objects popping in for a moment. They are kept in
-  `userdata/shader_cache/` and compiled in the background at every start, so this
-  only happens once.
 - **Linux:** the program is a Windows executable; run it with Wine or Proton.
   - Steam: *Add a Non-Steam Game* → `DAORecomp.exe`, then in its properties force a
     Proton version (Proton includes vkd3d-proton for Direct3D 12).
@@ -92,6 +88,11 @@ saves, logs, and the shader cache) and `mods/`.
 
   Linux support is untested so far. The program needs Wine's support for placeholder
   memory views (`VirtualAlloc2`/`MapViewOfFile3`) and Direct3D 12 through vkd3d-proton.
+
+Shaders are compiled the first time something is drawn, and that draw is skipped
+until then, so new places can show objects popping in for a moment. Compiled shaders
+are kept in `userdata/shader_cache/` and compiled again in the background at every
+start, so this happens once per place.
   FSR 4 needs AMD's Windows driver and is unlikely to work under Proton; choose FSR 3.1
   in the launcher.
 

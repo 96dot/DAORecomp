@@ -108,7 +108,7 @@ namespace dao::gpu
             SetThreadDescription(GetCurrentThread(), L"UI");
             // DAO_BACKGROUND=1 (automated tests): open behind the active window,
             // leaving it focused.
-            const HWND background_of = getenv("DAO_BACKGROUND") ? GetForegroundWindow() : nullptr;
+            const HWND foregroundWindow = getenv("DAO_BACKGROUND") ? GetForegroundWindow() : nullptr;
             s_appContext = std::make_unique<xe::ui::Win32WindowedAppContext>(GetModuleHandleW(nullptr), SW_SHOWDEFAULT);
             if (!s_appContext->Initialize())
             {
@@ -129,11 +129,11 @@ namespace dao::gpu
                 FitWindowToMonitor(static_cast<xe::ui::Win32Window&>(*s_window).hwnd(), settings.windowWidth,
                     settings.windowHeight);
             s_window->AddListener(&s_closeListener);
-            if (background_of)
+            if (foregroundWindow)
             {
                 const HWND hwnd = static_cast<xe::ui::Win32Window&>(*s_window).hwnd();
-                SetWindowPos(hwnd, background_of, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                SetForegroundWindow(background_of);
+                SetWindowPos(hwnd, foregroundWindow, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                SetForegroundWindow(foregroundWindow);
             }
             ready.set_value(true);
             s_appContext->RunMainMessageLoop();

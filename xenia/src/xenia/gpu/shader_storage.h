@@ -146,6 +146,10 @@ inline uint64_t ReadShaderEntries(FILE* file, Callback&& callback) {
     if (!fread(&shader_header, sizeof(shader_header), 1, file)) {
       break;
     }
+    // Far more than any Xenos shader: a corrupted entry (not resized to).
+    if (shader_header.ucode_dword_count > 0xFFFF) {
+      break;
+    }
     size_t ucode_byte_count =
         shader_header.ucode_dword_count * sizeof(uint32_t);
     ucode_dwords.resize(shader_header.ucode_dword_count);

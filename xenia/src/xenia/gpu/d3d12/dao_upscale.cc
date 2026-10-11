@@ -66,9 +66,10 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-// Stream output of the scene draws' positions (float4 per vertex, two passes
-// per draw), followed by the filled-size counters (one per pass, 16 bytes
-// apart).
+// Stream output of the scene draws' positions (float4 per vertex, one or two
+// passes per draw, appended to a shared buffer or, for strips with cuts, in
+// buffers of their own), followed by the filled-size counters (one per buffer,
+// 16 bytes apart).
 constexpr uint32_t kStreamOutDataSize = 96 << 20;
 constexpr uint32_t kStreamOutCounterCount = 4096;
 constexpr uint32_t kStreamOutCounterSize = kStreamOutCounterCount * 16;
@@ -196,6 +197,7 @@ class DaoUpscalerImpl {
   struct StreamOutPipeline {
     enum Status : uint32_t { kPending, kReady, kFailed };
     const void* vertex_shader;
+    uint64_t vertex_shader_hash;
     ID3D12RootSignature* root_signature;
     D3D12_GRAPHICS_PIPELINE_STATE_DESC desc;
     ComPtr<ID3D12PipelineState> state;
@@ -219,7 +221,7 @@ class DaoUpscalerImpl {
                             const CopyConstants& constants);
   void CaptureHudless();
   bool InitializeMotion();
-  // Null until created.
+  // Null until created (or if that failed).
   ID3D12PipelineState* GetStreamOutPipeline(
       const PipelineCache::Pipeline& pipeline);
   void StreamOutPipelineThread();
@@ -309,7 +311,8 @@ class DaoUpscalerImpl {
   D3D12_RESOURCE_STATES stream_out_state_ = D3D12_RESOURCE_STATE_COPY_DEST;
   std::unordered_map<const void*, std::unique_ptr<StreamOutPipeline>>
       stream_out_pipelines_;
-  // Replaced ones, possibly still being created.
+  // Replaced ones (rare), kept: they may still be queued for creation or used
+  // by commands not executed yet.
   std::vector<std::unique_ptr<StreamOutPipeline>> stream_out_pipelines_old_;
   std::thread stream_out_thread_;
   std::mutex stream_out_mutex_;
@@ -903,6 +906,7 @@ ID3D12PipelineState* DaoUpscalerImpl::GetStreamOutPipeline(
   }
   entry = std::make_unique<StreamOutPipeline>();
   entry->vertex_shader = runtime.vertex_shader;
+  entry->vertex_shader_hash = runtime.vertex_shader->shader().ucode_data_hash();
   entry->root_signature = runtime.root_signature;
   const PipelineCache::PipelineDescription& description = runtime.description;
   // The draw's vertex shader and root signature, writing the positions
@@ -914,6 +918,8 @@ ID3D12PipelineState* DaoUpscalerImpl::GetStreamOutPipeline(
       runtime.vertex_shader->translated_binary();
   desc.VS.pShaderBytecode = vertex_shader.data();
   desc.VS.BytecodeLength = vertex_shader.size();
+  // Static: the description, with pointers to them, is used on the creation
+  // thread.
   static const D3D12_SO_DECLARATION_ENTRY kSoEntry = {0, "SV_Position", 0,
                                                       0, 4, 0};
   static const UINT kSoStride = 16;
@@ -987,7 +993,8 @@ void DaoUpscalerImpl::StreamOutPipelineThread() {
             &entry->desc, IID_PPV_ARGS(&entry->state)))) {
       entry->status.store(StreamOutPipeline::kReady, std::memory_order_release);
     } else {
-      XELOGW("FSR: no stream output pipeline for a vertex shader");
+      XELOGW("FSR: no stream output pipeline for vertex shader {:016X}",
+             entry->vertex_shader_hash);
       entry->state.Reset();
       entry->status.store(StreamOutPipeline::kFailed,
                           std::memory_order_release);
@@ -1117,6 +1124,7 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
       for (size_t i = 0; i < constants.size(); ++i) {
         distance += std::abs(std::bit_cast<float>(constants[i]) -
                              std::bit_cast<float>(candidate.constants[i]));
+        // Checked every 4 registers.
         if ((i & 15) == 15 && !(distance < best_distance)) {
           return;
         }
@@ -1180,7 +1188,7 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     return;
   }
 
-  // Both passes are appended to the shared stream output buffer, except for
+  // The passes are appended to the shared stream output buffer, except for
   // strips with cuts: they write fewer triangles than counted, so where their
   // positions end is unknown, and they get buffers of their own.
   const bool own_buffers =
@@ -1207,8 +1215,8 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     return;
   }
 
-  // Constants: the previous frame's floats, and the system constants without
-  // the jitter (for both passes).
+  // Constants: the previous frame's floats (the current ones if unchanged),
+  // and the system constants without the jitter (for every pass).
   D3D12_GPU_VIRTUAL_ADDRESS previous_float_constants =
       cp_.cbuffer_binding_float_vertex_.address;
   D3D12_GPU_VIRTUAL_ADDRESS unjittered_system_constants;

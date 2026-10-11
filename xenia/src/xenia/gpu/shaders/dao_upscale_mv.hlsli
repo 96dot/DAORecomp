@@ -1,7 +1,7 @@
-// DAO: motion vectors for FSR. Each scene draw's vertex shader was run twice
-// with stream output (dao_upscale.cc): with this frame's constants and with
-// the previous frame's, both without jitter, giving the clip-space position of
-// every vertex now and one frame ago. This pass draws those triangles again
+// DAO: motion vectors for FSR. Each scene draw's vertex shader was run with
+// stream output (dao_upscale.cc): with this frame's constants and, if they
+// changed, with the previous frame's, both without jitter, giving the
+// clip-space position of every vertex now and one frame ago. This pass draws those triangles again
 // into the motion vector target, keeping only the pixels where they are the
 // visible surface in the scene depth.
 ByteAddressBuffer dao_mv_positions : register(t0);
