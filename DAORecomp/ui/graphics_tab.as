@@ -1,0 +1,342 @@
+// The Graphics tab of the game's Options menu.
+//
+// scripts/as2c.py compiles this into graphics_tab_as.h; at startup the runtime
+// inserts it into the game's optionsmenu.gfx right after the root's first
+// DoAction (which defines OptionsMenu), so it runs when the movie loads, before
+// the scene starts. The tab is made of the menu's own widgets (tab button,
+// section headers, pickers, checkboxes, sliders). Values go through the host:
+//   ExternalCommands.GetNumber("DAORecomp.<Key>")      the current value
+//   ExternalCommands.GetNumber("DAORecomp.Pending.<Key>")  1 if it needs a restart
+//   ExternalCommands.SendMessage("DAORecomp.Set <Key> <value>")
+//   ExternalCommands.SendMessage("DAORecomp.RestoreDefaults")
+// The keys and their values are those of DAORecomp/ui/graphics_menu.cpp.
+
+// OptionsMenu.ms_nCurrentTab on this tab (the engine's tabs are 0 to 4).
+var GRAPHICS_TAB = 64;
+// Sprite 387 of the movie (a section header bar with its label), exported under
+// this name by the runtime's patch.
+var HEADER_SYMBOL = "DAORecomp_SectionHeader";
+
+// Positions in the tab, as in the game's own tabs.
+var HEADER_X = 32;
+var CHECKBOX_X = 53;
+var PICKER_X = 55.9;
+var PICKER_LABEL_X = 81;
+var SLIDER_X = 88.65;
+
+function Nits(values) {
+    var labels = new Array();
+    for (var i = 0; i < values.length; i++) {
+        labels.push(values[i] + " nits");
+    }
+    return labels;
+}
+
+var HDR_PAPER_WHITE = [80, 100, 120, 160, 200, 250, 300, 400];
+var HDR_PEAK = [400, 600, 800, 1000, 1500, 2000, 3000, 4000];
+
+// The rows in order: a header, or a setting shown as a picker (values and their
+// labels), a checkbox (toggle) or a slider (0 to slider).
+var ROWS = [
+    { header: "Display" },
+    { key: "Fullscreen", label: "Display mode", values: [0, 1], labels: ["Windowed", "Fullscreen"] },
+    { key: "ResolutionScale", label: "Rendering resolution", restart: true, values: [1, 2, 3, 4],
+      labels: ["1280x720", "2560x1440", "3840x2160 (4K)", "5120x2880"] },
+    { key: "UnlockFrameRate", label: "Frame rate", values: [0, 1], labels: ["30 fps", "60 fps"] },
+    { key: "VSync", label: "Vertical sync", restart: true, toggle: true },
+    { header: "Upscaling" },
+    { key: "TemporalUpscaler", label: "Temporal upscaling", restart: true, values: [0, 1, 2, 3],
+      labels: ["Off", "Auto", "FidelityFX FSR 4", "FidelityFX FSR 3.1"] },
+    { key: "TemporalSharpness", label: "Temporal sharpening", slider: 10 },
+    { key: "Upscaler", label: "Output upscaler", values: [0, 1, 2],
+      labels: ["Bilinear", "FidelityFX CAS", "FidelityFX FSR 1"] },
+    { key: "Sharpness", label: "Output sharpening", slider: 10 },
+    { header: "Quality" },
+    { key: "AnisotropicFiltering", label: "Anisotropic filtering", values: [0, 2, 4, 8, 16],
+      labels: ["Game default", "2x", "4x", "8x", "16x"] },
+    { key: "Shadows", label: "Dynamic shadows", toggle: true },
+    { key: "PostProcessing", label: "Post-processing effects", toggle: true },
+    { header: "HDR" },
+    { key: "Hdr", label: "HDR output", restart: true, toggle: true },
+    { key: "HdrPaperWhite", label: "Paper white", values: HDR_PAPER_WHITE, labels: Nits(HDR_PAPER_WHITE) },
+    { key: "HdrPeak", label: "Peak brightness", values: HDR_PEAK, labels: Nits(HDR_PEAK) }
+];
+
+function Get(key) {
+    return ExternalCommands.GetNumber("DAORecomp." + key);
+}
+
+function Set(key, value) {
+    ExternalCommands.SendMessage("DAORecomp.Set " + key + " " + value);
+}
+
+// The index of the value closest to v.
+function Closest(values, v) {
+    var best = 0;
+    for (var i = 1; i < values.length; i++) {
+        if (Math.abs(values[i] - v) < Math.abs(values[best] - v)) {
+            best = i;
+        }
+    }
+    return best;
+}
+
+function IndexOf(items, item) {
+    for (var i = 0; i < items.length; i++) {
+        if (items[i] == item) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Attaches a widget whose GUI.Element init function is `init` (found through
+// <name>_init on the clip itself).
+function Attach(parent, symbol, name, x, y, init) {
+    var props = { _x: x, _y: y };
+    props[name + "_init"] = init;
+    return MovieUtils.CreateMovie(parent, symbol, name, props);
+}
+
+function AddHeader(group, index, text, y) {
+    var props = { _x: HEADER_X, _y: y };
+    props.LabelGameplay_mc_init = function() {
+        this.SetText(text);
+    };
+    MovieUtils.CreateMovie(group, HEADER_SYMBOL, "Header" + index + "_mc", props);
+}
+
+function AddToggle(group, row, y) {
+    return Attach(group, "checkbox_mc", "Opt" + row.key + "_mc", CHECKBOX_X, y, function() {
+        this.m_nSoundType = 96;
+        this.Label_mc_init = function() {
+            this.SetText(row.label);
+        };
+        this.SetButtonAction(function() {
+            Set(row.key, 1);
+        });
+        this.SetSecondaryButtonAction(function() {
+            Set(row.key, 0);
+        });
+        this.Refresh = function() {
+            if (Get(row.key) != 0) {
+                this.Select(false);
+            } else {
+                this.Unselect(false);
+            }
+        };
+        this.Refresh();
+        this.AddBehaviour(Behaviour.RollOver);
+    });
+}
+
+function AddPicker(group, row, y) {
+    Attach(group, "txt_PotionOption", "Label" + row.key + "_mc", PICKER_LABEL_X, y, function() {
+        this.SetText(row.label);
+    });
+    return Attach(group, "Picker", "Opt" + row.key + "_mc", PICKER_X, y + 19.45, function() {
+        var picker = this;
+        this.PickedEntry = Closest(row.values, Get(row.key));
+        this.NumEntries = row.values.length;
+        this.InitPickerButton = function(button) {
+            this.PickerButton_mc.SetText(row.labels[this.PickedEntry]);
+        };
+        this.InitPickerList = function(list) {
+            for (var i = 0; i < row.labels.length; i++) {
+                var entry = list.AddChild("PickerEntry");
+                entry.SetDirection(SharedLibrary.PickerEntry.NODIR);
+                entry.Name = row.labels[i];
+                entry.OnButtonAction = FuncUtils.Bind(this, picker.PickEntry, i);
+                entry.nIndex = i;
+            }
+        };
+        this.PickEntry = function(index) {
+            this.PickedEntry = index;
+            Set(row.key, row.values[index]);
+            this.PickerButton_mc.SetText(row.labels[index]);
+            this.ClosePicker();
+        };
+        this.Refresh = function() {
+            this.PickedEntry = Closest(row.values, Get(row.key));
+            this.PickerButton_mc.SetText(row.labels[this.PickedEntry]);
+        };
+    });
+}
+
+function AddSlider(group, row, y) {
+    return Attach(group, "slider_m", "Opt" + row.key + "_mc", SLIDER_X, y, function() {
+        this.m_bIntegral = true;
+        this.SliderValue = new DataType.ConstrainedInteger(Get(row.key), 0, row.slider);
+        this.Label_mc_init = function() {
+            this.SetText(row.label);
+        };
+        OptionsUtils.InitSliderArrows(this, true);
+        DataType.Observable.RegisterListener(this, "SliderValue", new DataType.Callback(null, function(oldValue, newValue) {
+            Set(row.key, Math.round(newValue.GetValue()));
+        }));
+        this.Refresh = function() {
+            this.SliderValue.SetIntValue(Get(row.key));
+        };
+        this.AddBehaviour(Behaviour.RollOver);
+    });
+}
+
+var graphicsTab = null;      // the tab button
+var graphicsGroup = null;    // the clip holding the rows while the tab is shown
+var graphicsOptions = new Array();  // the rows, for the menu's navigation
+
+function BuildRows(scrollable) {
+    var group = scrollable.createEmptyMovieClip("Graphics_grp_mc", scrollable.getNextHighestDepth());
+    group.m_nUniqueID = MovieUtils.cm_nNextUniqueID;
+    MovieUtils.cm_nNextUniqueID = MovieUtils.cm_nNextUniqueID + 1;
+    var options = new Array();
+    var y = 0;
+    for (var i = 0; i < ROWS.length; i++) {
+        var row = ROWS[i];
+        if (row.header != undefined) {
+            AddHeader(group, i, row.header, y);
+            y += 52;
+        } else if (row.toggle) {
+            options.push(AddToggle(group, row, y + 3));
+            y += 33;
+        } else if (row.slider) {
+            options.push(AddSlider(group, row, y + 1));
+            y += 64;
+        } else {
+            options.push(AddPicker(group, row, y));
+            y += 70;
+        }
+    }
+    graphicsGroup = group;
+    graphicsOptions = options;
+    // The rows hide their parts (picker lists) once initialized: measure after.
+    scrollable.UpdateScrollValues();
+    var timer = setInterval(function() {
+        clearInterval(timer);
+        scrollable.UpdateScrollValues();
+    }, 50);
+}
+
+function ShowGraphicsTab() {
+    var scrollable = OptionsMenu.m_mcScrollingWindow.Scrollable_mc;
+    MovieUtils.RemoveAllChildren(scrollable);
+    OptionsMenu.ms_nCurrentTab = GRAPHICS_TAB;
+    BuildRows(scrollable);
+}
+
+function RefreshRows() {
+    for (var i = 0; i < graphicsOptions.length; i++) {
+        graphicsOptions[i].Refresh();
+    }
+}
+
+// Adds the tab button below Audio/Video, moving the tabs after it down a step.
+function AddGraphicsTab(tabs) {
+    var audio = tabs.AudioTab_mc;
+    var controls = tabs.ControlsTab_mc;
+    if (audio == undefined || controls == undefined) {
+        return;
+    }
+    var step = audio._y - controls._y;
+    graphicsTab = MovieUtils.CreateMovie(tabs, "OptionTab", "GraphicsTab_mc", {
+        _x: audio._x,
+        _y: audio._y + step,
+        ButtonText_MC_init: function() {
+            this.SetText("Graphics");
+        }
+    });
+    if (tabs.OnlineTab_mc != undefined) {
+        tabs.OnlineTab_mc._y += step;
+    }
+    var groups = OptionsMenu.OptionGroups;
+    var at = IndexOf(groups, audio);
+    groups.splice(at < 0 ? groups.length : at + 1, 0, graphicsTab);
+}
+
+// The restart-only settings changed while the menu was open: those pending a
+// restart now that weren't when it opened.
+var pendingAtStart = new Object();
+
+function RecordPending() {
+    for (var i = 0; i < ROWS.length; i++) {
+        if (ROWS[i].restart) {
+            pendingAtStart[ROWS[i].key] = Get("Pending." + ROWS[i].key);
+        }
+    }
+}
+
+function RestartChanges() {
+    var changes = new Array();
+    for (var i = 0; i < ROWS.length; i++) {
+        var row = ROWS[i];
+        if (row.restart && Get("Pending." + row.key) != 0 && pendingAtStart[row.key] == 0) {
+            changes.push(row.label);
+        }
+    }
+    return changes;
+}
+
+var startScene = OptionsMenu.StartScene;
+OptionsMenu.StartScene = function() {
+    startScene.apply(this, arguments);
+    RecordPending();
+    var tabsInit = _root.OptionTabsGroup_mc_init;
+    _root.OptionTabsGroup_mc_init = function() {
+        tabsInit.apply(this, arguments);
+        AddGraphicsTab(this);
+    };
+    _root.GraphicsTab_mc_init = function() {
+        this.m_nSoundType = 126;
+        this.OnButtonAction = ShowGraphicsTab;
+    };
+};
+
+// The menu's navigation knows the engine's tabs by position (0 to 3); the ones
+// after this tab are a step further down.
+var setCurrentSubOptions = OptionsMenu.SetCurrentSubOptions;
+OptionsMenu.SetCurrentSubOptions = function() {
+    var selected = OptionsMenu.SelectedGroup;
+    var at = IndexOf(OptionsMenu.OptionGroups, graphicsTab);
+    if (graphicsTab == null || at < 0 || selected < at) {
+        setCurrentSubOptions();
+        return;
+    }
+    if (selected == at) {
+        OptionsMenu.m_aCurrentSubOptions = graphicsOptions;
+        OptionsMenu.m_mcCurrentGroupContainer = graphicsGroup;
+        return;
+    }
+    OptionsMenu.SelectedGroup = selected - 1;
+    setCurrentSubOptions();
+    OptionsMenu.SelectedGroup = selected;
+};
+
+// Leaving the menu: say which changes need a restart, as the game does for its own.
+var commitOptions = OptionsMenu.CommitOptions;
+OptionsMenu.CommitOptions = function() {
+    var changes = RestartChanges();
+    if (changes.length == 0) {
+        commitOptions();
+        return;
+    }
+    RecordPending();
+    var text = Localization.GetString(325619) + "\n";
+    for (var i = 0; i < changes.length; i++) {
+        text += "\n   - " + changes[i];
+    }
+    Popups.ShowDialogBox(text, Localization.GetString(325483), function() {
+        ExternalCommands.SendMessageArgs("GUI.DialogBoxClosed");
+        commitOptions();
+    });
+};
+
+// Restore Defaults on this tab resets its settings (the engine doesn't know it).
+var sendMessageArgs = ExternalCommands.SendMessageArgs;
+ExternalCommands.SendMessageArgs = function(name) {
+    if (name == "ClientOptions.RestoreDefaults" && OptionsMenu.ms_nCurrentTab == GRAPHICS_TAB) {
+        ExternalCommands.SendMessage("DAORecomp.RestoreDefaults");
+        RefreshRows();
+        return;
+    }
+    sendMessageArgs.apply(ExternalCommands, arguments);
+};

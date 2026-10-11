@@ -88,6 +88,31 @@ namespace dao::gpu
             SetWindowPos(hwnd, nullptr, work.left + ((work.right - work.left) - width) / 2,
                 work.top + ((work.bottom - work.top) - height) / 2, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
         }
+
+        // How the guest output is scaled to the window: the upscaler and its sharpness.
+        xe::ui::Presenter::GuestOutputPaintConfig OutputPaintConfig(Upscaler upscaler, float sharpness)
+        {
+            using PaintConfig = xe::ui::Presenter::GuestOutputPaintConfig;
+            PaintConfig config;
+            switch (upscaler)
+            {
+            case Upscaler::Bilinear:
+                config.SetEffect(PaintConfig::Effect::kBilinear);
+                break;
+            case Upscaler::Cas:
+                config.SetEffect(PaintConfig::Effect::kCas);
+                config.SetCasAdditionalSharpness(sharpness);
+                break;
+            case Upscaler::Fsr:
+                config.SetEffect(PaintConfig::Effect::kFsr);
+                config.SetFsrSharpnessReduction(sharpness);
+                break;
+            }
+            // Dithering targets 8-bit output; the HDR path keeps 10 bits. HDR is
+            // chosen at startup (the swap chain format), so this doesn't change.
+            config.SetDither(!GetSettings().hdr);
+            return config;
+        }
     }
 
     bool InitializeXeniaGraphics(const std::filesystem::path& userRoot)
@@ -160,26 +185,9 @@ namespace dao::gpu
         // are added as they're seen.
         s_graphics->InitializeShaderStorage(userRoot / "shader_cache", g_module.titleId, false);
         s_appContext->CallInUIThreadSynchronous([] {
-            using PaintConfig = xe::ui::Presenter::GuestOutputPaintConfig;
             const Settings& settings = GetSettings();
-            PaintConfig config;
-            switch (settings.upscaler)
-            {
-            case Upscaler::Bilinear:
-                config.SetEffect(PaintConfig::Effect::kBilinear);
-                break;
-            case Upscaler::Cas:
-                config.SetEffect(PaintConfig::Effect::kCas);
-                config.SetCasAdditionalSharpness(settings.sharpness);
-                break;
-            case Upscaler::Fsr:
-                config.SetEffect(PaintConfig::Effect::kFsr);
-                config.SetFsrSharpnessReduction(settings.sharpness);
-                break;
-            }
-            // Dithering targets 8-bit output; the HDR path keeps 10 bits.
-            config.SetDither(!settings.hdr);
-            s_graphics->presenter()->SetGuestOutputPaintConfigFromUIThread(config);
+            s_graphics->presenter()->SetGuestOutputPaintConfigFromUIThread(
+                OutputPaintConfig(settings.upscaler, settings.sharpness));
             s_window->SetPresenter(s_graphics->presenter());
         });
 
@@ -193,6 +201,33 @@ namespace dao::gpu
     bool XeniaActive()
     {
         return s_graphics != nullptr;
+    }
+
+    void XeniaSetFullscreen(bool fullscreen)
+    {
+        if (!s_window)
+            return;
+        s_appContext->CallInUIThread([fullscreen] {
+            if (s_window->IsFullscreen() == fullscreen)
+                return;
+            LOGI("Window: {}", fullscreen ? "fullscreen" : "windowed");
+            s_window->SetFullscreen(fullscreen);
+            if (!fullscreen)
+            {
+                const Settings& settings = GetSettings();
+                FitWindowToMonitor(static_cast<xe::ui::Win32Window&>(*s_window).hwnd(), settings.windowWidth,
+                    settings.windowHeight);
+            }
+        });
+    }
+
+    void XeniaSetOutputScaling(Upscaler upscaler, float sharpness)
+    {
+        if (!s_graphics)
+            return;
+        s_appContext->CallInUIThread([upscaler, sharpness] {
+            s_graphics->presenter()->SetGuestOutputPaintConfigFromUIThread(OutputPaintConfig(upscaler, sharpness));
+        });
     }
 
     void XeniaInitializeRingBuffer(uint32_t physicalAddress, uint32_t sizeLog2)

@@ -9,6 +9,7 @@
 #include "kernel/thread.h"
 #include "kernel/objects.h"
 #include "settings.h"
+#include "ui/graphics_menu.h"
 
 namespace dao::gpu
 {
@@ -308,6 +309,7 @@ constexpr uint32_t kSceneTileRects = 0x82144D64; // D3DRECT {x1, y1, x2, y2}[2]
 extern "C" PPC_FUNC(__imp__sub_82661640);
 PPC_FUNC(sub_82661640)
 {
+    dao::ui::ApplyEngineGraphicsOptions(base);
     const uint32_t rectsOut = ctx.r4.u32;
     __imp__sub_82661640(ctx, base);
     if (ctx.r3.s32 != 2)

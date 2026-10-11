@@ -9,6 +9,7 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
 - 60 fps (the original is locked to 30)
 - SDL3 input, including DualSense and other controllers
 - a launcher for settings, mods (file overrides) and code patches
+- a Graphics tab in the game's own Options menu (title and pause menus)
 
 **This repository contains no game code or data.** You need your own copy of the
 game: an ISO image of the Xbox 360 disc. The installer extracts it, translates the
@@ -91,6 +92,11 @@ saves, logs, and the shader cache) and `mods/`.
   FSR 4 needs AMD's Windows driver and is unlikely to work under Proton; choose FSR 3.1
   in the launcher.
 
+Most graphics settings can also be changed in the game: *Options → Graphics*. Those
+marked as needing a restart take effect the next time the game starts; the others
+apply at once. Turning off dynamic shadows and post-processing there (or in the
+launcher) makes the game faster on low-power devices such as the Steam Deck.
+
 Shaders are compiled the first time something is drawn, and that draw is skipped
 until then, so new places can show objects popping in for a moment. Compiled shaders
 are kept in `userdata/shader_cache/` and compiled again in the background at every
@@ -109,6 +115,11 @@ start, so this happens once per place.
 - `scripts/` also has the development tools used to analyse the game and build the
   shaders (`build_xenia_shaders.py` needs FXC from the Windows SDK and xenia-canary's
   FidelityFX-CAS/FSR submodules; the compiled shaders are committed).
+- The in-game Graphics tab is ActionScript 2 (`DAORecomp/ui/graphics_tab.as`), which
+  `scripts/as2c.py` compiles to `DAORecomp/ui/graphics_tab_as.h`; run
+  `python scripts/as2c.py DAORecomp/ui/graphics_tab.as DAORecomp/ui/graphics_tab_as.h kGraphicsTabScript`
+  after changing it. At start the runtime adds the script to the player's own
+  `optionsmenu.gfx` and serves the result from `userdata/generated/`.
 - `scripts/check_include_case.py` finds `#include`s whose case differs from the file on
   disk, which only breaks builds on Linux.
 - Diagnostics, set as environment variables (results in `userdata/xenia.log`):

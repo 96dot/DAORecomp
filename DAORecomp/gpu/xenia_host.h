@@ -3,12 +3,19 @@
 // Xenia's Direct3D 12 graphics system, and the routing of the Vd* exports and GPU
 // register writes into it.
 
+#include "settings.h"
+
 namespace dao::gpu
 {
     // Creates the window and the D3D12 graphics system. Returns false if Direct3D 12
     // is unavailable (the runtime then falls back to the null command processor).
     bool InitializeXeniaGraphics(const std::filesystem::path& userRoot);
     bool XeniaActive();
+
+    // Live changes from the in-game Graphics menu, from any thread (applied on the
+    // UI thread, asynchronously).
+    void XeniaSetFullscreen(bool fullscreen);
+    void XeniaSetOutputScaling(Upscaler upscaler, float sharpness);
 
     void XeniaInitializeRingBuffer(uint32_t physicalAddress, uint32_t sizeLog2);
     void XeniaEnableReadPointerWriteBack(uint32_t address, uint32_t blockSizeLog2);

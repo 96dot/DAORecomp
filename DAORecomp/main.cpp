@@ -9,6 +9,7 @@
 #include "input/input.h"
 #include "launcher/launcher.h"
 #include "mods/mods.h"
+#include "ui/graphics_menu.h"
 #include "settings.h"
 
 #include <timeapi.h>
@@ -220,6 +221,8 @@ int main(int argc, char** argv)
         const auto modsRoot = dao::mods::ModsRoot(gameRoot);
         dao::mods::Apply(modsRoot, dao::mods::ToState(dao::mods::Scan(modsRoot, dao::GetSettings().mods)));
     }
+    // The Options menu's Graphics tab is patched into the menu the mods leave.
+    dao::ui::InitializeGraphicsMenu();
     // DAO_AUDIO=null runs without sound output.
     if (const char* audio = getenv("DAO_AUDIO"); !audio || strcmp(audio, "null") != 0)
         dao::apu::InitializeAudioOutput();

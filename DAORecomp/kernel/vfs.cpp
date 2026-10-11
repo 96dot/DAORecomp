@@ -118,6 +118,22 @@ namespace dao::kernel
         LOGW("VFS: no device {} for overlays", devicePath);
     }
 
+    void VfsAddTopOverlay(const std::string& devicePath, const fs::path& overlay)
+    {
+        std::lock_guard lock(s_vfsMutex);
+        const std::string key = Lower(Normalize(devicePath));
+        for (Device& device : s_devices)
+        {
+            if (device.path == key)
+            {
+                LOGI("VFS: {} top overlay {}", devicePath, overlay.string());
+                device.overlays.insert(device.overlays.begin(), overlay);
+                return;
+            }
+        }
+        LOGW("VFS: no device {} for overlays", devicePath);
+    }
+
     // The device a guest path lives on and the path relative to the device root.
     // Caller holds s_vfsMutex.
     static std::optional<std::pair<const Device*, std::string>> Locate(std::string_view guestPath)

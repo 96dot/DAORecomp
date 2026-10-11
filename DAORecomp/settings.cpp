@@ -113,6 +113,8 @@ namespace dao
         s.anisotropicFiltering = video["anisotropic_filtering"].value_or(s.anisotropicFiltering);
         if (std::ranges::find(kAnisotropicLevels, s.anisotropicFiltering) == std::end(kAnisotropicLevels))
             s.anisotropicFiltering = 0;
+        s.shadows = video["shadows"].value_or(s.shadows);
+        s.postProcessing = video["post_processing"].value_or(s.postProcessing);
         s.hdr = video["hdr"].value_or(s.hdr);
         s.hdrPaperWhite = std::clamp(video["hdr_paper_white"].value_or(s.hdrPaperWhite), 80.0f, 1000.0f);
         s.hdrPeak = std::clamp(video["hdr_peak"].value_or(s.hdrPeak), s.hdrPaperWhite, 10000.0f);
@@ -181,6 +183,10 @@ hdr_paper_white = {}
 hdr_peak = {}
 # Anisotropic texture filtering: 0 (game default), 2, 4, 8 or 16.
 anisotropic_filtering = {}
+# The engine's dynamic character shadows and post-processing (frame buffer effects);
+# turning them off makes the game faster on low-power devices.
+shadows = {}
+post_processing = {}
 fullscreen = {}
 window_width = {}
 window_height = {}
@@ -190,8 +196,8 @@ window_height = {}
 )",
             s.showLauncher, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
             TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.vsync, s.unlockFrameRate,
-            s.hdr, s.hdrPaperWhite, s.hdrPeak, s.anisotropicFiltering, s.fullscreen, s.windowWidth,
-            s.windowHeight);
+            s.hdr, s.hdrPaperWhite, s.hdrPeak, s.anisotropicFiltering, s.shadows, s.postProcessing, s.fullscreen,
+            s.windowWidth, s.windowHeight);
         for (const auto& [id, enabled] : s.patches)
             out += fmt::format("{} = {}\n", id, enabled);
 
@@ -239,10 +245,8 @@ window_height = {}
         SetXeniaCvar("present_hdr", toml::value<bool>(s.hdr));
         SetXeniaCvar("present_hdr_paper_white", toml::value<double>(s.hdrPaperWhite));
         SetXeniaCvar("present_hdr_peak", toml::value<double>(s.hdrPeak));
-        // Xenia's levels: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x; -1 = the game default.
         if (s.anisotropicFiltering)
-            SetXeniaCvar("anisotropic_override",
-                toml::value<int64_t>(1 + std::countr_zero(unsigned(s.anisotropicFiltering))));
+            SetXeniaCvar("anisotropic_override", toml::value<int64_t>(XeniaAnisotropicLevel(s.anisotropicFiltering)));
         try
         {
             const toml::table table = toml::parse_file((userRoot / "config.toml").string());

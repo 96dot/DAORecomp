@@ -25,6 +25,8 @@ namespace dao::kernel
     // Host folders layered over a device, highest priority first (mods over the
     // disc): a path that exists in an overlay resolves there.
     void VfsSetOverlays(const std::string& devicePath, std::vector<std::filesystem::path> overlays);
+    // Adds an overlay above the others (files the runtime generates over the mods).
+    void VfsAddTopOverlay(const std::string& devicePath, const std::filesystem::path& overlay);
 
     // Resolves a guest path to a host path; nullopt if no device matches.
     std::optional<std::filesystem::path> VfsResolve(std::string_view guestPath);

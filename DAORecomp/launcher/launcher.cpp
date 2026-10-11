@@ -400,6 +400,13 @@ namespace dao::launcher
                 s.anisotropicFiltering = kAnisotropicLevels[anisotropic];
             HelpText("Sharper textures on surfaces seen at an angle, such as floors and roads. The game's default "
                      "is the fastest.");
+
+            Section("Effects");
+            ImGui::Checkbox("Dynamic shadows", &s.shadows);
+            ImGui::Checkbox("Post-processing effects", &s.postProcessing);
+            HelpText("Turning these off makes the game faster on low-power devices such as the Steam Deck.");
+            ImGui::Spacing();
+            HelpText("You can also change these in the game, under Options > Graphics.");
             ImGui::PopItemWidth();
         }
 

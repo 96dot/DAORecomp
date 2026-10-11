@@ -1,6 +1,6 @@
 #pragma once
 // userdata/config.toml: user-facing settings. Written with defaults on first run;
-// the launcher edits it through ReadSettings/SaveSettings.
+// the launcher and the game's Graphics menu edit it through ReadSettings/SaveSettings.
 
 namespace dao
 {
@@ -9,6 +9,11 @@ namespace dao
     enum class TemporalUpscaler { Off, Auto, Fsr4, Fsr3 };
     // Settings::anisotropicFiltering values: 0 = the game default.
     inline constexpr int kAnisotropicLevels[] = { 0, 2, 4, 8, 16 };
+    // Xenia's anisotropic_override for one of kAnisotropicLevels (-1: the game's own).
+    inline int XeniaAnisotropicLevel(int level)
+    {
+        return level ? 1 + std::countr_zero(unsigned(level)) : -1;
+    }
 
     // A folder under mods/, in load order (later mods win over earlier ones).
     struct ModState
@@ -44,6 +49,10 @@ namespace dao
         float hdrPeak = 1000.0f;      // nits
         // Anisotropic texture filtering, one of kAnisotropicLevels.
         int anisotropicFiltering = 0;
+        // The engine's dynamic character shadows and its post-processing (frame
+        // buffer effects): switches of the PC version left in the 360 engine.
+        bool shadows = true;
+        bool postProcessing = true;
         bool fullscreen = false;
         int windowWidth = 1280;
         int windowHeight = 720;
