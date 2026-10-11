@@ -718,7 +718,7 @@ namespace dao::launcher
             else
             {
                 const auto enabledMods =
-                    std::count_if(st.mods.begin(), st.mods.end(), [](auto& m) { return m.enabled; });
+                    std::count_if(st.mods.begin(), st.mods.end(), [](auto& m) { return m.IsLoaded(); });
                 Label(fmt::format("{}  \xC2\xB7  {}x{}  \xC2\xB7  {}  \xC2\xB7  {}  \xC2\xB7  {} mod{} on",
                     Version(), 1280 * st.settings.resolutionScale, 720 * st.settings.resolutionScale,
                     st.settings.unlockFrameRate ? "60 fps" : "30 fps",
@@ -1085,10 +1085,22 @@ namespace dao::launcher
                     ImGui::PushID(i);
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
-                    ImGui::Checkbox("##on", &mod.enabled);
+                    // A PC mod can't be turned on (its choice is kept for a converted one).
+                    ImGui::BeginDisabled(mod.IsForPc());
+                    bool on = mod.IsLoaded();
+                    if (ImGui::Checkbox("##on", &on))
+                        mod.enabled = on;
+                    ImGui::EndDisabled();
                     ImGui::TableNextColumn();
                     if (ImGui::Selectable(mod.name.c_str(), st.selectedMod == i, ImGuiSelectableFlags_SpanAllColumns))
                         st.selectedMod = i;
+                    if (mod.IsForPc())
+                    {
+                        ImGui::SameLine();
+                        ImGui::PushStyleColor(ImGuiCol_Text, kError);
+                        ImGui::TextUnformatted("(PC version)");
+                        ImGui::PopStyleColor();
+                    }
                     ImGui::TableNextColumn();
                     ImGui::TextUnformatted(mod.version.c_str());
                     ImGui::TableNextColumn();
@@ -1103,7 +1115,13 @@ namespace dao::launcher
             {
                 const auto& mod = st.mods[st.selectedMod];
                 ImGui::Text("mods/%s", mod.folder.c_str());
-                HelpText(mod.description.empty() ? "No description." : mod.description.c_str());
+                if (mod.IsForPc())
+                    HelpText(fmt::format("Made for the PC version of the game: {} of its files ({}{}) are in PC "
+                                         "formats, which this Xbox 360 version can't read, so it isn't loaded.",
+                        mod.pcFiles, mod.pcExample, mod.pcFiles > 1 ? ", ..." : "")
+                                 .c_str());
+                else
+                    HelpText(mod.description.empty() ? "No description." : mod.description.c_str());
             }
         }
 

@@ -1,5 +1,8 @@
 #include "stdafx.h"
 #include "mods/mods.h"
+
+#include <fstream>
+
 #include "kernel/vfs.h"
 
 #include "xenia/base/cvar.h" // toml++
@@ -10,6 +13,24 @@ namespace dao::mods
 
     namespace
     {
+        // Whether a file is in a format of the PC version: a GFF file (models,
+        // meshes, morphs, ...) for the PC platform, a DDS texture (the Xbox 360
+        // version's are .xds) or a PC archive (its header in UTF-16).
+        bool IsPcFile(const fs::path& path)
+        {
+            std::string extension = path.extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                [](char c) { return char(tolower(uint8_t(c))); });
+            if (extension == ".dds" || extension == ".dazip")
+                return true;
+            char header[12] = {};
+            std::ifstream file(path, std::ios::binary);
+            if (!file.read(header, sizeof(header)))
+                return false;
+            const std::string_view head(header, sizeof(header));
+            return head == std::string_view("GFF V4.0PC  ", 12) || head.starts_with(std::string_view("E\0R\0F\0", 6));
+        }
+
         ModInfo Describe(const fs::path& dir)
         {
             ModInfo info;
@@ -35,9 +56,15 @@ namespace dao::mods
             for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator();
                  it.increment(ec))
             {
-                if (it->is_regular_file() && it->path().filename() != "mod.toml")
-                    info.fileCount++;
+                if (!it->is_regular_file() || it->path().filename() == "mod.toml")
+                    continue;
+                info.fileCount++;
+                if (IsPcFile(it->path()) && info.pcFiles++ == 0)
+                    info.pcExample = it->path().lexically_relative(dir).generic_string();
             }
+            if (info.IsForPc())
+                LOGW("Mod {}: made for the PC version ({} files such as {}); not loaded", info.folder, info.pcFiles,
+                    info.pcExample);
             return info;
         }
     }
@@ -85,14 +112,14 @@ namespace dao::mods
         return out;
     }
 
-    void Apply(const fs::path& modsRoot, const std::vector<ModState>& mods)
+    void Apply(const fs::path& modsRoot, const std::vector<ModInfo>& mods)
     {
         // Highest priority first: the last mod in the load order wins.
         std::vector<fs::path> overlays;
         for (auto it = mods.rbegin(); it != mods.rend(); ++it)
         {
             std::error_code ec;
-            if (it->enabled && fs::is_directory(modsRoot / it->folder, ec))
+            if (it->IsLoaded() && fs::is_directory(modsRoot / it->folder, ec))
                 overlays.push_back(modsRoot / it->folder);
         }
         LOGI("Mods: {} enabled", overlays.size());

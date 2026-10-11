@@ -219,7 +219,7 @@ int main(int argc, char** argv)
     {
         // Same rule as the launcher: mod folders not in config.toml yet are enabled.
         const auto modsRoot = dao::mods::ModsRoot(gameRoot);
-        dao::mods::Apply(modsRoot, dao::mods::ToState(dao::mods::Scan(modsRoot, dao::GetSettings().mods)));
+        dao::mods::Apply(modsRoot, dao::mods::Scan(modsRoot, dao::GetSettings().mods));
     }
     // The Options menu's Graphics tab is patched into the menu the mods leave.
     dao::ui::InitializeGraphicsMenu();

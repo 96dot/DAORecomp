@@ -19,3 +19,8 @@ Optional: mods/MyMod/mod.toml describes the mod in the launcher:
 
 Enable, disable and order mods in the launcher's Mods tab. Mods lower in the
 list win when two mods contain the same file. New folders start enabled.
+
+Mods must be made for the Xbox 360 version. PC mods with models, textures or
+archives (.msh/.mmh and other GFF files marked PC, .dds, PC .erf, .dazip) can't
+be read by this version and crash it, so the launcher marks them "(PC version)"
+and doesn't load them.
