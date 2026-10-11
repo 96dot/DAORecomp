@@ -2292,7 +2292,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     swap_texture_desc = dao_upscaled->GetDesc();
   }
   if (dao_timed) {
-    dao_timing::GpuTiming::Get().Mark(*this, "temporal upscaling");
+    dao_timing::GpuTiming::Get().Mark(*this, "UI composite");
   }
 
   auto aspect = graphics_system_->GetScaledAspectRatio();
@@ -2621,6 +2621,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   // End the frame even if did not present for any reason (the image refresher
   // was not called), to prevent leaking per-frame resources.
   if (dao_timed) {
+    // Nothing if the image refresher already did it.
     dao_timing::GpuTiming::Get().EndFrame(*this);
   }
   EndSubmission(true);

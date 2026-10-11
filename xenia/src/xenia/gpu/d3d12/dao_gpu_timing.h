@@ -1,10 +1,12 @@
 // DAO: GPU time of each part of a frame, for finding what to optimize.
 // DAO_GPU_TIMING=1 writes GPU timestamps at the first draw of a frame, at every
-// resolve and around the swap's upscaling, and every 300 frames logs the
-// average time between them to xenia.log with the "GT" prefix. A section is
-// named after the event ending it (a resolve: its source and destination), so
-// "resolve ..." is the time of the draws before that resolve (and of the
-// previous resolve).
+// resolve and around the swap's upscaling, and every kLogInterval frames logs
+// the average time between them to xenia.log with the "GT" prefix. A section
+// is named after the event ending it (a resolve: its source and destination),
+// so "resolve ..." is the time of the draws before that resolve (and of the
+// previous resolve). Its time is averaged over all the frames, its draw count
+// over the frames that have it. Marks past kMaxMarks in a frame are dropped
+// (counted in the log).
 #pragma once
 
 #include <algorithm>
@@ -73,6 +75,7 @@ class GpuTiming {
       ReadSlot(cp, slot_);
     }
     if (frame_marks_ >= kMaxMarks) {
+      truncated_ = true;
       return;
     }
     cp.GetDeferredCommandList().D3DEndQuery(
@@ -98,6 +101,8 @@ class GpuTiming {
     Slot& slot = slots_[slot_];
     slot.submission = cp.GetCurrentSubmission();
     slot.marks = frame_marks_;
+    slot.truncated = truncated_;
+    truncated_ = false;
     frame_marks_ = 0;
     draws_ = 0;
     slot_ = (slot_ + 1) % kSlots;
@@ -111,6 +116,7 @@ class GpuTiming {
   struct Slot {
     uint64_t submission = 0;
     uint32_t marks = 0;
+    bool truncated = false;
     std::vector<std::string> labels;
     std::vector<uint32_t> draws;
   };
@@ -129,7 +135,6 @@ class GpuTiming {
     if (failed_) {
       return false;
     }
-    failed_ = true;
     const ui::d3d12::D3D12Provider& provider = cp.GetD3D12Provider();
     ID3D12Device* device = provider.GetDevice();
     D3D12_QUERY_HEAP_DESC heap_desc = {};
@@ -155,10 +160,10 @@ class GpuTiming {
             IID_PPV_ARGS(&readback_)))) {
       XELOGE("GT: failed to create the timestamp query heap");
       heap_.Reset();
+      failed_ = true;
       return false;
     }
     ticks_per_ms_ = double(frequency) / 1000.0;
-    failed_ = false;
     XELOGI("GT: GPU timing enabled");
     return true;
   }
@@ -167,6 +172,12 @@ class GpuTiming {
   void ReadSlot(D3D12CommandProcessor& cp, uint32_t index) {
     Slot& slot = slots_[index];
     if (!slot.marks) {
+      return;
+    }
+    // Normally long done; not awaited if that would end the open submission
+    // (when swaps fail to submit), then the frame is dropped.
+    if (slot.submission >= cp.GetCurrentSubmission()) {
+      slot.marks = 0;
       return;
     }
     cp.CheckSubmissionCompletion(slot.submission);
@@ -184,13 +195,20 @@ class GpuTiming {
           label += fmt::format(" #{}", n);
         }
         Section& section = sections_[label];
-        section.milliseconds += double(ticks[i] - ticks[i - 1]) / ticks_per_ms_;
+        // Timestamps going back (a GPU clock reset) count as no time.
+        section.milliseconds +=
+            ticks[i] > ticks[i - 1]
+                ? double(ticks[i] - ticks[i - 1]) / ticks_per_ms_
+                : 0.0;
         section.draws += slot.draws[i];
         section.position += double(i) / slot.marks;
         ++section.count;
       }
-      frame_milliseconds_ +=
-          double(ticks[slot.marks - 1] - ticks[0]) / ticks_per_ms_;
+      if (ticks[slot.marks - 1] > ticks[0]) {
+        frame_milliseconds_ +=
+            double(ticks[slot.marks - 1] - ticks[0]) / ticks_per_ms_;
+      }
+      truncated_frames_ += slot.truncated ? 1 : 0;
       const D3D12_RANGE written = {0, 0};
       readback_->Unmap(0, &written);
     }
@@ -207,8 +225,10 @@ class GpuTiming {
       return a.second.position / a.second.count <
              b.second.position / b.second.count;
     });
-    XELOGI("GT: {} frames, GPU {:.2f} ms per frame (first draw to swap end)",
-           frames_, frame_milliseconds_ / frames_);
+    XELOGI(
+        "GT: {} frames ({} with marks dropped), GPU {:.2f} ms per frame (first "
+        "draw to swap end)",
+        frames_, truncated_frames_, frame_milliseconds_ / frames_);
     for (const auto& [label, section] : sections) {
       // Sections in fewer than a tenth of the frames are left out.
       if (section.count * 10 < frames_) {
@@ -220,6 +240,7 @@ class GpuTiming {
     sections_.clear();
     frame_milliseconds_ = 0.0;
     frames_ = 0;
+    truncated_frames_ = 0;
   }
 
   Microsoft::WRL::ComPtr<ID3D12QueryHeap> heap_;
@@ -229,10 +250,12 @@ class GpuTiming {
   Slot slots_[kSlots];
   uint32_t slot_ = 0;
   uint32_t frame_marks_ = 0;
+  bool truncated_ = false;
   uint32_t draws_ = 0;
   std::unordered_map<std::string, Section> sections_;
   double frame_milliseconds_ = 0.0;
   uint32_t frames_ = 0;
+  uint32_t truncated_frames_ = 0;
 };
 
 }  // namespace xe::gpu::d3d12::dao_timing
