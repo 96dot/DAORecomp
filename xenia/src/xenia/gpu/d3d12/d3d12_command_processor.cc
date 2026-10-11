@@ -3207,8 +3207,26 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
       deferred_command_list_.D3DSetPredication(
           predicate_buffer, predicate_offset, D3D12_PREDICATION_OP_EQUAL_ZERO);
     }
+    if (dao_timing::GpuTiming::Enabled()) {
+      dao_timing::GpuTiming::Get().BeginDrawStatistics(*this);
+    }
     deferred_command_list_.D3DDrawInstanced(
         primitive_processing_result.host_draw_vertex_count, 1, 0, 0);
+    if (dao_timing::GpuTiming::Enabled()) {
+      dao_timing::GpuTiming::Get().EndDrawStatistics(
+          *this,
+          fmt::format("guest {} host {} index {} vs {}{}",
+                      uint32_t(primitive_processing_result.guest_primitive_type),
+                      uint32_t(primitive_processing_result.host_primitive_type),
+                      uint32_t(primitive_processing_result.index_buffer_type),
+                      uint32_t(primitive_processing_result.host_vertex_shader_type),
+                      primitive_processing_result.host_primitive_reset_enabled
+                          ? " reset"
+                          : ""),
+          fmt::format("vs {:016X} ps {:016X}", vertex_shader->ucode_data_hash(),
+                      pixel_shader ? pixel_shader->ucode_data_hash() : 0),
+          primitive_processing_result.host_draw_vertex_count);
+    }
     if (predicate_buffer) {
       deferred_command_list_.D3DSetPredication(nullptr, 0,
                                                D3D12_PREDICATION_OP_EQUAL_ZERO);
@@ -3280,8 +3298,26 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
       deferred_command_list_.D3DSetPredication(
           predicate_buffer, predicate_offset, D3D12_PREDICATION_OP_EQUAL_ZERO);
     }
+    if (dao_timing::GpuTiming::Enabled()) {
+      dao_timing::GpuTiming::Get().BeginDrawStatistics(*this);
+    }
     deferred_command_list_.D3DDrawIndexedInstanced(
         primitive_processing_result.host_draw_vertex_count, 1, 0, 0, 0);
+    if (dao_timing::GpuTiming::Enabled()) {
+      dao_timing::GpuTiming::Get().EndDrawStatistics(
+          *this,
+          fmt::format("guest {} host {} index {} vs {}{}",
+                      uint32_t(primitive_processing_result.guest_primitive_type),
+                      uint32_t(primitive_processing_result.host_primitive_type),
+                      uint32_t(primitive_processing_result.index_buffer_type),
+                      uint32_t(primitive_processing_result.host_vertex_shader_type),
+                      primitive_processing_result.host_primitive_reset_enabled
+                          ? " reset"
+                          : ""),
+          fmt::format("vs {:016X} ps {:016X}", vertex_shader->ucode_data_hash(),
+                      pixel_shader ? pixel_shader->ucode_data_hash() : 0),
+          primitive_processing_result.host_draw_vertex_count);
+    }
     if (predicate_buffer) {
       deferred_command_list_.D3DSetPredication(nullptr, 0,
                                                D3D12_PREDICATION_OP_EQUAL_ZERO);

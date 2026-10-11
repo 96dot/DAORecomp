@@ -7,9 +7,15 @@
 // previous resolve). Its time is averaged over all the frames, its draw count
 // over the frames that have it. Marks past kMaxMarks in a frame are dropped
 // (counted in the log).
+// Each draw is also wrapped in a pipeline statistics query (which serializes
+// the draws, so the times are inflated while timing): the vertices, vertex
+// shader invocations, primitives and pixel shader invocations are logged per
+// section, per kind of draw (primitive, index buffer and vertex shader types)
+// and for the shader pairs doing the most vertex and pixel work.
 #pragma once
 
 #include <algorithm>
+#include <cstring>
 #include <cstdlib>
 #include <string>
 #include <unordered_map>
@@ -44,6 +50,35 @@ class GpuTiming {
       Mark(cp, "frame start");
     }
     ++draws_;
+  }
+
+  // Around each draw: its pipeline statistics, summed into its section.
+  void BeginDrawStatistics(D3D12CommandProcessor& cp) {
+    if (!stats_heap_ || stats_draws_ >= kMaxDraws) {
+      return;
+    }
+    cp.GetDeferredCommandList().D3DBeginQuery(
+        stats_heap_.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS,
+        slot_ * kMaxDraws + stats_draws_);
+  }
+  void EndDrawStatistics(D3D12CommandProcessor& cp, std::string kind = {},
+                         std::string shaders = {}, uint32_t indices = 0) {
+    if (!stats_heap_ || stats_draws_ >= kMaxDraws) {
+      return;
+    }
+    cp.GetDeferredCommandList().D3DEndQuery(
+        stats_heap_.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS,
+        slot_ * kMaxDraws + stats_draws_);
+    Slot& slot = slots_[slot_];
+    slot.stats_marks.resize(stats_draws_ + 1);
+    slot.stats_marks[stats_draws_] = frame_marks_;
+    slot.stats_kinds.resize(stats_draws_ + 1);
+    slot.stats_kinds[stats_draws_] = std::move(kind);
+    slot.stats_shaders.resize(stats_draws_ + 1);
+    slot.stats_shaders[stats_draws_] = std::move(shaders);
+    slot.stats_indices.resize(stats_draws_ + 1);
+    slot.stats_indices[stats_draws_] = indices;
+    ++stats_draws_;
   }
 
   void OnResolve(D3D12CommandProcessor& cp, const RegisterFile& regs) {
@@ -99,6 +134,14 @@ class GpuTiming {
         heap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot_ * kMaxMarks,
         frame_marks_, readback_.Get(), slot_ * kMaxMarks * sizeof(uint64_t));
     Slot& slot = slots_[slot_];
+    if (stats_heap_ && stats_draws_) {
+      cp.GetDeferredCommandList().D3DResolveQueryData(
+          stats_heap_.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS,
+          slot_ * kMaxDraws, stats_draws_, stats_readback_.Get(),
+          slot_ * kMaxDraws * sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS));
+    }
+    slot.stats_draws = stats_draws_;
+    stats_draws_ = 0;
     slot.submission = cp.GetCurrentSubmission();
     slot.marks = frame_marks_;
     slot.truncated = truncated_;
@@ -112,6 +155,7 @@ class GpuTiming {
   static constexpr uint32_t kSlots = 4;
   static constexpr uint32_t kMaxMarks = 512;
   static constexpr uint32_t kLogInterval = 300;
+  static constexpr uint32_t kMaxDraws = 4096;
 
   struct Slot {
     uint64_t submission = 0;
@@ -119,13 +163,47 @@ class GpuTiming {
     bool truncated = false;
     std::vector<std::string> labels;
     std::vector<uint32_t> draws;
+    uint32_t stats_draws = 0;
+    std::vector<uint32_t> stats_marks;
+    std::vector<std::string> stats_kinds, stats_shaders;
+    std::vector<uint32_t> stats_indices;
   };
+  struct TagStats {
+    double draws = 0, indices = 0, ia = 0, vs = 0, prim = 0, ps = 0;
+  };
+  std::unordered_map<std::string, TagStats> kind_stats_, shader_stats_;
+  static void AddTag(TagStats& t, const D3D12_QUERY_DATA_PIPELINE_STATISTICS& s,
+                     uint32_t indices) {
+    t.draws += 1;
+    t.indices += indices;
+    t.ia += double(s.IAVertices);
+    t.vs += double(s.VSInvocations);
+    t.prim += double(s.CPrimitives);
+    t.ps += double(s.PSInvocations);
+  }
+  void LogTags(const char* name,
+               std::unordered_map<std::string, TagStats>& tags, bool by_ps) {
+    std::vector<std::pair<std::string, TagStats>> v(tags.begin(), tags.end());
+    std::sort(v.begin(), v.end(), [by_ps](auto& a, auto& b) {
+      return by_ps ? a.second.ps > b.second.ps : a.second.vs > b.second.vs;
+    });
+    for (size_t i = 0; i < v.size() && i < 14; ++i) {
+      const TagStats& t = v[i].second;
+      XELOGI(
+          "GT {}: {:6.1f} draws {:7.0f}k idx {:7.0f}k ia {:7.0f}k vs {:7.0f}k "
+          "prim {:7.0f}k ps  {}",
+          name, t.draws / frames_, t.indices / frames_ / 1000.0,
+          t.ia / frames_ / 1000.0, t.vs / frames_ / 1000.0,
+          t.prim / frames_ / 1000.0, t.ps / frames_ / 1000.0, v[i].first);
+    }
+  }
 
   struct Section {
     double milliseconds = 0.0;
     double draws = 0.0;
     double position = 0.0;
     uint32_t count = 0;
+    double ia_vertices = 0.0, vs = 0.0, primitives = 0.0, ps = 0.0;
   };
 
   bool Initialize(D3D12CommandProcessor& cp) {
@@ -164,6 +242,19 @@ class GpuTiming {
       return false;
     }
     ticks_per_ms_ = double(frequency) / 1000.0;
+    D3D12_QUERY_HEAP_DESC stats_heap_desc = {};
+    stats_heap_desc.Type = D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS;
+    stats_heap_desc.Count = kSlots * kMaxDraws;
+    buffer_desc.Width =
+        kSlots * kMaxDraws * sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS);
+    if (FAILED(device->CreateQueryHeap(&stats_heap_desc,
+                                       IID_PPV_ARGS(&stats_heap_))) ||
+        FAILED(device->CreateCommittedResource(
+            &heap_properties, D3D12_HEAP_FLAG_NONE, &buffer_desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&stats_readback_)))) {
+      stats_heap_.Reset();
+    }
     XELOGI("GT: GPU timing enabled");
     return true;
   }
@@ -181,6 +272,37 @@ class GpuTiming {
       return;
     }
     cp.CheckSubmissionCompletion(slot.submission);
+    std::vector<D3D12_QUERY_DATA_PIPELINE_STATISTICS> stats(slot.stats_draws);
+    if (slot.stats_draws) {
+      const D3D12_RANGE stats_range = {
+          index * kMaxDraws * sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS),
+          (index * kMaxDraws + slot.stats_draws) *
+              sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS)};
+      void* stats_mapping;
+      if (SUCCEEDED(stats_readback_->Map(0, &stats_range, &stats_mapping))) {
+        std::memcpy(stats.data(),
+                    reinterpret_cast<const D3D12_QUERY_DATA_PIPELINE_STATISTICS*>(
+                        stats_mapping) +
+                        index * kMaxDraws,
+                    stats.size() * sizeof(stats[0]));
+        const D3D12_RANGE written = {0, 0};
+        stats_readback_->Unmap(0, &written);
+      }
+    }
+    std::vector<D3D12_QUERY_DATA_PIPELINE_STATISTICS> mark_stats(slot.marks);
+    for (uint32_t i = 0; i < slot.stats_draws; ++i) {
+      const uint32_t mark = slot.stats_marks[i];
+      AddTag(kind_stats_[slot.stats_kinds[i]], stats[i], slot.stats_indices[i]);
+      AddTag(shader_stats_[slot.stats_shaders[i]], stats[i],
+             slot.stats_indices[i]);
+      if (mark < slot.marks) {
+        mark_stats[mark].IAVertices += stats[i].IAVertices;
+        mark_stats[mark].VSInvocations += stats[i].VSInvocations;
+        mark_stats[mark].CPrimitives += stats[i].CPrimitives;
+        mark_stats[mark].PSInvocations += stats[i].PSInvocations;
+      }
+    }
+    slot.stats_draws = 0;
     const D3D12_RANGE range = {index * kMaxMarks * sizeof(uint64_t),
                                (index * kMaxMarks + slot.marks) *
                                    sizeof(uint64_t)};
@@ -203,6 +325,10 @@ class GpuTiming {
         section.draws += slot.draws[i];
         section.position += double(i) / slot.marks;
         ++section.count;
+        section.ia_vertices += double(mark_stats[i].IAVertices);
+        section.vs += double(mark_stats[i].VSInvocations);
+        section.primitives += double(mark_stats[i].CPrimitives);
+        section.ps += double(mark_stats[i].PSInvocations);
       }
       if (ticks[slot.marks - 1] > ticks[0]) {
         frame_milliseconds_ +=
@@ -234,9 +360,20 @@ class GpuTiming {
       if (section.count * 10 < frames_) {
         continue;
       }
-      XELOGI("GT: {:7.3f} ms {:6.1f} draws  {}", section.milliseconds / frames_,
-             section.draws / section.count, label);
+      XELOGI(
+          "GT: {:7.3f} ms {:6.1f} draws {:7.0f}k ia {:7.0f}k vs {:7.0f}k prim "
+          "{:7.0f}k ps  {}",
+          section.milliseconds / frames_, section.draws / section.count,
+          section.ia_vertices / section.count / 1000.0,
+          section.vs / section.count / 1000.0,
+          section.primitives / section.count / 1000.0,
+          section.ps / section.count / 1000.0, label);
     }
+    LogTags("kind", kind_stats_, false);
+    LogTags("vs", shader_stats_, false);
+    LogTags("ps", shader_stats_, true);
+    kind_stats_.clear();
+    shader_stats_.clear();
     sections_.clear();
     frame_milliseconds_ = 0.0;
     frames_ = 0;
@@ -245,6 +382,9 @@ class GpuTiming {
 
   Microsoft::WRL::ComPtr<ID3D12QueryHeap> heap_;
   Microsoft::WRL::ComPtr<ID3D12Resource> readback_;
+  Microsoft::WRL::ComPtr<ID3D12QueryHeap> stats_heap_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> stats_readback_;
+  uint32_t stats_draws_ = 0;
   bool failed_ = false;
   double ticks_per_ms_ = 1.0;
   Slot slots_[kSlots];
