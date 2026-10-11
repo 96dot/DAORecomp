@@ -13,6 +13,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/dao_host.h"
 #include "xenia/gpu/d3d12/d3d12_graphics_system.h"
+#include "xenia/gpu/d3d12/dao_upscale.h"
 #include "xenia/gpu/xenos.h"
 #include "xenia/memory.h"
 #include "xenia/ui/window.h"
@@ -212,6 +213,11 @@ namespace dao::gpu
     void XeniaWriteRegister(uint32_t address, uint32_t value)
     {
         s_graphics->WriteRegister(address, value);
+    }
+
+    bool XeniaWantsSingleSampleScene()
+    {
+        return xe::gpu::d3d12::DaoUpscaler::WantsSingleSampleScene();
     }
 
     void XeniaWriteSwapPacket(uint32_t buffer, uint32_t fetchConstant, uint32_t frontBufferVirtual,

@@ -4,13 +4,16 @@
 //
 // A 3D frame of the game (Eclipse engine, Xbox 360 Direct3D 9):
 //   depth prepass, shadow maps -> scene draws (2xMSAA, two predicated tiles,
-//   each resolved: color to the scene texture, depth to a depth texture) ->
+//   each resolved: color to the scene texture, depth to a depth texture; while
+//   upscaling, one single-sampled tile, see WantsSingleSampleScene) ->
 //   full-screen post-processing passes reading the scene texture (fog, bloom,
 //   the tonemapper) -> UI on the same render target -> resolve to the front
 //   buffer -> swap.
 // What FSR gets:
 //   - jitter: added to the viewport offset of the scene draws (depth-tested
-//     multisampled draws), so everything up to the UI is jittered;
+//     multisampled draws, or with the scene single-sampled, depth-tested
+//     screen-wide draws before the scene's color resolve), so everything up to
+//     the UI is jittered;
 //   - depth: the scene depth, copied tile by tile at the first resolve after
 //     the tile's draws, from the depth buffer the draws used;
 //   - color: the render target right after the last full-screen pass that reads
@@ -29,6 +32,7 @@
 
 #include "xenia/ui/d3d12/d3d12_api.h"
 
+#include <atomic>
 #include <cstdint>
 
 #include "xenia/gpu/draw_util.h"
@@ -51,6 +55,11 @@ class DaoUpscaler {
   static void Initialize(D3D12CommandProcessor& command_processor,
                          D3D12RenderTargetCache& render_target_cache);
   static void Shutdown();
+
+  // Whether the game should render its 3D scenes in one tile without its
+  // 2xMSAA: the upscaler antialiases them (from the jitter), so the second
+  // tile and the multisampling would only cost GPU time. Any thread.
+  static bool WantsSingleSampleScene();
 
   // Before a draw's system constants are computed: jitters scene draws by
   // offsetting viewport_info.ndc_offset.
@@ -79,6 +88,7 @@ class DaoUpscaler {
 
  private:
   static DaoUpscalerImpl* impl_;
+  static std::atomic<bool> single_sample_scene_;
 };
 
 }  // namespace d3d12

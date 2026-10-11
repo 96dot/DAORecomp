@@ -42,6 +42,10 @@ DEFINE_string(dao_temporal_upscaler, "off",
               "GPU");
 DEFINE_double(dao_temporal_sharpness, 0.3,
               "Sharpening after temporal upscaling, 0 (off) to 1.", "GPU");
+DEFINE_bool(dao_single_sample_scene, true,
+            "With temporal upscaling, render 3D scenes in one tile without "
+            "2xMSAA (the upscaler antialiases them).",
+            "GPU");
 DEFINE_bool(dao_motion_vectors, true,
             "Motion vectors for temporal upscaling (false: zero motion, for "
             "comparison).",
@@ -235,6 +239,7 @@ class DaoUpscalerImpl {
   ~DaoUpscalerImpl();
 
   bool Initialize();
+  bool single_sample_scene() const { return single_sample_scene_; }
   void OnDraw(const RegisterFile& regs, draw_util::ViewportInfo& viewport_info,
               reg::RB_DEPTHCONTROL depth_control, uint32_t color_mask,
               uint64_t pixel_shader_hash, uint32_t pixel_shader_texture_mask,
@@ -453,6 +458,9 @@ class DaoUpscalerImpl {
 
   // Jitter of the current frame in render pixels (FSR's jitterOffset).
   bool jitter_active_ = false;
+  // The game renders the scene single-sampled (DaoUpscaler::
+  // WantsSingleSampleScene).
+  bool single_sample_scene_ = false;
   float jitter_[2] = {};
   // Frames left before jittering again after FSR could not run.
   uint32_t jitter_cooldown_ = 0;
@@ -462,6 +470,8 @@ class DaoUpscalerImpl {
   uint32_t scene_draws_ = 0;
   uint32_t depth_tiles_ = 0;
   uint32_t scene_texture_ = 0;
+  // Single-sampled scene draws were drawn (their resolves are the scene's).
+  bool single_sample_scene_drawn_ = false;
   bool scene_depth_pending_ = false;
   D3D12RenderTargetCache::D3D12RenderTarget* scene_depth_target_ = nullptr;
   int32_t scene_depth_window_offset_[2] = {};
@@ -542,6 +552,7 @@ class DaoUpscalerImpl {
 };
 
 DaoUpscalerImpl* DaoUpscaler::impl_ = nullptr;
+std::atomic<bool> DaoUpscaler::single_sample_scene_{false};
 
 DaoUpscalerImpl::~DaoUpscalerImpl() {
   if (stream_out_thread_.joinable()) {
@@ -649,6 +660,7 @@ bool DaoUpscalerImpl::Initialize() {
     XELOGW("FSR: motion vectors unavailable");
   }
   jitter_active_ = cvars::dao_temporal_upscaler != "off";
+  single_sample_scene_ = jitter_active_ && cvars::dao_single_sample_scene;
   last_swap_ = std::chrono::steady_clock::now();
   return true;
 }
@@ -1049,10 +1061,20 @@ void DaoUpscalerImpl::OnDraw(const RegisterFile& regs,
   }
   const auto surface = regs.Get<reg::RB_SURFACE_INFO>();
   // The scene: depth-tested multisampled draws (the depth prepass and both
-  // tiles of the main pass; shadow maps and the UI are single-sampled).
+  // tiles of the main pass; shadow maps and the UI are single-sampled). Single-
+  // sampled, the depth-tested draws as wide as the screen (not the shadow
+  // maps) until the scene's color is resolved (after it, effects drawn over
+  // it).
+  const bool single_sample_scene_draw =
+      single_sample_scene_ && !scene_texture_ &&
+      surface.msaa_samples == xenos::MsaaSamples::k1X &&
+      surface.surface_pitch * rtc_.draw_resolution_scale_x() ==
+          render_size_[0];
   if (depth_control.z_enable &&
-      surface.msaa_samples != xenos::MsaaSamples::k1X) {
+      (surface.msaa_samples != xenos::MsaaSamples::k1X ||
+       single_sample_scene_draw)) {
     ++scene_draws_;
+    single_sample_scene_drawn_ |= single_sample_scene_draw;
     // Where the draw is on the screen: its render target coordinates minus
     // the window offset of the tile, unless that's in the EDRAM base.
     int32_t window_offset[2] = {};
@@ -1727,8 +1749,10 @@ void DaoUpscalerImpl::OnResolve(const draw_util::ResolveInfo& resolve_info) {
     return;
   }
   const RegisterFile& regs = rtc_.register_file();
+  // Single-sampled, the scene's resolves are the first ones after its draws.
   if (regs.Get<reg::RB_SURFACE_INFO>().msaa_samples ==
-      xenos::MsaaSamples::k1X) {
+          xenos::MsaaSamples::k1X &&
+      !(single_sample_scene_drawn_ && !scene_texture_)) {
     return;
   }
   // A scene resolve (color, or depth for the game's own use).
@@ -2120,6 +2144,7 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   scene_draws_ = 0;
   depth_tiles_ = 0;
   scene_texture_ = 0;
+  single_sample_scene_drawn_ = false;
   scene_depth_pending_ = false;
   scene_depth_target_ = nullptr;
   hudless_pending_ = false;
@@ -2135,11 +2160,18 @@ void DaoUpscaler::Initialize(D3D12CommandProcessor& command_processor,
     return;
   }
   impl_ = impl;
+  single_sample_scene_.store(impl->single_sample_scene(),
+                             std::memory_order_relaxed);
 }
 
 void DaoUpscaler::Shutdown() {
+  single_sample_scene_.store(false, std::memory_order_relaxed);
   delete impl_;
   impl_ = nullptr;
+}
+
+bool DaoUpscaler::WantsSingleSampleScene() {
+  return single_sample_scene_.load(std::memory_order_relaxed);
 }
 
 void DaoUpscaler::OnDraw(const RegisterFile& regs,

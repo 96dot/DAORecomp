@@ -294,3 +294,25 @@ DAO_IMPORT_AS(VdPersistDisplay, dao::imp::VdPersistDisplay)
 DAO_IMPORT_AS(VdRetrainEDRAMWorker, dao::imp::VdRetrainEDRAMWorker)
 DAO_IMPORT_AS(VdRetrainEDRAM, dao::imp::VdRetrainEDRAM)
 DAO_IMPORT_AS(VdSwap, dao::imp::VdSwap)
+
+// While the temporal upscaler antialiases the 3D scene, it's rendered in one
+// tile without the game's 2xMSAA: the second predicated tile and the
+// multisampling only cost GPU time (a GPU-bound 4K frame 10.4 -> 9.3 ms).
+// sub_82661640 gives the scene's tile count, and its tile rectangles at *r4:
+// with 2xMSAA, 2 tiles, 1280x512 and 1280x208, at 82144D64. It's called every
+// frame.
+constexpr uint32_t kSceneMsaaType = 0x8316E35C; // D3DMULTISAMPLE_TYPE, 0: none
+constexpr uint32_t kSceneTileRects = 0x82144D64; // D3DRECT {x1, y1, x2, y2}[2]
+extern "C" PPC_FUNC(__imp__sub_82661640);
+PPC_FUNC(sub_82661640)
+{
+    const uint32_t rectsOut = ctx.r4.u32;
+    __imp__sub_82661640(ctx, base);
+    if (ctx.r3.s32 == 2 && dao::gpu::XeniaActive() && dao::gpu::XeniaWantsSingleSampleScene())
+    {
+        PPC_STORE_U32(kSceneMsaaType, 0);
+        PPC_STORE_U32(kSceneTileRects + 12, 720); // the first tile covers the screen
+        PPC_STORE_U32(rectsOut, kSceneTileRects);
+        ctx.r3.u64 = 1;
+    }
+}
