@@ -283,12 +283,13 @@ int main(int argc, char** argv)
         dao::gpu::StartFrameHistory(userRoot);
 
     // Debug hotkeys (game window focused): F10 toggles the frame-rate unlock, F12
-    // saves the frame history.
+    // saves the frame history. Polled at 20 Hz: each poll is a few window system
+    // calls (round trips to wineserver on Proton), and a key press is longer.
     std::thread([frameHistory] {
         bool wasDown[2] = {};
         for (;;)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
             DWORD process = 0;
             GetWindowThreadProcessId(GetForegroundWindow(), &process);
             const bool focused = process == GetCurrentProcessId();
