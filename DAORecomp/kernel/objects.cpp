@@ -571,6 +571,34 @@ namespace dao::kernel
         return WaitMultiple(std::span(&object, 1), false, timeout, alertable);
     }
 
+    void ShortSleep(uint32_t microseconds)
+    {
+        // A high resolution waitable timer per thread (a plain one if that's
+        // unsupported, e.g. by an older Wine).
+        struct Timer
+        {
+            HANDLE handle = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS);
+            Timer()
+            {
+                if (!handle)
+                    handle = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
+            }
+            ~Timer()
+            {
+                if (handle)
+                    ::CloseHandle(handle);
+            }
+        };
+        thread_local Timer timer;
+        LARGE_INTEGER due;
+        due.QuadPart = -int64_t(microseconds) * 10;
+        if (timer.handle && SetWaitableTimer(timer.handle, &due, 0, nullptr, nullptr, FALSE))
+            WaitForSingleObject(timer.handle, INFINITE);
+        else
+            SwitchToThread();
+    }
+
     uint32_t DelayExecution(const int64_t* timeout, bool alertable)
     {
         if (!timeout)
@@ -583,7 +611,24 @@ namespace dao::kernel
                 if (auto* self = GuestThread::Current(); self && self->DeliverApcs())
                     return X_STATUS_USER_APC;
             }
-            SwitchToThread();
+            // Sleep(0) in a loop is how the game waits for other threads (the
+            // update thread for the render thread, every frame). Yielding keeps
+            // a core busy (and on handhelds takes power from the GPU), so after
+            // a run of such calls with next to nothing done in between, the
+            // thread sleeps briefly instead. Calls further apart (a loop doing
+            // work and yielding) keep yielding.
+            constexpr auto kPollGap = std::chrono::microseconds(50);
+            constexpr uint32_t kPollsBeforeSleeping = 64;
+            constexpr uint32_t kPollSleepMicroseconds = 100;
+            thread_local std::chrono::steady_clock::time_point lastReturn;
+            thread_local uint32_t polls = 0;
+            const auto now = std::chrono::steady_clock::now();
+            polls = now - lastReturn < kPollGap ? polls + 1 : 0;
+            if (polls >= kPollsBeforeSleeping)
+                ShortSleep(kPollSleepMicroseconds);
+            else
+                SwitchToThread();
+            lastReturn = std::chrono::steady_clock::now();
             return X_STATUS_SUCCESS;
         }
 

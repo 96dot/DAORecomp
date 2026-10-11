@@ -163,6 +163,9 @@ namespace dao::kernel
     uint32_t WaitMultiple(std::span<const ObjectRef> objects, bool waitAll, const int64_t* timeout, bool alertable);
     uint32_t WaitSingle(const ObjectRef& object, const int64_t* timeout, bool alertable);
     uint32_t DelayExecution(const int64_t* timeout, bool alertable);
+    // Sleeps for about `microseconds` (Sleep can't go below a millisecond), for
+    // waiting on something without keeping a core busy.
+    void ShortSleep(uint32_t microseconds);
 
     // 100 ns system time (FILETIME epoch) and conversions.
     uint64_t SystemTime100ns();

@@ -7,6 +7,7 @@
 #include "gpu/command_processor.h"
 #include "gpu/xenia_host.h"
 #include "kernel/thread.h"
+#include "kernel/objects.h"
 #include "settings.h"
 
 namespace dao::gpu
@@ -251,6 +252,19 @@ namespace dao::imp
 // dropping to the next vblank, so a frame taking a bit longer than a vblank costs
 // that bit rather than a whole vblank. The guest flip only chooses which frame
 // the host presents next; tearing is up to the host's own vsync setting.
+// One step of D3D's wait for a GPU fence (BlockOnFence, sub_82CD7810, e.g. in
+// Present for a frame to be done): a few cycles of delay and the GPU hang
+// check; returns nonzero to keep waiting. The render thread spent half its time
+// spinning in it, keeping a core busy (and on handhelds taking power from the
+// GPU): between the checks it now sleeps briefly.
+extern "C" PPC_FUNC(__imp__sub_82CC4338);
+PPC_FUNC(sub_82CC4338)
+{
+    __imp__sub_82CC4338(ctx, base);
+    if (ctx.r3.u32)
+        dao::kernel::ShortSleep(100);
+}
+
 extern "C" PPC_FUNC(__imp__sub_82CD4218);
 PPC_FUNC(sub_82CD4218)
 {
