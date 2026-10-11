@@ -338,8 +338,9 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
                               D3D12_RESOURCE_STATES new_state);
 
   // For a resolve that is a plain copy of a single-sampled k_8_8_8_8 render
-  // target owning the whole resolved area (after DumpRenderTargets for it),
-  // the area for D3D12TextureCache::PrepareResolvedTextures.
+  // target owning the whole resolved area (copied straight from it rather than
+  // from its dump by DumpRenderTargets), the area for
+  // D3D12TextureCache::PrepareResolvedTextures.
   D3D12RenderTarget* GetResolvedArea(
       const draw_util::ResolveInfo& resolve_info,
       draw_util::ResolveCopyShaderIndex copy_shader, bool copy_dest_scaled,

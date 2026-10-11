@@ -41,8 +41,10 @@ entry_inputs_end_code_begin_compute_xe
   int source_y = int(source_origin.y +
                      max(pixel_index.y,
                          resolve_info.half_pixel_offset_fill_source.y));
-  uint pixels[8];
-  for (uint i = 0u; i < 8u; ++i) {
+  // Unrolled into vector components (an array would be an indexable
+  // temporary).
+  uint4_xe pixels_0123, pixels_4567;
+  unroll_xe for (uint i = 0u; i < 8u; ++i) {
     int source_x = int(source_origin.x +
                        max(pixel_index.x + i,
                            resolve_info.half_pixel_offset_fill_source.x));
@@ -51,10 +53,14 @@ entry_inputs_end_code_begin_compute_xe
                                    int2_xe(source_x, source_y), 0)) *
             255.0f +
         0.5f);
-    pixels[i] = bytes.r | (bytes.g << 8u) | (bytes.b << 16u) | (bytes.a << 24u);
+    uint pixel =
+        bytes.r | (bytes.g << 8u) | (bytes.b << 16u) | (bytes.a << 24u);
+    if (i < 4u) {
+      pixels_0123[i] = pixel;
+    } else {
+      pixels_4567[i - 4u] = pixel;
+    }
   }
-  uint4_xe pixels_0123 = uint4_xe(pixels[0], pixels[1], pixels[2], pixels[3]);
-  uint4_xe pixels_4567 = uint4_xe(pixels[4], pixels[5], pixels[6], pixels[7]);
   XeResolveSwap8PixelsRedBlue32bpp(resolve_info, pixels_0123, pixels_4567);
   uint dest_address = XeResolveDestPixelAddress(resolve_info, pixel_index, 2u);
   byte_buffer_align16_store16_xe(

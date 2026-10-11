@@ -15,6 +15,7 @@
 #include <cstring>
 
 #include "xenia/base/assert.h"
+#include "xenia/base/clock.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/profiling.h"
@@ -1495,19 +1496,34 @@ bool D3D12TextureCache::PrepareResolvedTextures(const ResolvedArea& area) {
   }
   // The same texels the untiling would load, into a texture created as a UAV.
   // Textures not used lately (other views of the memory) are left outdated
-  // rather than kept alive and written by every resolve.
-  const uint64_t used_since = current_submission_index() - std::min(
-      current_submission_index(), uint64_t(2));
+  // rather than kept alive and written by every resolve: lately is in time
+  // rather than submissions, of which a frame may have several.
+  constexpr uint64_t kUsedLatelyMilliseconds = 250;
+  const uint64_t now = xe::Clock::QueryHostUptimeMillis();
   auto described = [&](const Texture* texture) {
     const TextureKey& key = texture->key();
-    return IsResolveWritable(key) &&
-           key.base_page == ((area.dest_base >> 12) & 0x1FFFF) &&
-           key.pitch == area.dest_pitch_div_32 &&
-           bool(key.scaled_resolve) == area.scaled &&
-           area.dest_x < key.GetWidth() && area.dest_y < key.GetHeight() &&
-           texture->last_usage_submission_index() >= used_since &&
-           (static_cast<const D3D12Texture*>(texture)->resource()->GetDesc().Flags &
-            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    if (!IsResolveWritable(key) ||
+        key.base_page != ((area.dest_base >> 12) & 0x1FFFF) ||
+        key.pitch != area.dest_pitch_div_32 ||
+        bool(key.scaled_resolve) != area.scaled ||
+        area.dest_x >= key.GetWidth() || area.dest_y >= key.GetHeight() ||
+        texture->last_usage_time() + kUsedLatelyMilliseconds < now) {
+      return false;
+    }
+    if (!(static_cast<const D3D12Texture*>(texture)->resource()->GetDesc().Flags &
+          D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)) {
+      // Created before a resolve first wrote its memory: untiled after every
+      // resolve while it stays cached.
+      if (!resolve_missed_uav_logged_) {
+        resolve_missed_uav_logged_ = true;
+        XELOGW(
+            "D3D12TextureCache: a texture at {:08X} written by resolves isn't "
+            "a UAV, reloaded after each of them instead",
+            key.base_page << 12);
+      }
+      return false;
+    }
+    return true;
   };
   textures.erase(std::remove_if(textures.begin(), textures.end(),
                                 [&](const Texture* texture) {
