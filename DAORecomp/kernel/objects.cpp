@@ -573,17 +573,20 @@ namespace dao::kernel
 
     void ShortSleep(uint32_t microseconds)
     {
-        // A high resolution waitable timer per thread (a plain one if that's
-        // unsupported, e.g. by an older Wine).
+        // On Windows a high resolution waitable timer (NtDelayExecution, like
+        // Sleep, is only as fine as the timer resolution, 1 ms here). Wine
+        // (Proton, so the Steam Deck) is the other way round: its timers go
+        // through wineserver, in milliseconds, while a non-alertable
+        // NtDelayExecution sleeps in the process to the microsecond.
+        using DelayFn = LONG(NTAPI*)(BOOLEAN alertable, PLARGE_INTEGER timeout);
+        static const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        static const auto delay = reinterpret_cast<DelayFn>(GetProcAddress(ntdll, "NtDelayExecution"));
+        static const bool wine = GetProcAddress(ntdll, "wine_get_version") != nullptr;
         struct Timer
         {
-            HANDLE handle = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
-                TIMER_ALL_ACCESS);
-            Timer()
-            {
-                if (!handle)
-                    handle = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
-            }
+            HANDLE handle = wine ? nullptr
+                                 : CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                       TIMER_ALL_ACCESS);
             ~Timer()
             {
                 if (handle)
@@ -595,6 +598,8 @@ namespace dao::kernel
         due.QuadPart = -int64_t(microseconds) * 10;
         if (timer.handle && SetWaitableTimer(timer.handle, &due, 0, nullptr, nullptr, FALSE))
             WaitForSingleObject(timer.handle, INFINITE);
+        else if (delay)
+            delay(FALSE, &due);
         else
             SwitchToThread();
     }
