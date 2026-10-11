@@ -51,12 +51,16 @@ enum class D3D12GPUSetting {
 void D3D12SaveGPUSetting(D3D12GPUSetting setting, uint64_t value);
 
 namespace d3d12 {
+namespace dao_timing {
+class GpuTiming;
+}
 struct MemExportRange {
   uint32_t base_address_dwords;
   uint32_t size_dwords;
 };
 class D3D12CommandProcessor final : public CommandProcessor {
   friend class DaoUpscalerImpl;
+  friend class dao_timing::GpuTiming;
 
  protected:
 #define OVERRIDING_BASE_CMDPROCESSOR

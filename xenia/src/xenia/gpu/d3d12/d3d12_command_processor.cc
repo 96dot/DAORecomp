@@ -9,6 +9,7 @@
 
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/gpu/d3d12/dao_frame_trace.h"
+#include "xenia/gpu/d3d12/dao_gpu_timing.h"
 #include "xenia/gpu/d3d12/dao_upscale.h"
 #include <cstring>
 #include "xenia/base/assert.h"
@@ -2277,6 +2278,10 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
 
   // DAO: with temporal upscaling, the upscaled image (with the UI composited)
   // is presented instead of the front buffer.
+  const bool dao_timed = dao_timing::GpuTiming::Enabled();
+  if (dao_timed) {
+    dao_timing::GpuTiming::Get().Mark(*this, "swap start");
+  }
   D3D12_SHADER_RESOURCE_VIEW_DESC dao_upscaled_srv_desc;
   if (ID3D12Resource* dao_upscaled = DaoUpscaler::OnSwap(
           swap_texture_resource, swap_texture_srv_desc,
@@ -2286,6 +2291,9 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     swap_texture_srv_desc = dao_upscaled_srv_desc;
     swap_texture_desc = dao_upscaled->GetDesc();
   }
+  if (dao_timed) {
+    dao_timing::GpuTiming::Get().Mark(*this, "temporal upscaling");
+  }
 
   auto aspect = graphics_system_->GetScaledAspectRatio();
 
@@ -2293,7 +2301,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
       uint32_t(swap_texture_desc.Width), uint32_t(swap_texture_desc.Height),
       aspect.first, aspect.second,
       [this, &swap_texture_srv_desc, frontbuffer_format, swap_texture_resource,
-       &swap_texture_desc](
+       &swap_texture_desc, dao_timed](
           ui::Presenter::GuestOutputRefreshContext& context) -> bool {
         const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
         ID3D12Device* device = provider.GetDevice();
@@ -2603,12 +2611,18 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         // presenter so it can submit its own commands for displaying it to the
         // queue.
         SubmitBarriers();
+        if (dao_timed) {
+          dao_timing::GpuTiming::Get().EndFrame(*this);
+        }
         EndSubmission(true);
         return true;
       });
 
   // End the frame even if did not present for any reason (the image refresher
   // was not called), to prevent leaking per-frame resources.
+  if (dao_timed) {
+    dao_timing::GpuTiming::Get().EndFrame(*this);
+  }
   EndSubmission(true);
 }
 
@@ -2715,6 +2729,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
 
   if (!BeginSubmission(true)) {
     return false;
+  }
+  if (dao_timing::GpuTiming::Enabled()) {
+    dao_timing::GpuTiming::Get().OnDraw(*this);
   }
 
   // Process primitives.
@@ -3345,6 +3362,9 @@ bool D3D12CommandProcessor::IssueCopy() {
   dao_trace::LogResolve(*register_file_);
   if (!BeginSubmission(true)) {
     return false;
+  }
+  if (dao_timing::GpuTiming::Enabled()) {
+    dao_timing::GpuTiming::Get().OnResolve(*this, *register_file_);
   }
   ReadbackResolveMode readback_mode = GetReadbackResolveMode();
   if (readback_mode == ReadbackResolveMode::kDisabled) {
