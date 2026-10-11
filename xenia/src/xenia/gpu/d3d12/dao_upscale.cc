@@ -2,12 +2,17 @@
 #include "xenia/gpu/d3d12/dao_upscale.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -15,6 +20,7 @@
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/platform_win.h"
+#include "xenia/base/threading.h"
 #include "xenia/base/xxhash.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/gpu/d3d12/d3d12_render_target_cache.h"
@@ -184,10 +190,16 @@ class DaoUpscalerImpl {
     uint32_t width;
     uint32_t height;
   };
+  // A draw's vertex shader writing the positions with stream output, created
+  // in the background (it can take long, and the draw can do without motion
+  // vectors meanwhile).
   struct StreamOutPipeline {
+    enum Status : uint32_t { kPending, kReady, kFailed };
     const void* vertex_shader;
     ID3D12RootSignature* root_signature;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc;
     ComPtr<ID3D12PipelineState> state;
+    std::atomic<uint32_t> status{kPending};
   };
 
   bool LoadFfx();
@@ -207,8 +219,10 @@ class DaoUpscalerImpl {
                             const CopyConstants& constants);
   void CaptureHudless();
   bool InitializeMotion();
+  // Null until created.
   ID3D12PipelineState* GetStreamOutPipeline(
       const PipelineCache::Pipeline& pipeline);
+  void StreamOutPipelineThread();
   void TransitionStreamOut(D3D12_RESOURCE_STATES state);
   void CaptureMotion(const Shader& vertex_shader, bool indexed,
                      uint32_t host_vertex_count);
@@ -293,7 +307,15 @@ class DaoUpscalerImpl {
   ComPtr<ID3D12Resource> stream_out_buffer_;
   ComPtr<ID3D12Resource> stream_out_zeros_;
   D3D12_RESOURCE_STATES stream_out_state_ = D3D12_RESOURCE_STATE_COPY_DEST;
-  std::unordered_map<const void*, StreamOutPipeline> stream_out_pipelines_;
+  std::unordered_map<const void*, std::unique_ptr<StreamOutPipeline>>
+      stream_out_pipelines_;
+  // Replaced ones, possibly still being created.
+  std::vector<std::unique_ptr<StreamOutPipeline>> stream_out_pipelines_old_;
+  std::thread stream_out_thread_;
+  std::mutex stream_out_mutex_;
+  std::condition_variable stream_out_cv_;
+  std::deque<StreamOutPipeline*> stream_out_queue_;
+  bool stream_out_shutdown_ = false;
   // This frame's draws and the previous frame's, alternating (a frame's draws
   // are read by its commands until they're executed after the swap).
   std::deque<MotionDraw> motion_draws_[2];
@@ -329,6 +351,14 @@ class DaoUpscalerImpl {
 DaoUpscalerImpl* DaoUpscaler::impl_ = nullptr;
 
 DaoUpscalerImpl::~DaoUpscalerImpl() {
+  if (stream_out_thread_.joinable()) {
+    {
+      std::lock_guard<std::mutex> lock(stream_out_mutex_);
+      stream_out_shutdown_ = true;
+    }
+    stream_out_cv_.notify_one();
+    stream_out_thread_.join();
+  }
   DestroyContext();
   if (ffx_module_) {
     FreeLibrary(ffx_module_);
@@ -860,26 +890,36 @@ ID3D12PipelineState* DaoUpscalerImpl::GetStreamOutPipeline(
     const PipelineCache::Pipeline& pipeline) {
   const PipelineCache::PipelineRuntimeDescription& runtime =
       pipeline.description;
-  auto it = stream_out_pipelines_.find(&pipeline);
-  if (it != stream_out_pipelines_.end() &&
-      it->second.vertex_shader == runtime.vertex_shader &&
-      it->second.root_signature == runtime.root_signature) {
-    return it->second.state.Get();
+  std::unique_ptr<StreamOutPipeline>& entry = stream_out_pipelines_[&pipeline];
+  if (entry && entry->vertex_shader == runtime.vertex_shader &&
+      entry->root_signature == runtime.root_signature) {
+    return entry->status.load(std::memory_order_acquire) ==
+                   StreamOutPipeline::kReady
+               ? entry->state.Get()
+               : nullptr;
   }
+  if (entry) {
+    stream_out_pipelines_old_.push_back(std::move(entry));
+  }
+  entry = std::make_unique<StreamOutPipeline>();
+  entry->vertex_shader = runtime.vertex_shader;
+  entry->root_signature = runtime.root_signature;
   const PipelineCache::PipelineDescription& description = runtime.description;
   // The draw's vertex shader and root signature, writing the positions
   // instead of rasterizing. Render target formats and sample count as bound.
-  D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
+  D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc = entry->desc;
+  desc = {};
   desc.pRootSignature = runtime.root_signature;
   const std::vector<uint8_t>& vertex_shader =
       runtime.vertex_shader->translated_binary();
   desc.VS.pShaderBytecode = vertex_shader.data();
   desc.VS.BytecodeLength = vertex_shader.size();
-  D3D12_SO_DECLARATION_ENTRY so_entry = {0, "SV_Position", 0, 0, 4, 0};
-  UINT so_stride = 16;
-  desc.StreamOutput.pSODeclaration = &so_entry;
+  static const D3D12_SO_DECLARATION_ENTRY kSoEntry = {0, "SV_Position", 0,
+                                                      0, 4, 0};
+  static const UINT kSoStride = 16;
+  desc.StreamOutput.pSODeclaration = &kSoEntry;
   desc.StreamOutput.NumEntries = 1;
-  desc.StreamOutput.pBufferStrides = &so_stride;
+  desc.StreamOutput.pBufferStrides = &kSoStride;
   desc.StreamOutput.NumStrides = 1;
   desc.StreamOutput.RasterizedStream = D3D12_SO_NO_RASTERIZED_STREAM;
   desc.SampleMask = UINT_MAX;
@@ -916,17 +956,43 @@ ID3D12PipelineState* DaoUpscalerImpl::GetStreamOutPipeline(
   } else {
     desc.SampleDesc.Count = samples;
   }
-  StreamOutPipeline& entry = stream_out_pipelines_[&pipeline];
-  entry.vertex_shader = runtime.vertex_shader;
-  entry.root_signature = runtime.root_signature;
-  entry.state.Reset();
-  if (FAILED(cp_.GetD3D12Provider().GetDevice()->CreateGraphicsPipelineState(
-          &desc, IID_PPV_ARGS(&entry.state)))) {
-    XELOGW("FSR: no stream output pipeline for vertex shader {:016X}",
-           runtime.vertex_shader->shader().ucode_data_hash());
-    entry.state.Reset();
+  if (!stream_out_thread_.joinable()) {
+    stream_out_thread_ = std::thread([this] { StreamOutPipelineThread(); });
   }
-  return entry.state.Get();
+  {
+    std::lock_guard<std::mutex> lock(stream_out_mutex_);
+    stream_out_queue_.push_back(entry.get());
+  }
+  stream_out_cv_.notify_one();
+  return nullptr;
+}
+
+void DaoUpscalerImpl::StreamOutPipelineThread() {
+  xe::threading::set_name("FSR stream output pipelines");
+  ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
+  while (true) {
+    StreamOutPipeline* entry;
+    {
+      std::unique_lock<std::mutex> lock(stream_out_mutex_);
+      stream_out_cv_.wait(lock, [this] {
+        return stream_out_shutdown_ || !stream_out_queue_.empty();
+      });
+      if (stream_out_shutdown_) {
+        return;
+      }
+      entry = stream_out_queue_.front();
+      stream_out_queue_.pop_front();
+    }
+    if (SUCCEEDED(device->CreateGraphicsPipelineState(
+            &entry->desc, IID_PPV_ARGS(&entry->state)))) {
+      entry->status.store(StreamOutPipeline::kReady, std::memory_order_release);
+    } else {
+      XELOGW("FSR: no stream output pipeline for a vertex shader");
+      entry->state.Reset();
+      entry->status.store(StreamOutPipeline::kFailed,
+                          std::memory_order_release);
+    }
+  }
 }
 
 void DaoUpscalerImpl::TransitionStreamOut(D3D12_RESOURCE_STATES state) {
@@ -982,6 +1048,9 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
     ++motion_skipped_;
     return;
   }
+
+  // Requested even if not needed this frame, to be ready for the next.
+  ID3D12PipelineState* stream_out_pipeline = GetStreamOutPipeline(*pipeline);
 
   // The float constants as the vertex shader gets them.
   const RegisterFile& regs = rtc_.register_file();
@@ -1130,7 +1199,6 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   const uint32_t passes = previous->constants_hash == constants_hash ? 1 : 2;
   const uint32_t new_counters =
       own_buffers ? passes : (new_append_buffer ? 1 : 0);
-  ID3D12PipelineState* stream_out_pipeline = GetStreamOutPipeline(*pipeline);
   if (!stream_out_pipeline || output_vertex_count > (1u << 20) ||
       offset + uint64_t(own_buffers ? own_size : output_size) * passes >
           kStreamOutDataSize ||

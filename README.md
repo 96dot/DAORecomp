@@ -75,12 +75,16 @@ Everything is pinned to exact versions and checked (`installer/deps.py`):
   are asked to accept. No Visual Studio installation is needed.
 
 The install folder gets the game files (`game/`), the program, `userdata/` (settings,
-saves, logs) and `mods/`.
+saves, logs, and the shader cache) and `mods/`.
 
 ## Playing
 
 - **Windows:** run `DAORecomp.exe` in the install folder. The launcher opens first
   (hold Shift while starting to show it when it is turned off).
+- Shaders are compiled the first time something is drawn; meanwhile it is left out,
+  so new places can show objects popping in for a moment. They are kept in
+  `userdata/shader_cache/` and compiled in the background at every start, so this
+  only happens once.
 - **Linux:** the program is a Windows executable; run it with Wine or Proton.
   - Steam: *Add a Non-Steam Game* → `DAORecomp.exe`, then in its properties force a
     Proton version (Proton includes vkd3d-proton for Direct3D 12).
