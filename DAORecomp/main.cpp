@@ -13,6 +13,8 @@
 
 #include <timeapi.h>
 #include <tlhelp32.h>
+#include <csignal>
+#include <exception>
 #include <sstream>
 #include <fstream>
 
@@ -98,6 +100,41 @@ static LONG CALLBACK CrashHandler(EXCEPTION_POINTERS* info)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+// The calling thread's stack as exe offsets, for scripts/symbolize.py.
+static std::string CurrentHostStack()
+{
+    CONTEXT context{};
+    RtlCaptureContext(&context);
+    const auto exeBase = reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr));
+    std::string out;
+    for (int i = 0; i < 32 && context.Rip; i++)
+    {
+        out += fmt::format(" {:X}", context.Rip - exeBase);
+        DWORD64 imageBase;
+        auto* entry = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
+        if (!entry)
+            break;
+        void* handlerData;
+        DWORD64 establisher;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, entry, &context, &handlerData, &establisher,
+            nullptr);
+    }
+    return out;
+}
+
+// abort() (assertions, std::terminate) ends the process with a fast fail that
+// the exception handler doesn't see: log where it came from first.
+static void AbortHandler(int)
+{
+    LOGE("abort() called, host stack:{}", CurrentHostStack());
+}
+
+static void TerminateHandler()
+{
+    LOGE("std::terminate called, host stack:{}", CurrentHostStack());
+    abort();
+}
+
 static fs::path FindGameRoot(int argc, char** argv)
 {
     // The first argument that isn't a --flag is the game folder.
@@ -144,6 +181,8 @@ int main(int argc, char** argv)
         return 0;
 
     AddVectoredExceptionHandler(0, CrashHandler);
+    signal(SIGABRT, AbortHandler);
+    std::set_terminate(TerminateHandler);
     timeBeginPeriod(1);
 
     if (!g_memory.Init())
