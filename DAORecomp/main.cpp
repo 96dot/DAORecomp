@@ -100,6 +100,28 @@ static LONG CALLBACK CrashHandler(EXCEPTION_POINTERS* info)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+// Names an unnamed thread by where it started, "<module>+<offset>" (the
+// driver's and the system's threads have no names).
+static std::string ThreadStartName(HANDLE thread)
+{
+    using QueryFn = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+    static const auto query = reinterpret_cast<QueryFn>(
+        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread"));
+    constexpr ULONG kThreadQuerySetWin32StartAddress = 9;
+    void* start = nullptr;
+    if (!query || query(thread, kThreadQuerySetWin32StartAddress, &start, sizeof(start), nullptr) < 0 || !start)
+        return {};
+    HMODULE module = nullptr;
+    wchar_t path[MAX_PATH] = {};
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            static_cast<LPCWSTR>(start), &module) ||
+        !GetModuleFileNameW(module, path, MAX_PATH))
+        return fmt::format("{}", start);
+    const std::wstring file = std::filesystem::path(path).filename().wstring();
+    return fmt::format("{}+{:X}", std::string(file.begin(), file.end()),
+        reinterpret_cast<uintptr_t>(start) - reinterpret_cast<uintptr_t>(module));
+}
+
 // abort() (assertions, std::terminate) ends the process with a fast fail that
 // the exception handler doesn't see: log where it came from first. The stack
 // goes on a line of its own, after one saying what happened, in case walking
@@ -365,7 +387,7 @@ int main(int argc, char** argv)
                 {
                     if (entry.th32OwnerProcessID != GetCurrentProcessId())
                         continue;
-                    HANDLE thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ThreadID);
+                    HANDLE thread = OpenThread(THREAD_QUERY_INFORMATION, FALSE, entry.th32ThreadID);
                     if (!thread)
                         continue;
                     FILETIME create, exit, kernel, user;
@@ -382,6 +404,20 @@ int main(int argc, char** argv)
                             std::string name = fmt::format("tid {}", entry.th32ThreadID);
                             if (SUCCEEDED(GetThreadDescription(thread, &wide)) && wide && *wide)
                                 name = std::string(wide, wide + wcslen(wide));
+                            else
+                            {
+                                if (std::string start = ThreadStartName(thread); !start.empty())
+                                    name += " " + start;
+                                // Where a busy unnamed thread spends its time,
+                                // for scripts/symbolize.py.
+                                if (percent >= 10.0)
+                                    for (int i = 0; i < 3; i++)
+                                    {
+                                        LOGI("  {} host stack:{}", name,
+                                            SampleHostStack(entry.th32ThreadID, 24));
+                                        Sleep(3);
+                                    }
+                            }
                             LocalFree(wide);
                             busy.emplace_back(percent, std::move(name));
                         }

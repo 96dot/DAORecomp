@@ -107,6 +107,8 @@ namespace dao::kernel
     // .pdata), as " <offset from the exe base>" each, for scripts/symbolize.py.
     // Stops early, without failing, if the stack can't be read.
     std::string UnwindHostStack(CONTEXT& context, int count);
+    // The same for another host thread, suspended while its stack is walked.
+    std::string SampleHostStack(uint32_t hostThreadId, int count);
     void ForEachThread(const std::function<void(GuestThread&)>& fn);
 
     // Calls a guest function on the current thread. Integer/pointer args go in r3..r10.

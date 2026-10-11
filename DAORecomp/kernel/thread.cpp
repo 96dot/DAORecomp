@@ -194,33 +194,41 @@ namespace dao::kernel
         return n;
     }
 
-    std::string UnwindHostStack(CONTEXT& context, int count)
+    static constexpr int kMaxStackDepth = 64;
+
+    static std::string FormatOffsets(const uint64_t* offsets, int n)
     {
-        uint64_t offsets[64];
-        const int n = UnwindOffsets(context, offsets, std::min(count, int(std::size(offsets))));
         std::string out;
         for (int i = 0; i < n; i++)
             out += fmt::format(" {:X}", offsets[i]);
         return out;
     }
 
-    // Suspends a host thread and returns its stack (see UnwindHostStack).
-    static std::string SampleHostStack(uint32_t hostThreadId, int count)
+    std::string UnwindHostStack(CONTEXT& context, int count)
+    {
+        uint64_t offsets[kMaxStackDepth];
+        return FormatOffsets(offsets, UnwindOffsets(context, offsets, std::min(count, kMaxStackDepth)));
+    }
+
+    std::string SampleHostStack(uint32_t hostThreadId, int count)
     {
         HANDLE handle = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, hostThreadId);
         if (!handle)
             return "?";
-        std::string out;
+        // Nothing allocated while the thread is suspended: it may hold the heap
+        // lock.
+        uint64_t offsets[kMaxStackDepth];
+        int n = 0;
         if (SuspendThread(handle) != DWORD(-1))
         {
             CONTEXT context{};
             context.ContextFlags = CONTEXT_FULL;
             if (GetThreadContext(handle, &context))
-                out = UnwindHostStack(context, count);
+                n = UnwindOffsets(context, offsets, std::min(count, kMaxStackDepth));
             ResumeThread(handle);
         }
         ::CloseHandle(handle);
-        return out;
+        return FormatOffsets(offsets, n);
     }
 
     void DumpThreads()
