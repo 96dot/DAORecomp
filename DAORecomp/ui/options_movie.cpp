@@ -6,12 +6,11 @@
 // engine reads loose files in packages/core/override before its archives.
 #include "stdafx.h"
 #include "ui/graphics_menu.h"
+#include "ui/erf.h"
 #include "ui/graphics_tab_as.h"
 #include "kernel/vfs.h"
 
 #include <fstream>
-
-#include "third_party/stb/stb_image.h"
 
 namespace fs = std::filesystem;
 
@@ -68,75 +67,6 @@ namespace dao::ui
             out.insert(out.end(), body.begin(), body.end());
         }
 
-        // zlib data of `size` bytes unpacked, or, if `size` is only a hint, of up to
-        // kMovieSizeSlack more. Decoded into a buffer of that size, which bounds it.
-        std::optional<std::vector<uint8_t>> Inflate(std::span<const uint8_t> packed, uint32_t size, bool exact)
-        {
-            if (packed.size() > INT_MAX || size > kMaxMovieSize)
-                return std::nullopt;
-            std::vector<uint8_t> out(exact ? size : std::min(size + kMovieSizeSlack, kMaxMovieSize));
-            if (out.empty())
-                return std::nullopt;
-            const int length = stbi_zlib_decode_buffer(reinterpret_cast<char*>(out.data()), int(out.size()),
-                reinterpret_cast<const char*>(packed.data()), int(packed.size()));
-            if (length <= 0 || (exact && uint32_t(length) != size))
-                return std::nullopt;
-            out.resize(size_t(length));
-            return out;
-        }
-
-        std::optional<std::vector<uint8_t>> ReadFile(const fs::path& path, uint64_t offset, uint32_t size)
-        {
-            std::ifstream file(path, std::ios::binary);
-            std::vector<uint8_t> data(size);
-            if (!file.seekg(std::streamoff(offset)) ||
-                !file.read(reinterpret_cast<char*>(data.data()), std::streamsize(size)))
-                return std::nullopt;
-            return data;
-        }
-
-        // ERF V2.1 (the packages' .erf archives): "ERF V2.1", the entry count at
-        // 0x10, then 44-byte entries from 0x20: name[32], offset, packed size,
-        // size. An entry is zlib-compressed when its sizes differ.
-        std::optional<std::vector<uint8_t>> ReadArchiveEntry(const fs::path& path, std::string_view name)
-        {
-            constexpr size_t kEntriesOffset = 0x20;
-            constexpr size_t kEntrySize = 44;
-            constexpr size_t kNameSize = 32;
-            // A sanity bound (the game's archives have far fewer entries).
-            constexpr uint32_t kMaxEntries = 1u << 16;
-
-            std::error_code ec;
-            const uint64_t fileSize = fs::file_size(path, ec);
-            const auto header = ec ? std::nullopt : ReadFile(path, 0, kEntriesOffset);
-            if (!header || memcmp(header->data(), "ERF V2.1", 8) != 0)
-                return std::nullopt;
-            const uint32_t count = Read32(*header, 0x10);
-            if (count > kMaxEntries)
-                return std::nullopt;
-            const auto entries = ReadFile(path, kEntriesOffset, uint32_t(count * kEntrySize));
-            if (!entries)
-                return std::nullopt;
-            for (uint32_t i = 0; i < count; ++i)
-            {
-                const std::span<const uint8_t> entry(entries->data() + i * kEntrySize, kEntrySize);
-                const auto* entryName = reinterpret_cast<const char*>(entry.data());
-                const std::string_view entryView(entryName, strnlen(entryName, kNameSize));
-                if (!std::ranges::equal(entryView, name,
-                        [](char a, char b) { return tolower(uint8_t(a)) == tolower(uint8_t(b)); }))
-                    continue;
-                const uint32_t offset = Read32(entry, kNameSize), packed = Read32(entry, kNameSize + 4),
-                               size = Read32(entry, kNameSize + 8);
-                if (packed > kMaxMovieSize || size > kMaxMovieSize || uint64_t(offset) + packed > fileSize)
-                    return std::nullopt;
-                auto data = ReadFile(path, offset, packed);
-                if (!data || packed == size)
-                    return data;
-                return Inflate(*data, size, true);
-            }
-            return std::nullopt;
-        }
-
         // The movie as the engine would load it: a mod's loose copy, else the disc's.
         std::optional<std::vector<uint8_t>> ReadOptionsMovie(std::string& source)
         {
@@ -147,13 +77,13 @@ namespace dao::ui
                 if (ec || size > kMaxMovieSize)
                     return std::nullopt;
                 source = loose->string();
-                return ReadFile(*loose, 0, uint32_t(size));
+                return ReadFileBytes(*loose, 0, uint32_t(size));
             }
             const auto archive = kernel::VfsResolve(kArchivePath);
             if (!archive)
                 return std::nullopt;
             source = archive->string();
-            return ReadArchiveEntry(*archive, kMovieName);
+            return ReadErfEntry(*archive, kMovieName, kMaxMovieSize);
         }
 
         // The tag at `at`: code, header size and body size, if it fits in `data`.
@@ -205,7 +135,8 @@ namespace dao::ui
             std::span<const uint8_t> movie = file;
             if (file[0] == 'C')
             {
-                auto body = Inflate(file.subspan(8), size - std::min<uint32_t>(size, 8), false);
+                const uint32_t hint = std::min(size - std::min<uint32_t>(size, 8), kMaxMovieSize);
+                auto body = Inflate(file.subspan(8), hint, kMovieSizeSlack);
                 if (!body)
                 {
                     error = "can't decompress the movie";
@@ -296,7 +227,7 @@ namespace dao::ui
         const fs::path path = kernel::VfsUserRoot() / "generated" / "packages" / "core" / "override" / kMovieName;
         std::error_code ec;
         const uint64_t existingSize = fs::file_size(path, ec);
-        const auto existing = !ec && existingSize == patched->size() ? ReadFile(path, 0, uint32_t(existingSize))
+        const auto existing = !ec && existingSize == patched->size() ? ReadFileBytes(path, 0, uint32_t(existingSize))
                                                                      : std::nullopt;
         if (!existing || *existing != *patched)
         {

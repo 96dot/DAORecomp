@@ -1,9 +1,8 @@
 #include "stdafx.h"
 #include "launcher/launcher.h"
+#include "launcher/game_art.h"
 
 #include <shellapi.h>
-
-#include <fstream>
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -36,19 +35,152 @@ namespace dao::launcher
         constexpr const char* kAnisotropicNames[] = { "Game default", "2x", "4x", "8x", "16x" };
         static_assert(std::size(kAnisotropicNames) == std::size(kAnisotropicLevels));
 
-        // The PC launcher's look: sepia art on black, dark red buttons with gold edges.
-        constexpr ImU32 kGold = IM_COL32(176, 142, 82, 255);
-        constexpr ImU32 kGoldBright = IM_COL32(232, 196, 120, 255);
-        constexpr ImU32 kButtonTop = IM_COL32(98, 38, 24, 255);
-        constexpr ImU32 kButtonBottom = IM_COL32(48, 16, 10, 255);
-        constexpr ImU32 kButtonTopHot = IM_COL32(134, 54, 32, 255);
-        constexpr ImU32 kButtonBottomHot = IM_COL32(70, 24, 14, 255);
-        constexpr ImU32 kButtonText = IM_COL32(244, 230, 204, 255);
-        constexpr ImU32 kLogo = IM_COL32(214, 206, 190, 255);
+        // The game's menus: cream serif text, gold edges, dark warm panels.
+        constexpr ImU32 kText = IM_COL32(236, 226, 204, 255);
+        constexpr ImU32 kTextDim = IM_COL32(190, 178, 154, 255);
+        constexpr ImU32 kTextOff = IM_COL32(120, 110, 96, 255);
+        constexpr ImU32 kGold = IM_COL32(176, 146, 92, 255);
+        constexpr ImU32 kGoldBright = IM_COL32(232, 204, 140, 255);
+        constexpr ImU32 kShadow = IM_COL32(0, 0, 0, 200);
+        constexpr ImU32 kSky = IM_COL32(26, 16, 9, 255);
+
+        // The game's screens are laid out on a 1280x720 stage.
+        constexpr float kStageWidth = 1280.0f, kStageHeight = 720.0f;
+
+        // A sprite of the game's movies where they place it on the stage.
+        struct Layer
+        {
+            const char* sprite;
+            float x, y, scale, alpha;
+        };
+
+        // The title screen (startmenu2.gfx), back to front. Its background is a clip at
+        // kSceneX, kSceneY scaled by kSceneScale; positions in it are in its pixels.
+        // The game shows it kSceneDrop lower (its title-safe anchoring); positions on the
+        // stage here are the movie's.
+        constexpr float kSceneScale = 2.0f / 3.0f, kSceneX = 0.1f, kSceneY = -40.2f, kSceneDrop = 13.0f;
+        // The clouds: a strip of tiles (a, b, c, a) scrolling left, wrapping every
+        // kCloudLoop pixels; over them a second strip, multiplied at 70% (a darker
+        // shade of the sky), in two copies (StartMenu.CLOUD*_ANIM_*).
+        constexpr const char* kClouds[] = { "dxt1_cloud1a.jpg", "dxt1_cloud1b.jpg", "dxt1_cloud1c.jpg",
+            "dxt1_cloud1a.jpg" };
+        constexpr float kCloudTile = 2500.0f, kCloudLoop = 7498.0f, kCloudSpeed = 7498.0f / 900.0f;
+        constexpr const char* kCloudShade = "dxt1_cloud2.png";
+        constexpr float kCloudShadeScale = 1.125f, kCloudShadeStart = 865.0f, kCloudShadeLoop = 3150.0f,
+                        kCloudShadeSpeed = 3150.0f / 200.0f, kCloudShadeOpacity = 0.7f;
+        constexpr Layer kSunGlow = { "startmenu2_I13C", 112.0f, 245.3f, kSceneScale, 0.8f };
+        constexpr Layer kHills = { "startmenu2_I13F", 205.4f, 376.7f, kSceneScale, 1.0f };
+        constexpr Layer kMountains = { "startmenu2_I145", 38.7f, 249.9f, kSceneScale, 1.0f };
+        // The cliff and the rocks in front.
+        constexpr Layer kForeground[] = {
+            { "startmenu2_I14A", 702.1f, -40.2f, kSceneScale, 1.0f },
+            { "startmenu2_I149", 0.1f, 284.5f, kSceneScale, 1.0f },
+            { "startmenu2_I148", 297.4f, 573.8f, kSceneScale, 1.0f },
+        };
+        // The swords and the ground they're in.
+        constexpr Layer kSwords[] = {
+            { "startmenu2_I15F", 271.4f, 17.8f, kSceneScale, 1.0f },
+            { "startmenu2_I15E", 0.1f, 521.1f, kSceneScale, 1.0f },
+        };
+        constexpr Layer kSmoke = { "startmenu2_I165", -201.9f, 145.2f, kSceneScale, 1.0f };
+        // A soft glow: drifting through the haze tinted kHazeColor, and over the fires
+        // reddening.
+        constexpr const char* kGlow = "startmenu2_I142";
+        constexpr ImU32 kHazeColor = IM_COL32(204, 153, 102, 255);
+        constexpr float kFireX = 0.1f, kFireY = 276.0f;
+        constexpr const char* kMist = "startmenu2_I150";
+        constexpr float kMistX = -121.3f, kMistY = 426.7f;
+        constexpr const char* kEmbers = "startmenu2_I161";
+        constexpr float kEmbersX = 0.1f, kEmbersY = 432.0f;
+
+        // The scene's tweens (60 fps timelines), as linear keys looping at the last:
+        // seconds, then values.
+        struct Key
+        {
+            float time, a, b;
+        };
+        // The haze glows' positions in the background.
+        constexpr Key kHaze1[] = { { 0.0f, -1197, 465 }, { 24.8f, 1461, 465 } };
+        constexpr Key kHaze2[] = { { 0.0f, 811, 548 }, { 5.32f, 698, 514 }, { 15.25f, 722, 571 }, { 24.8f, 811, 548 } };
+        // The darkness of the vignette around the landscape: flickering, as by firelight.
+        constexpr Key kVignette[] = { { 0.0f, 1.0f }, { 3.17f, 0.0f }, { 3.92f, 0.52f }, { 4.42f, 0.672f },
+            { 4.72f, 0.441f }, { 4.9f, 0.238f }, { 5.12f, 0.91f }, { 5.28f, 0.379f }, { 5.47f, 0.711f },
+            { 5.63f, 0.43f }, { 9.62f, 1.0f }, { 9.9f, 0.328f }, { 9.92f, 0.441f }, { 10.07f, 0.211f },
+            { 13.7f, 0.0f }, { 13.95f, 0.809f }, { 14.15f, 0.969f }, { 14.35f, 0.789f }, { 14.52f, 1.0f },
+            { 24.8f, 1.0f } };
+        constexpr Key kEmbersAlpha[] = { { 0.0f, 0.0f }, { 1.33f, 0.578f }, { 1.38f, 1.0f }, { 1.45f, 0.648f },
+            { 1.58f, 0.172f }, { 2.5f, 0.648f }, { 2.55f, 0.129f }, { 2.62f, 1.0f }, { 2.75f, 0.379f },
+            { 11.97f, 0.309f }, { 12.22f, 0.309f }, { 12.25f, 1.0f }, { 12.37f, 0.559f }, { 12.4f, 0.809f },
+            { 12.67f, 0.488f }, { 16.62f, 0.488f }, { 19.27f, 0.0f } };
+        // The fire glow's colour: its own times a, plus red b.
+        constexpr Key kFireTint[] = { { 0.0f, 1.0f, 0.0f }, { 11.65f, 0.641f, 73.0f }, { 27.08f, 1.0f, 0.0f } };
+        // The mist: drifting right (x in its clip), fading in and out.
+        constexpr Key kMistDrift[] = { { 0.0f, -48, 0 }, { 1.52f, 0, 1 }, { 165.88f, 629, 1 }, { 174.4f, 946, 0 } };
+
+        // Over the background: a warm gradient, multiplied at 70%, from the top
+        // (kWarmTop, opaque) to the bottom (transparent; stage y); a shadow darkening
+        // the bottom (from transparent at y kEdgeShadowTop to black at kEdgeShadowBottom).
+        constexpr float kWarmOpacity = 0.7f, kWarmTopY = -76.9f, kWarmBottomY = 844.8f;
+        constexpr float kWarmTop[3] = { 244, 221, 11 }, kWarmBottom[3] = { 204, 102, 0 };
+        constexpr float kEdgeShadowTop = 290.4f, kEdgeShadowBottom = 794.7f;
+        // The vignette: black outside a circle (background pixels), over the landscape.
+        constexpr float kVignetteWidth = 1920.0f, kVignetteHeight = 1200.0f, kVignetteInner = 950.2f,
+                        kVignetteOuter = 1132.2f;
+
+        // The logo where the game shows it (the movie's anchoring moves it), "ORIGINS"
+        // right-aligned under it.
+        constexpr Layer kLogo = { "startmenu2_I11A", 642.9f, 109.0f, 1.0f, 1.0f };
+        constexpr const char* kOrigins = "startmenu2_I10F";
+        constexpr float kOriginsRight = 1178.8f, kOriginsY = 212.0f;
+        // The menu's highlight bars (rolled over, pressed) behind the selected item.
+        constexpr const char* kMenuBar = "startmenu2_IF4";
+        constexpr const char* kMenuBarDown = "startmenu2_I101";
+        constexpr float kMenuBarX = 766.0f, kMenuBarHalfHeight = 31.0f;
+        constexpr float kMenuRight = 1170.0f, kMenuTop = 385.0f, kMenuStep = 34.0f, kMenuText = 24.0f;
+
+        // The textures made from the game's art for the scene's blending, by name.
+        constexpr const char* kGlowWhite = "glow (white)";
+        constexpr const char* kGlowAdd = "glow (additive)";
+        constexpr const char* kWarmOverlay = "warm overlay";
+        constexpr const char* kVignetteMask = "vignette";
+
+        // The Options screen (optionsmenu.gfx).
+        constexpr const char* kPanelBackground = "OptionsMenu_I200";
+        constexpr Layer kHeaderBar = { "OptionsMenu_I1D6", 486.6f, 38.5f, 1.0f, 1.0f };
+        constexpr Layer kHeaderFlourish = { "OptionsMenu_I1DE", 466.6f, 23.0f, 1.0f, 0.3f };
+        constexpr float kTitleX = 1000.0f, kTitleY = 71.5f;
+        // A tab's highlight: the bar mirrored, its curved end at kTabBarRight.
+        constexpr const char* kTabBar = "OptionsMenu_I1F7";
+        constexpr float kTabBarRight = 547.3f, kTabTop = 89.0f, kTabStep = 34.0f, kTabTextX = 258.0f;
+        constexpr const char* kSectionBar = "OptionsMenu_I17E";
+        // The footer: a bar stretched under the button hints.
+        constexpr const char* kFooterBar = "OptionsMenu_I203";
+        constexpr float kFooterLeft = 232.0f, kFooterRight = 1049.0f, kFooterTop = 629.0f;
+        // The contents between the header and the footer.
+        constexpr float kContentsTop = 112.0f, kContentsBottom = 612.0f, kContentsRight = 1240.0f;
+        constexpr float kConfigureLeft = 575.0f, kModsLeft = 80.0f;
+
+        constexpr const char* kButtonA = "XBoxGamepad_BottomAction";
+        constexpr const char* kButtonB = "XBoxGamepad_RightAction";
+        constexpr const char* kButtonY = "XBoxGamepad_TopAction";
+        constexpr const char* kButtonLB = "XBoxGamepad_LeftBumper";
+        constexpr const char* kButtonRB = "XBoxGamepad_RightBumper";
+        // Button hints: the icon's height, the gap to the label, the label's size.
+        constexpr float kHintIcon = 30.0f, kHintGap = 8.0f, kHintText = 19.0f;
+
+        constexpr std::string_view kAtlases[] = { "atl_startmenu2_dxt5", "atl_startmenu2_dxt1", "atl_optionsmen_dxt5",
+            "atl_shared_dxt5" };
 
         enum class View { Main, Configure, Mods };
         // Graphics, Display, Patches, Advanced.
         constexpr int kConfigureTabs = 4;
+        constexpr float kFadeSeconds = 0.2f;
+
+        struct Texture
+        {
+            SDL_Texture* texture = nullptr;
+            float width = 0, height = 0;
+        };
 
         struct State
         {
@@ -58,12 +190,19 @@ namespace dao::launcher
             int selectedMod = -1;
             View view = View::Main;
             bool viewChanged = true;
-            ImFont* buttonFont = nullptr;
-            ImFont* logoFont = nullptr;
-            ImFont* logoSmallFont = nullptr;
-            SDL_Texture* art = nullptr;
-            int artWidth = 0, artHeight = 0;
+            double viewStart = 0;
+            int configureTab = 0;
+            bool tabChanged = false;
+            // The menus' serif fonts: the title screen's items, titles, section
+            // headings, help.
+            ImFont* menuFont = nullptr;
+            ImFont* titleFont = nullptr;
+            ImFont* headingFont = nullptr;
+            ImFont* helpFont = nullptr;
+            std::unordered_map<std::string, Texture> art;
             float scale = 1.0f;
+            // The opacity of the view's contents while it fades in.
+            float fade = 1.0f;
             bool play = false;
             bool quit = false;
             // DAO_LAUNCHER_SCREENSHOTS=<dir>: show each view, save it as BMP, quit.
@@ -73,6 +212,300 @@ namespace dao::launcher
             // ending an edit or leaving a nested child window.
             bool backKeysFree = false;
         };
+
+        // The state, for the settings tabs' helpers.
+        const State* g_state = nullptr;
+
+        // Where the game's screens go in the window: the scene covers it; the menus fit
+        // in it, anchored to its sides.
+        struct Layout
+        {
+            ImVec2 pos, size;
+            float cover = 1, coverX = 0, coverY = 0;
+            float fit = 1, fitY = 0;
+
+            explicit Layout(const ImGuiViewport* viewport) : pos(viewport->Pos), size(viewport->Size)
+            {
+                cover = std::max(size.x / kStageWidth, size.y / kStageHeight);
+                coverX = (size.x - kStageWidth * cover) * 0.5f;
+                coverY = (size.y - kStageHeight * cover) * 0.5f;
+                fit = std::min(size.x / kStageWidth, size.y / kStageHeight);
+                fitY = (size.y - kStageHeight * fit) * 0.5f;
+            }
+
+            ImVec2 Max() const { return ImVec2(pos.x + size.x, pos.y + size.y); }
+            ImVec2 Scene(float x, float y) const { return ImVec2(pos.x + coverX + x * cover, pos.y + coverY + y * cover); }
+            float Y(float y) const { return pos.y + fitY + y * fit; }
+            ImVec2 Left(float x, float y) const { return ImVec2(pos.x + x * fit, Y(y)); }
+            ImVec2 Right(float x, float y) const { return ImVec2(pos.x + size.x - (kStageWidth - x) * fit, Y(y)); }
+            ImVec2 Center(float x, float y) const
+            {
+                return ImVec2(pos.x + size.x * 0.5f + (x - kStageWidth * 0.5f) * fit, Y(y));
+            }
+        };
+
+        ImU32 WithAlpha(ImU32 color, float alpha)
+        {
+            const float a = float(color >> IM_COL32_A_SHIFT & 0xFF) * std::clamp(alpha, 0.0f, 1.0f);
+            return (color & ~IM_COL32_A_MASK) | ImU32(a + 0.5f) << IM_COL32_A_SHIFT;
+        }
+
+        const Texture* Art(const State& st, const char* name)
+        {
+            const auto it = st.art.find(name);
+            return it != st.art.end() ? &it->second : nullptr;
+        }
+
+        // A sprite with its top left at `at`, `scale` window pixels per sprite pixel;
+        // mirrored, it extends left of `at` instead.
+        void DrawTinted(ImDrawList* draw, const Texture& art, ImVec2 at, float scale, ImU32 tint, bool mirrored = false)
+        {
+            const float w = art.width * scale, h = art.height * scale;
+            const ImVec2 min(mirrored ? at.x - w : at.x, at.y), max(min.x + w, min.y + h);
+            draw->AddImage(ImTextureID(uintptr_t(art.texture)), min, max, ImVec2(mirrored ? 1.0f : 0.0f, 0),
+                ImVec2(mirrored ? 0.0f : 1.0f, 1), tint);
+        }
+
+        void DrawSprite(ImDrawList* draw, const Texture& art, ImVec2 at, float scale, float alpha, bool mirrored = false)
+        {
+            DrawTinted(draw, art, at, scale, WithAlpha(IM_COL32_WHITE, alpha), mirrored);
+        }
+
+        // A sprite stretched over a rectangle.
+        void DrawStretched(ImDrawList* draw, const Texture& art, ImVec2 min, ImVec2 max, float alpha)
+        {
+            draw->AddImage(ImTextureID(uintptr_t(art.texture)), min, max, ImVec2(0, 0), ImVec2(1, 1),
+                WithAlpha(IM_COL32_WHITE, alpha));
+        }
+
+        void DrawLayer(ImDrawList* draw, const State& st, const Layout& layout, const Layer& layer)
+        {
+            if (const Texture* art = Art(st, layer.sprite))
+                DrawSprite(draw, *art, layout.Scene(layer.x, layer.y + kSceneDrop), layer.scale * layout.cover,
+                    layer.alpha);
+        }
+
+        // A tween's values `t` seconds into its loops.
+        ImVec2 Tween(std::span<const Key> keys, float t)
+        {
+            t = std::fmod(t, keys.back().time);
+            const auto next = std::ranges::upper_bound(keys, t, {}, &Key::time);
+            if (next == keys.begin() || next == keys.end())
+            {
+                const Key& key = next == keys.end() ? keys.back() : *next;
+                return ImVec2(key.a, key.b);
+            }
+            const Key& prev = next[-1];
+            const float f = (t - prev.time) / (next->time - prev.time);
+            return ImVec2(prev.a + (next->a - prev.a) * f, prev.b + (next->b - prev.b) * f);
+        }
+
+        // Text with the game's drop shadow, faded with the view.
+        void ShadowText(ImDrawList* draw, const State& st, ImFont* font, float size, ImVec2 at, ImU32 color,
+            const char* text)
+        {
+            const float offset = std::max(1.0f, size / 16.0f);
+            const float alpha = float(color >> IM_COL32_A_SHIFT & 0xFF) / 255.0f * st.fade;
+            draw->AddText(font, size, ImVec2(at.x + offset, at.y + offset), WithAlpha(kShadow, alpha), text);
+            draw->AddText(font, size, at, WithAlpha(color, st.fade), text);
+        }
+
+        // The title screen, animated as the game's: the clouds drifting, haze passing
+        // over the landscape, the vignette flickering as by firelight, the embers and
+        // the fire glowing, the mist drifting. `dim` darkens it behind the other views.
+        void DrawScene(const State& st, const Layout& layout, float dim)
+        {
+            ImDrawList* draw = ImGui::GetBackgroundDrawList();
+            draw->AddRectFilled(layout.pos, layout.Max(), kSky);
+            const float t = float(ImGui::GetTime());
+            const float scale = kSceneScale * layout.cover;
+            // A point of the background.
+            auto at = [&](float x, float y) {
+                return layout.Scene(kSceneX + x * kSceneScale, kSceneY + kSceneDrop + y * kSceneScale);
+            };
+
+            const float cloudX = -std::fmod(t * kCloudSpeed, kCloudLoop);
+            for (size_t i = 0; i < std::size(kClouds); i++)
+            {
+                if (const Texture* cloud = Art(st, kClouds[i]))
+                    DrawSprite(draw, *cloud, at(cloudX + kCloudTile * float(i), 0), kCloudTile / cloud->width * scale,
+                        1.0f);
+            }
+            if (const Texture* shade = Art(st, kCloudShade))
+            {
+                // From its start, then wrapping.
+                float x = kCloudShadeStart - t * kCloudShadeSpeed;
+                if (x < 0.0f)
+                    x = -std::fmod(-x, kCloudShadeLoop);
+                for (const float copy : { 0.0f, kCloudShadeLoop })
+                    DrawSprite(draw, *shade, at(x + copy, 0), kCloudShadeScale * scale, 1.0f);
+            }
+            DrawLayer(draw, st, layout, kSunGlow);
+
+            const Texture* glowWhite = Art(st, kGlowWhite);
+            auto haze = [&](std::span<const Key> keys) {
+                const ImVec2 p = Tween(keys, t);
+                if (glowWhite)
+                    DrawTinted(draw, *glowWhite, at(p.x, p.y), scale, kHazeColor);
+            };
+            DrawLayer(draw, st, layout, kHills);
+            haze(kHaze1);
+            DrawLayer(draw, st, layout, kMountains);
+            haze(kHaze2);
+            for (const Layer& layer : kForeground)
+                DrawLayer(draw, st, layout, layer);
+            if (const Texture* vignette = Art(st, kVignetteMask))
+                DrawStretched(draw, *vignette, at(0, 0), at(kVignetteWidth, kVignetteHeight), Tween(kVignette, t).x);
+
+            if (const Texture* mist = Art(st, kMist))
+            {
+                const ImVec2 drift = Tween(kMistDrift, t);
+                DrawSprite(draw, *mist, layout.Scene(kMistX + drift.x * kSceneScale, kMistY + kSceneDrop), scale,
+                    drift.y);
+            }
+            for (const Layer& layer : kSwords)
+                DrawLayer(draw, st, layout, layer);
+            if (const Texture* embers = Art(st, kEmbers))
+                DrawSprite(draw, *embers, layout.Scene(kEmbersX, kEmbersY + kSceneDrop), scale,
+                    Tween(kEmbersAlpha, t).x);
+            DrawLayer(draw, st, layout, kSmoke);
+            if (const Texture* glow = Art(st, kGlow))
+            {
+                // Its colour times the tint's first value, plus the second in red.
+                const ImVec2 tint = Tween(kFireTint, t);
+                const ImVec2 p = layout.Scene(kFireX, kFireY + kSceneDrop);
+                const int shade = int(tint.x * 255.0f + 0.5f);
+                DrawTinted(draw, *glow, p, scale, IM_COL32(shade, shade, shade, 255));
+                if (const Texture* add = Art(st, kGlowAdd))
+                    DrawTinted(draw, *add, p, scale, IM_COL32(int(tint.y + 0.5f), 0, 0, 255));
+            }
+
+            if (const Texture* warm = Art(st, kWarmOverlay))
+                DrawStretched(draw, *warm, layout.Scene(0, 0), layout.Scene(kStageWidth, kStageHeight), 1.0f);
+            draw->AddRectFilledMultiColor(layout.Scene(0, kEdgeShadowTop), layout.Scene(kStageWidth, kEdgeShadowBottom),
+                IM_COL32_BLACK_TRANS, IM_COL32_BLACK_TRANS, IM_COL32_BLACK, IM_COL32_BLACK);
+            if (dim > 0.0f)
+                draw->AddRectFilled(layout.pos, layout.Max(), WithAlpha(IM_COL32_BLACK, dim));
+        }
+
+        // The game's logo at the top right; without its art, the title in capitals.
+        void DrawLogo(const State& st, const Layout& layout)
+        {
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            const Texture* logo = Art(st, kLogo.sprite);
+            const Texture* origins = Art(st, kOrigins);
+            if (logo && origins)
+            {
+                DrawSprite(draw, *logo, layout.Right(kLogo.x, kLogo.y), layout.fit, st.fade);
+                DrawSprite(draw, *origins, layout.Right(kOriginsRight - origins->width, kOriginsY), layout.fit, st.fade);
+                return;
+            }
+            ImFont* font = st.titleFont;
+            const float size = 64.0f * layout.fit;
+            const char* title = "DRAGON AGE";
+            const ImVec2 extent = font->CalcTextSizeA(size, FLT_MAX, 0, title);
+            const ImVec2 at = layout.Right(kOriginsRight, kLogo.y + 20.0f);
+            ShadowText(draw, st, font, size, ImVec2(at.x - extent.x, at.y), kText, title);
+            const char* subtitle = "O R I G I N S";
+            const float subtitleSize = size * 0.45f;
+            const ImVec2 subtitleExtent = font->CalcTextSizeA(subtitleSize, FLT_MAX, 0, subtitle);
+            ShadowText(draw, st, font, subtitleSize, ImVec2(at.x - subtitleExtent.x, at.y + size), kText, subtitle);
+        }
+
+        // An animated 0..1 for an item: towards 1 while `on`.
+        float Ease(ImGuiID id, bool on, float seconds = 0.12f)
+        {
+            float* value = ImGui::GetStateStorage()->GetFloatRef(id, 0.0f);
+            const float step = ImGui::GetIO().DeltaTime / seconds;
+            *value = std::clamp(*value + (on ? step : -step), 0.0f, 1.0f);
+            return *value;
+        }
+
+        // A button of the game's own menus, which draw their highlight instead of
+        // ImGui's navigation cursor. Hot while hovered or focused by keys or gamepad.
+        bool MenuButton(const char* id, ImVec2 min, ImVec2 size, bool enabled, bool& hot)
+        {
+            ImGui::SetCursorScreenPos(min);
+            ImGui::BeginDisabled(!enabled);
+            ImGui::PushStyleColor(ImGuiCol_NavCursor, IM_COL32_BLACK_TRANS);
+            const bool pressed = ImGui::InvisibleButton(id, size, ImGuiButtonFlags_EnableNav);
+            ImGui::PopStyleColor();
+            ImGui::EndDisabled();
+            hot = enabled && (ImGui::IsItemHovered() || (ImGui::IsItemFocused() && GImGui->NavCursorVisible));
+            return pressed && enabled;
+        }
+
+        // A title screen menu item: right-aligned text, the game's highlight bar behind
+        // it while it's selected. Also activated with Enter or the gamepad's A.
+        bool MenuItem(const State& st, const Layout& layout, const char* label, float centerY, bool enabled = true)
+        {
+            const float rowHeight = kMenuStep * layout.fit;
+            const ImVec2 min(layout.Right(kMenuBarX + 80.0f, 0).x, layout.Y(centerY) - rowHeight * 0.5f);
+            bool hot = false;
+            const bool pressed =
+                MenuButton(label, min, ImVec2(layout.pos.x + layout.size.x - min.x, rowHeight), enabled, hot);
+            const bool down = hot && ImGui::IsItemActive();
+            const float shown = Ease(ImGui::GetItemID(), hot);
+
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            const ImVec2 bar = layout.Right(kMenuBarX, centerY - kMenuBarHalfHeight);
+            if (shown > 0.0f)
+            {
+                if (const Texture* art = Art(st, down ? kMenuBarDown : kMenuBar))
+                    DrawSprite(draw, *art, bar, layout.fit, shown * st.fade);
+                else
+                    draw->AddRectFilledMultiColor(ImVec2(bar.x, layout.Y(centerY - 14.0f)),
+                        ImVec2(layout.pos.x + layout.size.x, layout.Y(centerY + 14.0f)), IM_COL32_BLACK_TRANS,
+                        WithAlpha(IM_COL32_BLACK, 0.8f * shown * st.fade),
+                        WithAlpha(IM_COL32_BLACK, 0.8f * shown * st.fade), IM_COL32_BLACK_TRANS);
+            }
+            ImFont* font = st.menuFont;
+            const float size = kMenuText * layout.fit;
+            const ImVec2 extent = font->CalcTextSizeA(size, FLT_MAX, 0, label);
+            const ImVec2 at = layout.Right(kMenuRight, centerY);
+            ShadowText(draw, st, font, size, ImVec2(at.x - extent.x, at.y - extent.y * 0.5f),
+                !enabled ? kTextOff : hot ? kText : kTextDim, label);
+            return pressed;
+        }
+
+        // The width of a button hint, in stage pixels.
+        float HintWidth(const State& st, const char* label)
+        {
+            return kHintIcon + kHintGap + st.headingFont->CalcTextSizeA(kHintText, FLT_MAX, 0, label).x;
+        }
+
+        // A button hint of the game's footers at `at` (its top left; its top right when
+        // the label comes first): the button's icon and the label. Clickable when
+        // `clickable`; returns whether it was clicked.
+        bool Hint(const State& st, const Layout& layout, const char* button, const char* label, ImVec2 at,
+            bool labelFirst, bool clickable)
+        {
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            const float icon = kHintIcon * layout.fit, gap = kHintGap * layout.fit, size = kHintText * layout.fit;
+            ImFont* font = st.headingFont;
+            const ImVec2 text = font->CalcTextSizeA(size, FLT_MAX, 0, label);
+            const float width = icon + gap + text.x;
+            const ImVec2 min(labelFirst ? at.x - width : at.x, at.y);
+            bool pressed = false, hot = false;
+            if (clickable)
+            {
+                ImGui::SetCursorScreenPos(min);
+                ImGui::PushID(label);
+                pressed = ImGui::InvisibleButton("##hint", ImVec2(width, icon));
+                hot = ImGui::IsItemHovered();
+                ImGui::PopID();
+            }
+            const float iconX = labelFirst ? min.x + text.x + gap : min.x;
+            const float textX = labelFirst ? min.x : min.x + icon + gap;
+            if (const Texture* art = Art(st, button))
+                DrawSprite(draw, *art, ImVec2(iconX, min.y), icon / art->height, st.fade);
+            else
+                draw->AddCircleFilled(ImVec2(iconX + icon * 0.5f, min.y + icon * 0.5f), icon * 0.45f,
+                    WithAlpha(kGold, st.fade));
+            ShadowText(draw, st, font, size, ImVec2(textX, min.y + (icon - text.y) * 0.5f), hot ? kGoldBright : kText,
+                label);
+            return pressed;
+        }
 
         void OpenFolder(const fs::path& path)
         {
@@ -88,15 +521,66 @@ namespace dao::launcher
 
         void HelpText(const char* text)
         {
+            ImGui::PushFont(g_state->helpFont);
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             ImGui::TextWrapped("%s", text);
             ImGui::PopStyleColor();
+            ImGui::PopFont();
         }
 
+        // A section heading: the Options screen's gold bar with the title on it.
         void Section(const char* title)
         {
-            ImGui::Spacing();
-            ImGui::SeparatorText(title);
+            const State& st = *g_state;
+            ImGui::Dummy(ImVec2(0, 6 * st.scale));
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            ImFont* font = st.headingFont;
+            const float height = font->FontSize * 1.6f, inset = 10.0f * st.scale;
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            if (const Texture* bar = Art(st, kSectionBar))
+                DrawStretched(draw, *bar, ImVec2(at.x - inset, at.y),
+                    ImVec2(at.x - inset + bar->width * height / bar->height, at.y + height), st.fade);
+            else
+                draw->AddRectFilledMultiColor(at, ImVec2(at.x + 360 * st.scale, at.y + height),
+                    WithAlpha(kGold, 0.6f * st.fade), IM_COL32_BLACK_TRANS, IM_COL32_BLACK_TRANS,
+                    WithAlpha(kGold, 0.6f * st.fade));
+            ShadowText(draw, st, font, font->FontSize, ImVec2(at.x + inset, at.y + (height - font->FontSize) * 0.5f),
+                kText, title);
+            ImGui::Dummy(ImVec2(0, height));
+        }
+
+        // The width of the pickers and sliders.
+        float RowWidth()
+        {
+            return std::min(ImGui::GetContentRegionAvail().x - 4 * g_state->scale, 460.0f * g_state->scale);
+        }
+
+        void Label(const char* text)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(kTextDim));
+            ImGui::TextUnformatted(text);
+            ImGui::PopStyleColor();
+        }
+
+        // Settings as the game's menus show them: the name above the picker or slider.
+        bool ComboRow(const char* label, int* value, const char* const* items, int count)
+        {
+            Label(label);
+            ImGui::PushID(label);
+            ImGui::SetNextItemWidth(RowWidth());
+            const bool changed = ImGui::Combo("##value", value, items, count);
+            ImGui::PopID();
+            return changed;
+        }
+
+        bool SliderRow(const char* label, float* value, float min, float max, const char* format)
+        {
+            Label(label);
+            ImGui::PushID(label);
+            ImGui::SetNextItemWidth(RowWidth());
+            const bool changed = ImGui::SliderFloat("##value", value, min, max, format);
+            ImGui::PopID();
+            return changed;
         }
 
         bool PatchOn(const Settings& settings, const patches::Patch& patch)
@@ -105,236 +589,39 @@ namespace dao::launcher
             return it != settings.patches.end() ? it->second : patch.defaultEnabled;
         }
 
-        constexpr size_t kDdsHeaderSize = 128;
-        constexpr size_t kDxt1BlockSize = 8;
-        constexpr uint32_t kMaxArtSize = 4096;
-
-        // RGB of the DXT1 blocks of a width x height image. The 1-bit alpha colour
-        // (transparent) is decoded as black.
-        std::vector<uint8_t> DecodeDxt1(const uint8_t* blocks, int width, int height)
-        {
-            const int blocksX = (width + 3) / 4, blocksY = (height + 3) / 4;
-            std::vector<uint8_t> rgb(size_t(width) * height * 3);
-            for (int by = 0; by < blocksY; by++)
-            {
-                for (int bx = 0; bx < blocksX; bx++)
-                {
-                    const uint8_t* block = &blocks[(size_t(by) * blocksX + bx) * kDxt1BlockSize];
-                    const uint32_t c0 = block[0] | block[1] << 8, c1 = block[2] | block[3] << 8;
-                    int palette[4][3];
-                    for (int i = 0; i < 2; i++)
-                    {
-                        const uint32_t c = i ? c1 : c0;
-                        palette[i][0] = int(c >> 11) * 255 / 31;
-                        palette[i][1] = int((c >> 5) & 63) * 255 / 63;
-                        palette[i][2] = int(c & 31) * 255 / 31;
-                    }
-                    for (int ch = 0; ch < 3; ch++)
-                    {
-                        palette[2][ch] = c0 > c1 ? (2 * palette[0][ch] + palette[1][ch]) / 3
-                                                 : (palette[0][ch] + palette[1][ch]) / 2;
-                        palette[3][ch] = c0 > c1 ? (palette[0][ch] + 2 * palette[1][ch]) / 3 : 0;
-                    }
-                    uint32_t bits = block[4] | block[5] << 8 | block[6] << 16 | uint32_t(block[7]) << 24;
-                    for (int i = 0; i < 16; i++, bits >>= 2)
-                    {
-                        const int x = bx * 4 + i % 4, y = by * 4 + i / 4;
-                        if (x < width && y < height)
-                        {
-                            for (int ch = 0; ch < 3; ch++)
-                                rgb[(size_t(y) * width + x) * 3 + ch] = uint8_t(palette[bits & 3][ch]);
-                        }
-                    }
-                }
-            }
-            return rgb;
-        }
-
-        // RGBA of the splash art recoloured: the art (saturated or dark) in sepia shaded
-        // by its red, the background black with a faint warm vignette, and the glowing
-        // spots kept bright.
-        std::vector<uint8_t> RecolourArt(const std::vector<uint8_t>& rgb, int width, int height)
-        {
-            auto smooth = [](float e0, float e1, float x) {
-                const float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
-                return t * t * (3.0f - 2.0f * t);
-            };
-            std::vector<uint8_t> rgba(size_t(width) * height * 4);
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    const uint8_t* p = &rgb[(size_t(y) * width + x) * 3];
-                    const float r = p[0] / 255.0f, g = p[1] / 255.0f, b = p[2] / 255.0f;
-                    const float maxC = std::max({ r, g, b }), minC = std::min({ r, g, b });
-                    const float lum = 0.299f * r + 0.587f * g + 0.114f * b;
-                    const float sat = (maxC - minC) / std::max(maxC, 1e-3f);
-                    const float mask = std::max(smooth(0.12f, 0.45f, sat), smooth(0.25f, 0.08f, lum));
-                    const float dx = (x - width * 0.55f) / width, dy = (y - height * 0.5f) / height;
-                    const float vignette = 1.0f - std::clamp(std::sqrt(dx * dx + dy * dy) * 1.4f, 0.0f, 0.8f);
-                    const float shade = 0.16f + std::pow(r, 1.5f) * 1.05f;
-                    const float glow = sat > 0.2f ? smooth(0.75f, 0.95f, lum) * 0.6f : 0.0f;
-                    const float sepia[3] = { 0.55f, 0.33f, 0.20f }, background[3] = { 0.07f, 0.05f, 0.04f },
-                                glowColor[3] = { 1.0f, 0.85f, 0.55f };
-                    for (int ch = 0; ch < 3; ch++)
-                    {
-                        const float v = background[ch] * vignette * (1.0f - mask) + sepia[ch] * shade * mask +
-                            glowColor[ch] * glow;
-                        rgba[(size_t(y) * width + x) * 4 + ch] = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
-                    }
-                    rgba[(size_t(y) * width + x) * 4 + 3] = 255;
-                }
-            }
-            return rgba;
-        }
-
-        // The game's splash screen (splash.dds: 1280x720 DXT1, red art on light grey),
-        // decoded and recoloured to sepia on black. Empty if missing or not DXT1.
-        std::vector<uint8_t> LoadArt(const fs::path& gameRoot, int& widthOut, int& heightOut)
-        {
-            // The header, then only the blocks it describes (at most kMaxArtSize square).
-            std::ifstream file(gameRoot / "splash.dds", std::ios::binary);
-            std::vector<uint8_t> dds(kDdsHeaderSize);
-            if (!file.read(reinterpret_cast<char*>(dds.data()), kDdsHeaderSize))
-                return {};
-            auto u32 = [&](size_t offset) {
-                return uint32_t(dds[offset]) | uint32_t(dds[offset + 1]) << 8 | uint32_t(dds[offset + 2]) << 16 |
-                    uint32_t(dds[offset + 3]) << 24;
-            };
-            // DDS_HEADER (after the "DDS " magic): dwHeight, dwWidth and the pixel format's FourCC.
-            const uint32_t headerHeight = u32(12), headerWidth = u32(16);
-            if (memcmp(dds.data(), "DDS ", 4) || memcmp(&dds[84], "DXT1", 4) || !headerWidth || !headerHeight ||
-                headerWidth > kMaxArtSize || headerHeight > kMaxArtSize)
-                return {};
-            const int width = int(headerWidth), height = int(headerHeight);
-            dds.resize(kDdsHeaderSize + size_t((width + 3) / 4) * ((height + 3) / 4) * kDxt1BlockSize);
-            if (!file.read(reinterpret_cast<char*>(&dds[kDdsHeaderSize]), std::streamsize(dds.size() - kDdsHeaderSize)))
-                return {};
-            std::vector<uint8_t> rgba = RecolourArt(DecodeDxt1(&dds[kDdsHeaderSize], width, height), width, height);
-            widthOut = width;
-            heightOut = height;
-            return rgba;
-        }
-
-        // The art covering the window, its centre a little right of the window's.
-        void DrawBackground(const State& st, float dim)
-        {
-            ImDrawList* draw = ImGui::GetBackgroundDrawList();
-            const ImGuiViewport* viewport = ImGui::GetMainViewport();
-            const ImVec2 pos = viewport->Pos, size = viewport->Size;
-            draw->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(12, 9, 8, 255));
-            if (st.art)
-            {
-                const float cover = std::max(size.x / st.artWidth, size.y / st.artHeight);
-                const float w = st.artWidth * cover, h = st.artHeight * cover;
-                const float x = pos.x + std::clamp(size.x * 0.62f - w * 0.5f, size.x - w, 0.0f);
-                const float y = pos.y + (size.y - h) * 0.5f;
-                const ImU32 tint = IM_COL32(int(255 * (1 - dim)), int(255 * (1 - dim)), int(255 * (1 - dim)), 255);
-                draw->AddImage(ImTextureID(uintptr_t(st.art)), ImVec2(x, y), ImVec2(x + w, y + h), ImVec2(0, 0),
-                    ImVec2(1, 1), tint);
-            }
-        }
-
-        // "DRAGON AGE" in small capitals with "ORIGINS" under its right end, at the top right.
-        void DrawLogo(const State& st)
-        {
-            ImDrawList* draw = ImGui::GetForegroundDrawList();
-            const ImGuiViewport* viewport = ImGui::GetMainViewport();
-            ImFont* big = st.logoFont;
-            ImFont* small = st.logoSmallFont;
-            const float bigSize = big->FontSize, smallSize = small->FontSize;
-            struct Run
-            {
-                const char* text;
-                bool capital;
-            };
-            constexpr Run kRuns[] = { { "D", true }, { "RAGON ", false }, { "A", true }, { "GE", false } };
-            float width = 0.0f;
-            for (const Run& run : kRuns)
-                width += (run.capital ? big : small)->CalcTextSizeA(run.capital ? bigSize : smallSize, FLT_MAX, 0, run.text).x;
-            const float margin = 28.0f * st.scale;
-            float x = viewport->Pos.x + viewport->Size.x - margin - width;
-            const float baseline = viewport->Pos.y + margin + bigSize;
-            for (const Run& run : kRuns)
-            {
-                ImFont* font = run.capital ? big : small;
-                const float size = run.capital ? bigSize : smallSize;
-                // Fonts draw from the top of the line: align the baselines.
-                const float y = baseline - size * 0.82f;
-                draw->AddText(font, size, ImVec2(x + 2 * st.scale, y + 2 * st.scale), IM_COL32(0, 0, 0, 200), run.text);
-                draw->AddText(font, size, ImVec2(x, y), kLogo, run.text);
-                x += font->CalcTextSizeA(size, FLT_MAX, 0, run.text).x;
-            }
-            const char* origins = "O R I G I N S";
-            const float originsSize = smallSize * 0.62f;
-            const ImVec2 originsExtent = small->CalcTextSizeA(originsSize, FLT_MAX, 0, origins);
-            const ImVec2 originsPos(x - originsExtent.x, baseline + 6 * st.scale);
-            draw->AddText(small, originsSize, ImVec2(originsPos.x + st.scale, originsPos.y + st.scale),
-                IM_COL32(0, 0, 0, 200), origins);
-            draw->AddText(small, originsSize, originsPos, kLogo, origins);
-        }
-
-        // A button in the PC launcher's style; also activated with Enter or the gamepad.
-        bool MenuButton(const State& st, const char* label, float width, bool enabled = true)
-        {
-            const float height = 38.0f * st.scale;
-            ImGui::BeginDisabled(!enabled);
-            const bool pressed = ImGui::InvisibleButton(label, ImVec2(width, height), ImGuiButtonFlags_EnableNav);
-            ImGui::EndDisabled();
-            const bool hot = enabled && (ImGui::IsItemHovered() || ImGui::IsItemFocused());
-            const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
-            ImDrawList* draw = ImGui::GetWindowDrawList();
-            const float radius = 3.0f * st.scale, shadow = 3.0f * st.scale;
-            draw->AddRectFilled(ImVec2(min.x + shadow, min.y + shadow), ImVec2(max.x + shadow, max.y + shadow),
-                IM_COL32(0, 0, 0, 140), radius);
-            draw->AddRectFilledMultiColor(min, max, hot ? kButtonTopHot : kButtonTop, hot ? kButtonTopHot : kButtonTop,
-                hot ? kButtonBottomHot : kButtonBottom, hot ? kButtonBottomHot : kButtonBottom);
-            draw->AddRect(min, max, hot ? kGoldBright : kGold, radius, 0, (hot ? 2.0f : 1.4f) * st.scale);
-            draw->AddLine(ImVec2(min.x + 4 * st.scale, min.y + 2 * st.scale), ImVec2(max.x - 4 * st.scale, min.y + 2 * st.scale),
-                IM_COL32(255, 220, 170, hot ? 70 : 40), 1.0f);
-            const char* end = ImGui::FindRenderedTextEnd(label);
-            ImFont* font = st.buttonFont;
-            const ImVec2 text = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0, label, end);
-            const ImVec2 at(min.x + (width - text.x) * 0.5f, min.y + (height - text.y) * 0.5f);
-            draw->AddText(font, font->FontSize, ImVec2(at.x + st.scale, at.y + st.scale), IM_COL32(0, 0, 0, 220), label,
-                end);
-            draw->AddText(font, font->FontSize, at, enabled ? kButtonText : IM_COL32(150, 130, 120, 255), label, end);
-            return pressed && enabled;
-        }
-
         void SetView(State& st, View view)
         {
             st.view = view;
             st.viewChanged = true;
+            st.viewStart = ImGui::GetTime();
         }
 
-        void MainView(State& st)
+        void MainView(State& st, const Layout& layout)
         {
-            const ImGuiViewport* viewport = ImGui::GetMainViewport();
             const bool gameFound = fs::exists(st.gameRoot / "default.xex");
-            const float buttonWidth = 210.0f * st.scale;
+            DrawLogo(st, layout);
 
-            ImGui::SetCursorPos(ImVec2(36.0f * st.scale, viewport->Size.y * 0.30f));
-            ImGui::BeginGroup();
-            if (MenuButton(st, "Play", buttonWidth, gameFound) ||
+            if (MenuItem(st, layout, "Play", kMenuTop, gameFound) ||
                 (gameFound && ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)))
                 st.play = true;
             if (st.viewChanged)
-                ImGui::SetKeyboardFocusHere(-1);
-            ImGui::Dummy(ImVec2(0, 6 * st.scale));
-            if (MenuButton(st, "Configure", buttonWidth))
+                ImGui::SetKeyboardFocusHere(gameFound ? -1 : 0);
+            if (MenuItem(st, layout, "Configure", kMenuTop + kMenuStep))
                 SetView(st, View::Configure);
-            ImGui::Dummy(ImVec2(0, 6 * st.scale));
-            if (MenuButton(st, "Mods", buttonWidth))
+            if (MenuItem(st, layout, "Mods", kMenuTop + 2 * kMenuStep))
                 SetView(st, View::Mods);
-            ImGui::Dummy(ImVec2(0, 6 * st.scale));
-            if (MenuButton(st, "Exit", buttonWidth))
+            if (MenuItem(st, layout, "Exit", kMenuTop + 3 * kMenuStep))
                 st.quit = true;
-            ImGui::EndGroup();
+            Hint(st, layout, kButtonA, "Select", layout.Right(kContentsRight, kFooterTop + 10.0f), true, false);
 
-            // The bottom: the game data, a summary of the settings, the startup option.
-            const float line = ImGui::GetTextLineHeightWithSpacing();
-            ImGui::SetCursorPos(ImVec2(36.0f * st.scale, viewport->Size.y - line * 3.2f - 18 * st.scale));
+            // The bottom left: the game data, a summary of the settings, the startup option.
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float height = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetFrameHeightWithSpacing() +
+                g_state->helpFont->FontSize + style.ItemSpacing.y;
+            const float margin = 24.0f * st.scale;
+            ImGui::SetCursorScreenPos(ImVec2(layout.pos.x + margin, layout.pos.y + layout.size.y - margin - height));
+            ImGui::BeginGroup();
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, st.fade);
             if (!gameFound)
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.45f, 0.35f, 1.0f));
@@ -345,49 +632,48 @@ namespace dao::launcher
             {
                 const auto enabledMods =
                     std::count_if(st.mods.begin(), st.mods.end(), [](auto& m) { return m.enabled; });
-                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                ImGui::Text("%dx%d%s%s  |  %d mod%s on", 1280 * st.settings.resolutionScale,
-                    720 * st.settings.resolutionScale, st.settings.unlockFrameRate ? ", 60 fps" : ", 30 fps",
-                    st.settings.temporalUpscaler != TemporalUpscaler::Off ? ", temporal FSR" : "", int(enabledMods),
-                    enabledMods == 1 ? "" : "s");
-                ImGui::PopStyleColor();
+                Label(fmt::format("{}x{}  \xC2\xB7  {}  \xC2\xB7  {}  \xC2\xB7  {} mod{} on",
+                    1280 * st.settings.resolutionScale, 720 * st.settings.resolutionScale,
+                    st.settings.unlockFrameRate ? "60 fps" : "30 fps",
+                    st.settings.temporalUpscaler != TemporalUpscaler::Off ? "temporal FSR" : "no temporal upscaling",
+                    enabledMods, enabledMods == 1 ? "" : "s")
+                          .c_str());
             }
-            ImGui::SetCursorPosX(36.0f * st.scale);
             ImGui::Checkbox("Show this launcher at startup", &st.settings.showLauncher);
-            ImGui::SetCursorPosX(36.0f * st.scale);
             HelpText("When hidden, hold Shift while starting the game to bring it back.");
+            ImGui::PopStyleVar();
+            ImGui::EndGroup();
         }
 
         void GraphicsTab(State& st)
         {
             Settings& s = st.settings;
-            ImGui::PushItemWidth(ImGui::GetFontSize() * 18);
 
             Section("Resolution");
             int scale = std::clamp(s.resolutionScale, 1, int(std::size(kScales))) - 1;
-            if (ImGui::Combo("Rendering resolution", &scale, kScales, int(std::size(kScales))))
+            if (ComboRow("Rendering resolution", &scale, kScales, int(std::size(kScales))))
                 s.resolutionScale = scale + 1;
             HelpText("The game renders at 1280x720; higher scales render every pass at that multiple. On a "
                      "Steam Deck, keep 1x.");
 
             Section("Anti-aliasing and scaling");
             int temporal = int(s.temporalUpscaler);
-            if (ImGui::Combo("Temporal upscaling", &temporal, kTemporalUpscalers, int(std::size(kTemporalUpscalers))))
+            if (ComboRow("Temporal upscaling", &temporal, kTemporalUpscalers, int(std::size(kTemporalUpscalers))))
                 s.temporalUpscaler = TemporalUpscaler(temporal);
             ImGui::BeginDisabled(s.temporalUpscaler == TemporalUpscaler::Off);
-            ImGui::SliderFloat("Temporal sharpening", &s.temporalSharpness, 0.0f, 1.0f, "%.2f");
+            SliderRow("Temporal sharpening", &s.temporalSharpness, 0.0f, 1.0f, "%.2f");
             ImGui::EndDisabled();
             HelpText("Upscales and anti-aliases the 3D scenes to the window size using motion vectors; menus and "
                      "the UI use the upscaler below. In a window no larger than the rendering resolution, it only "
                      "anti-aliases. Off is fastest on a Steam Deck.");
             ImGui::Spacing();
             int upscaler = int(s.upscaler);
-            if (ImGui::Combo("Upscaler", &upscaler, kUpscalers, int(std::size(kUpscalers))))
+            if (ComboRow("Upscaler", &upscaler, kUpscalers, int(std::size(kUpscalers))))
                 s.upscaler = Upscaler(upscaler);
             if (s.upscaler == Upscaler::Fsr)
-                ImGui::SliderFloat("Sharpness reduction", &s.sharpness, 0.0f, 2.0f, "%.2f stops");
+                SliderRow("Sharpness reduction", &s.sharpness, 0.0f, 2.0f, "%.2f stops");
             else if (s.upscaler == Upscaler::Cas)
-                ImGui::SliderFloat("Extra sharpness", &s.sharpness, 0.0f, 1.0f, "%.2f");
+                SliderRow("Extra sharpness", &s.sharpness, 0.0f, 1.0f, "%.2f");
             HelpText("Used when the window size differs from the rendering resolution.");
 
             Section("Textures");
@@ -396,7 +682,7 @@ namespace dao::launcher
                 std::begin(kAnisotropicLevels));
             if (anisotropic >= int(std::size(kAnisotropicLevels)))
                 anisotropic = 0;
-            if (ImGui::Combo("Anisotropic filtering", &anisotropic, kAnisotropicNames, int(std::size(kAnisotropicNames))))
+            if (ComboRow("Anisotropic filtering", &anisotropic, kAnisotropicNames, int(std::size(kAnisotropicNames))))
                 s.anisotropicFiltering = kAnisotropicLevels[anisotropic];
             HelpText("Sharper textures on surfaces seen at an angle, such as floors and roads. The game's default "
                      "is the fastest.");
@@ -407,19 +693,19 @@ namespace dao::launcher
             HelpText("Turning these off makes the game faster on low-power devices such as the Steam Deck.");
             ImGui::Spacing();
             HelpText("Most of these settings can also be changed in the game, under Options > Graphics.");
-            ImGui::PopItemWidth();
         }
 
         void DisplayTab(State& st)
         {
             Settings& s = st.settings;
-            ImGui::PushItemWidth(ImGui::GetFontSize() * 18);
 
             Section("Window");
             ImGui::Checkbox("Fullscreen", &s.fullscreen);
             ImGui::BeginDisabled(s.fullscreen);
+            Label("Window size");
             const std::string current = fmt::format("{}x{}", s.windowWidth, s.windowHeight);
-            if (ImGui::BeginCombo("Window size", current.c_str()))
+            ImGui::SetNextItemWidth(RowWidth());
+            if (ImGui::BeginCombo("##windowsize", current.c_str()))
             {
                 for (const auto& size : kWindowSizes)
                 {
@@ -442,14 +728,14 @@ namespace dao::launcher
             Section("HDR (experimental)");
             ImGui::Checkbox("HDR output", &s.hdr);
             ImGui::BeginDisabled(!s.hdr);
-            ImGui::SliderFloat("Paper white", &s.hdrPaperWhite, kHdrMinNits, 400.0f, "%.0f nits");
-            ImGui::SliderFloat("Peak brightness", &s.hdrPeak, s.hdrPaperWhite, 4000.0f, "%.0f nits");
+            SliderRow("Paper white", &s.hdrPaperWhite, kHdrMinNits, 400.0f, "%.0f nits");
+            SliderRow("Peak brightness", &s.hdrPeak, s.hdrPaperWhite, 4000.0f, "%.0f nits");
             ImGui::EndDisabled();
-            ImGui::PopItemWidth();
         }
 
         void PatchesTab(State& st)
         {
+            Section("Patches");
             HelpText("Built-in changes to the game's behaviour.");
             ImGui::Spacing();
             for (const auto& patch : patches::All())
@@ -467,7 +753,7 @@ namespace dao::launcher
 
         void AdvancedTab(State& st)
         {
-            ImGui::Spacing();
+            Section("Files");
             if (ImGui::Button("Open user data folder"))
                 OpenFolder(st.userRoot);
             HelpText("Saves, the configuration and the logs.");
@@ -558,65 +844,153 @@ namespace dao::launcher
             }
         }
 
-        // A dark panel over the dimmed art with the view's title, its contents and Back
-        // (also Escape or the gamepad's B).
-        void PanelView(State& st, const char* title, int forcedTab, void (*contents)(State&, int))
+        using Contents = void (*)(State&);
+        struct Tab
         {
-            const ImGuiViewport* viewport = ImGui::GetMainViewport();
-            const float margin = 24.0f * st.scale;
-            ImGui::SetCursorPos(ImVec2(margin, margin));
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.05f, 0.04f, 0.035f, 0.90f));
-            ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(kGold));
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f * st.scale);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18 * st.scale, 14 * st.scale));
-            const float backHeight = 38.0f * st.scale + margin;
-            ImGui::BeginChild("panel", ImVec2(viewport->Size.x - 2 * margin, viewport->Size.y - margin - backHeight - 8),
-                ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
-            ImGui::PushFont(st.buttonFont);
-            ImGui::TextUnformatted(title);
-            ImGui::PopFont();
-            ImGui::Spacing();
-            if (st.viewChanged)
-                ImGui::SetKeyboardFocusHere();
-            contents(st, forcedTab);
-            ImGui::EndChild();
-            ImGui::PopStyleVar(2);
-            ImGui::PopStyleColor(2);
+            const char* name;
+            Contents contents;
+            // Whether Restore Defaults applies (to its settings only).
+            bool defaults;
+        };
+        constexpr Tab kTabs[] = {
+            { "Graphics", GraphicsTab, true },
+            { "Display", DisplayTab, true },
+            { "Patches", PatchesTab, false },
+            { "Advanced", AdvancedTab, false },
+        };
+        static_assert(std::size(kTabs) == kConfigureTabs);
 
-            ImGui::SetCursorPos(ImVec2(margin, viewport->Size.y - backHeight + 4));
-            if (MenuButton(st, "Back", 160.0f * st.scale) ||
+        void RestoreDefaults(State& st)
+        {
+            const Settings defaults;
+            Settings& s = st.settings;
+            if (st.configureTab == 0)
+            {
+                s.resolutionScale = defaults.resolutionScale;
+                s.temporalUpscaler = defaults.temporalUpscaler;
+                s.temporalSharpness = defaults.temporalSharpness;
+                s.upscaler = defaults.upscaler;
+                s.sharpness = defaults.sharpness;
+                s.anisotropicFiltering = defaults.anisotropicFiltering;
+                s.shadows = defaults.shadows;
+                s.postProcessing = defaults.postProcessing;
+            }
+            else if (st.configureTab == 1)
+            {
+                s.fullscreen = defaults.fullscreen;
+                s.windowWidth = defaults.windowWidth;
+                s.windowHeight = defaults.windowHeight;
+                s.vsync = defaults.vsync;
+                s.unlockFrameRate = defaults.unlockFrameRate;
+                s.hdr = defaults.hdr;
+                s.hdrPaperWhite = defaults.hdrPaperWhite;
+                s.hdrPeak = defaults.hdrPeak;
+            }
+        }
+
+        // The Options screen's frame: its background, the header bar with the view's
+        // title and the footer's button hints. Back also with Escape or the gamepad's
+        // B, Restore Defaults (when `defaults`) with its Y.
+        void PanelFrame(State& st, const Layout& layout, const char* title, bool defaults)
+        {
+            if (const Texture* panel = Art(st, kPanelBackground))
+                DrawStretched(ImGui::GetBackgroundDrawList(), *panel, layout.Scene(0, 0),
+                    layout.Scene(kStageWidth, kStageHeight), 0.92f);
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            if (const Texture* bar = Art(st, kHeaderBar.sprite))
+                DrawSprite(draw, *bar, layout.Right(kHeaderBar.x, kHeaderBar.y), layout.fit, st.fade);
+            if (const Texture* flourish = Art(st, kHeaderFlourish.sprite))
+                DrawSprite(draw, *flourish, layout.Right(kHeaderFlourish.x, kHeaderFlourish.y), layout.fit,
+                    kHeaderFlourish.alpha * st.fade);
+            ImFont* font = st.titleFont;
+            const float size = 34.0f * layout.fit;
+            const ImVec2 extent = font->CalcTextSizeA(size, FLT_MAX, 0, title);
+            const ImVec2 at = layout.Right(kTitleX, kTitleY);
+            ShadowText(draw, st, font, size, ImVec2(at.x - extent.x * 0.5f, at.y - extent.y * 0.5f), kText, title);
+
+            const ImVec2 left = layout.Center(kFooterLeft, kFooterTop), right = layout.Center(kFooterRight, kFooterTop);
+            if (const Texture* bar = Art(st, kFooterBar))
+                DrawStretched(draw, *bar, left, ImVec2(right.x, left.y + bar->height * layout.fit), st.fade);
+            const float hintY = kFooterTop + 3.0f;
+            Hint(st, layout, kButtonA, "Select", layout.Center(kFooterLeft + 1.0f, hintY), false, false);
+            if (defaults)
+            {
+                const char* label = "Restore Defaults";
+                const ImVec2 hint = layout.Center(kStageWidth * 0.5f - HintWidth(st, label) * 0.5f, hintY);
+                if (Hint(st, layout, kButtonY, label, hint, false, true) ||
+                    (st.backKeysFree && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false)))
+                    RestoreDefaults(st);
+            }
+            if (Hint(st, layout, kButtonB, "Back", layout.Center(kFooterRight, hintY), true, true) ||
                 (st.backKeysFree &&
                     (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))))
                 SetView(st, View::Main);
         }
 
-        void ConfigureContents(State& st, int forcedTab)
+        // A view's contents, scrolling between the header and the footer, from `left`
+        // (stage pixels from the left) to the right side.
+        void ShowContents(State& st, const Layout& layout, float left, Contents contents)
         {
-            if (ImGui::BeginTabBar("configure"))
-            {
-                using TabFn = void (*)(State&);
-                constexpr std::pair<const char*, TabFn> kTabs[] = {
-                    { "Graphics", GraphicsTab }, { "Display", DisplayTab }, { "Patches", PatchesTab },
-                    { "Advanced", AdvancedTab } };
-                static_assert(std::size(kTabs) == kConfigureTabs);
-                for (int i = 0; i < int(std::size(kTabs)); i++)
-                {
-                    const ImGuiTabItemFlags flags = forcedTab == i ? ImGuiTabItemFlags_SetSelected : 0;
-                    if (ImGui::BeginTabItem(kTabs[i].first, nullptr, flags))
-                    {
-                        ImGui::BeginChild("tab");
-                        kTabs[i].second(st);
-                        ImGui::EndChild();
-                        ImGui::EndTabItem();
-                    }
-                }
-                ImGui::EndTabBar();
-            }
+            const ImVec2 min = layout.Left(left, kContentsTop), max = layout.Right(kContentsRight, kContentsBottom);
+            ImGui::SetCursorScreenPos(min);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, st.fade);
+            if (st.tabChanged || st.viewChanged)
+                ImGui::SetNextWindowScroll(ImVec2(0, 0));
+            ImGui::BeginChild("contents", ImVec2(max.x - min.x, max.y - min.y), ImGuiChildFlags_NavFlattened,
+                ImGuiWindowFlags_NoBackground);
+            contents(st);
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
         }
 
-        void ModsContents(State& st, int)
+        void ConfigureView(State& st, const Layout& layout)
         {
-            ModsList(st);
+            const int previous = st.configureTab;
+            PanelFrame(st, layout, "Configure", kTabs[st.configureTab].defaults);
+
+            // The tabs on the left, as the Options screen's; LB and RB also switch them.
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            const float rowHeight = kTabStep * layout.fit;
+            for (int i = 0; i < kConfigureTabs; i++)
+            {
+                const float top = kTabTop + kTabStep * i, center = top + kMenuBarHalfHeight;
+                const ImVec2 rowMin(layout.pos.x, layout.Y(center) - rowHeight * 0.5f);
+                const bool selected = i == st.configureTab;
+                bool hot = false;
+                ImGui::PushID(i);
+                if (MenuButton("##tab", rowMin, ImVec2(layout.Left(kTabBarRight, 0).x - rowMin.x, rowHeight), true, hot))
+                    st.configureTab = i;
+                if (st.viewChanged && selected)
+                    ImGui::SetKeyboardFocusHere(-1);
+                const float shown = Ease(ImGui::GetItemID(), hot || selected);
+                ImGui::PopID();
+                if (const Texture* bar = Art(st, kTabBar); bar && shown > 0.0f)
+                    DrawSprite(draw, *bar, layout.Left(kTabBarRight, top), layout.fit,
+                        shown * (selected ? 1.0f : 0.5f) * st.fade, true);
+                const float size = 22.0f * layout.fit;
+                ShadowText(draw, st, st.menuFont, size, ImVec2(layout.Left(kTabTextX, 0).x, layout.Y(center) - size * 0.5f),
+                    selected || hot ? kText : kTextDim, kTabs[i].name);
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false))
+                st.configureTab = (st.configureTab + kConfigureTabs - 1) % kConfigureTabs;
+            if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false))
+                st.configureTab = (st.configureTab + 1) % kConfigureTabs;
+            // LB and RB under the tabs.
+            const float bumper = 26.0f * layout.fit;
+            const ImVec2 bumpers = layout.Left(kTabTextX, kTabTop + kTabStep * kConfigureTabs + 40.0f);
+            if (const Texture* lb = Art(st, kButtonLB))
+                DrawSprite(draw, *lb, bumpers, bumper / lb->height, 0.8f * st.fade);
+            if (const Texture* rb = Art(st, kButtonRB))
+                DrawSprite(draw, *rb, ImVec2(bumpers.x + bumper * 2.4f, bumpers.y), bumper / rb->height, 0.8f * st.fade);
+
+            st.tabChanged = st.configureTab != previous;
+            ShowContents(st, layout, kConfigureLeft, kTabs[st.configureTab].contents);
+        }
+
+        void ModsView(State& st, const Layout& layout)
+        {
+            PanelFrame(st, layout, "Mods", false);
+            ShowContents(st, layout, kModsLeft, ModsList);
         }
 
         void ApplyStyle(float scale)
@@ -625,42 +999,47 @@ namespace dao::launcher
             ImGuiStyle& style = ImGui::GetStyle();
             style.WindowPadding = ImVec2(18, 14);
             style.FramePadding = ImVec2(10, 6);
-            style.ItemSpacing = ImVec2(10, 8);
-            style.FrameRounding = 3;
-            style.TabRounding = 3;
-            style.GrabRounding = 3;
-            style.ScrollbarRounding = 3;
+            style.ItemSpacing = ImVec2(10, 7);
+            style.FrameRounding = 0;
+            style.GrabRounding = 0;
+            style.ScrollbarRounding = 0;
+            style.ScrollbarSize = 10;
+            style.GrabMinSize = 14;
             style.WindowBorderSize = 0;
-            style.ChildBorderSize = 1;
+            style.ChildBorderSize = 0;
+            style.FrameBorderSize = 1;
+            style.PopupBorderSize = 1;
             style.ScaleAllSizes(scale);
 
-            // Dark warm brown with the buttons' red and gold.
+            // The Options screen's: dark frames edged in gold, cream text.
             ImVec4* c = style.Colors;
-            const ImVec4 accent = ImGui::ColorConvertU32ToFloat4(kButtonTop),
-                accentHover = ImGui::ColorConvertU32ToFloat4(kButtonTopHot), accentActive(0.62f, 0.26f, 0.15f, 1.0f),
-                gold = ImGui::ColorConvertU32ToFloat4(kGold), goldBright = ImGui::ColorConvertU32ToFloat4(kGoldBright);
+            const ImVec4 gold = ImGui::ColorConvertU32ToFloat4(kGold), goldBright = ImGui::ColorConvertU32ToFloat4(kGoldBright);
             auto withAlpha = [](ImVec4 color, float alpha) { return ImVec4(color.x, color.y, color.z, alpha); };
-            c[ImGuiCol_Text] = ImVec4(0.93f, 0.89f, 0.82f, 1.0f);
-            c[ImGuiCol_TextDisabled] = ImVec4(0.60f, 0.55f, 0.50f, 1.0f);
+            c[ImGuiCol_Text] = ImGui::ColorConvertU32ToFloat4(kText);
+            c[ImGuiCol_TextDisabled] = ImVec4(0.66f, 0.61f, 0.53f, 1.0f);
             c[ImGuiCol_WindowBg] = ImVec4(0, 0, 0, 0);
-            c[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.06f, 0.05f, 0.98f);
-            c[ImGuiCol_FrameBg] = ImVec4(0.16f, 0.12f, 0.10f, 1.0f);
-            c[ImGuiCol_FrameBgHovered] = ImVec4(0.23f, 0.17f, 0.13f, 1.0f);
-            c[ImGuiCol_FrameBgActive] = ImVec4(0.29f, 0.20f, 0.15f, 1.0f);
-            c[ImGuiCol_Button] = accent;
-            c[ImGuiCol_ButtonHovered] = accentHover;
-            c[ImGuiCol_ButtonActive] = accentActive;
-            c[ImGuiCol_Header] = withAlpha(accent, 0.6f);
-            c[ImGuiCol_HeaderHovered] = withAlpha(accentHover, 0.8f);
-            c[ImGuiCol_HeaderActive] = accentActive;
-            c[ImGuiCol_Tab] = ImVec4(0.14f, 0.10f, 0.08f, 1.0f);
-            c[ImGuiCol_TabHovered] = accentHover;
-            c[ImGuiCol_TabSelected] = accent;
-            c[ImGuiCol_TabSelectedOverline] = gold;
+            c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
+            c[ImGuiCol_PopupBg] = ImVec4(0.06f, 0.05f, 0.04f, 0.97f);
+            c[ImGuiCol_Border] = withAlpha(gold, 0.45f);
+            c[ImGuiCol_FrameBg] = ImVec4(0.07f, 0.06f, 0.05f, 0.85f);
+            c[ImGuiCol_FrameBgHovered] = ImVec4(0.16f, 0.12f, 0.08f, 0.9f);
+            c[ImGuiCol_FrameBgActive] = ImVec4(0.22f, 0.16f, 0.10f, 0.95f);
+            c[ImGuiCol_Button] = ImVec4(0.10f, 0.08f, 0.06f, 0.9f);
+            c[ImGuiCol_ButtonHovered] = ImVec4(0.26f, 0.18f, 0.10f, 0.95f);
+            c[ImGuiCol_ButtonActive] = ImVec4(0.36f, 0.24f, 0.12f, 1.0f);
+            c[ImGuiCol_Header] = withAlpha(gold, 0.30f);
+            c[ImGuiCol_HeaderHovered] = withAlpha(gold, 0.42f);
+            c[ImGuiCol_HeaderActive] = withAlpha(gold, 0.55f);
             c[ImGuiCol_CheckMark] = goldBright;
             c[ImGuiCol_SliderGrab] = gold;
             c[ImGuiCol_SliderGrabActive] = goldBright;
-            c[ImGuiCol_Separator] = ImVec4(0.45f, 0.36f, 0.22f, 0.6f);
+            c[ImGuiCol_Separator] = withAlpha(gold, 0.4f);
+            c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0.25f);
+            c[ImGuiCol_ScrollbarGrab] = withAlpha(gold, 0.55f);
+            c[ImGuiCol_ScrollbarGrabHovered] = withAlpha(goldBright, 0.75f);
+            c[ImGuiCol_ScrollbarGrabActive] = goldBright;
+            c[ImGuiCol_TableHeaderBg] = ImVec4(0.12f, 0.09f, 0.06f, 0.9f);
+            c[ImGuiCol_TableRowBgAlt] = ImVec4(1, 1, 1, 0.03f);
             c[ImGuiCol_NavCursor] = goldBright;
         }
 
@@ -672,6 +1051,114 @@ namespace dao::launcher
                     return ImGui::GetIO().Fonts->AddFontFromFileTTF(*file, size);
             }
             return nullptr;
+        }
+
+        void AddTexture(State& st, SDL_Renderer* renderer, std::string name, int width, int height, const uint8_t* rgba,
+            SDL_BlendMode blend)
+        {
+            SDL_Texture* texture =
+                SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, width, height);
+            if (!texture)
+                return;
+            SDL_UpdateTexture(texture, nullptr, rgba, width * 4);
+            SDL_SetTextureBlendMode(texture, blend);
+            st.art.emplace(std::move(name), Texture{ texture, float(width), float(height) });
+        }
+
+        // RGBA for SDL_BLENDMODE_MUL (dst * (src + 1 - src alpha)) multiplying by the
+        // colour at `opacity`: the colour premultiplied by its alpha.
+        void ForMultiply(std::span<uint8_t> rgba, float opacity)
+        {
+            for (size_t i = 0; i + 3 < rgba.size(); i += 4)
+            {
+                const float alpha = rgba[i + 3] / 255.0f * opacity;
+                for (size_t c = 0; c < 3; c++)
+                    rgba[i + c] = uint8_t(rgba[i + c] * alpha + 0.5f);
+                rgba[i + 3] = uint8_t(alpha * 255.0f + 0.5f);
+            }
+        }
+
+        // The game's sprites the launcher draws, as textures, with the scene's
+        // variants and gradients.
+        void LoadArt(State& st, SDL_Renderer* renderer)
+        {
+            std::vector<std::string_view> names(std::begin(kClouds), std::end(kClouds));
+            for (const Layer* layer : { &kSunGlow, &kHills, &kMountains, &kSmoke, &kLogo, &kHeaderBar, &kHeaderFlourish })
+                names.push_back(layer->sprite);
+            for (const auto& group : { std::span<const Layer>(kForeground), std::span<const Layer>(kSwords) })
+            {
+                for (const Layer& layer : group)
+                    names.push_back(layer.sprite);
+            }
+            for (const char* name : { kCloudShade, kGlow, kMist, kEmbers, kOrigins, kMenuBar, kMenuBarDown,
+                     kPanelBackground, kTabBar, kSectionBar, kFooterBar, kButtonA, kButtonB, kButtonY, kButtonLB,
+                     kButtonRB })
+                names.push_back(name);
+            std::ranges::sort(names);
+            names.erase(std::unique(names.begin(), names.end()), names.end());
+
+            size_t found = 0;
+            for (auto& [name, image] : LoadGameArt(st.gameRoot, kAtlases, names))
+            {
+                found++;
+                SDL_BlendMode blend = SDL_BLENDMODE_BLEND;
+                if (name == kGlow)
+                {
+                    // White, for tinting, blended and added.
+                    std::vector<uint8_t> white = image.rgba;
+                    for (size_t i = 0; i + 3 < white.size(); i += 4)
+                        white[i] = white[i + 1] = white[i + 2] = 255;
+                    AddTexture(st, renderer, kGlowWhite, image.width, image.height, white.data(), SDL_BLENDMODE_BLEND);
+                    AddTexture(st, renderer, kGlowAdd, image.width, image.height, white.data(), SDL_BLENDMODE_ADD);
+                }
+                else if (name == kCloudShade)
+                {
+                    ForMultiply(image.rgba, kCloudShadeOpacity);
+                    blend = SDL_BLENDMODE_MUL;
+                }
+                AddTexture(st, renderer, name, image.width, image.height, image.rgba.data(), blend);
+            }
+            if (found < names.size())
+            {
+                std::string missing;
+                for (std::string_view name : names)
+                {
+                    if (!st.art.contains(std::string(name)))
+                        missing += fmt::format(" {}", name);
+                }
+                LOGW("Launcher: {} of {} images not found in the game's guiexport.erf:{}", names.size() - found,
+                    names.size(), missing);
+            }
+
+            // The warm overlay: a vertical gradient over the stage.
+            constexpr int kWarmRows = 128;
+            std::vector<uint8_t> warm(kWarmRows * 4);
+            for (int i = 0; i < kWarmRows; i++)
+            {
+                const float y = (float(i) + 0.5f) / kWarmRows * kStageHeight;
+                const float f = std::clamp((kWarmBottomY - y) / (kWarmBottomY - kWarmTopY), 0.0f, 1.0f);
+                for (int c = 0; c < 3; c++)
+                    warm[i * 4 + c] = uint8_t(std::lerp(kWarmBottom[c], kWarmTop[c], f) + 0.5f);
+                warm[i * 4 + 3] = uint8_t(f * 255.0f + 0.5f);
+            }
+            ForMultiply(warm, kWarmOpacity);
+            AddTexture(st, renderer, kWarmOverlay, 1, kWarmRows, warm.data(), SDL_BLENDMODE_MUL);
+
+            // The vignette: black, its alpha rising from the inner circle to the outer.
+            constexpr int kMaskWidth = 192, kMaskHeight = 120;
+            std::vector<uint8_t> mask(kMaskWidth * kMaskHeight * 4);
+            for (int y = 0; y < kMaskHeight; y++)
+            {
+                for (int x = 0; x < kMaskWidth; x++)
+                {
+                    const float dx = ((float(x) + 0.5f) / kMaskWidth - 0.5f) * kVignetteWidth;
+                    const float dy = ((float(y) + 0.5f) / kMaskHeight - 0.5f) * kVignetteHeight;
+                    const float f = std::clamp(
+                        (std::hypot(dx, dy) - kVignetteInner) / (kVignetteOuter - kVignetteInner), 0.0f, 1.0f);
+                    mask[(size_t(y) * kMaskWidth + x) * 4 + 3] = uint8_t(f * 255.0f + 0.5f);
+                }
+            }
+            AddTexture(st, renderer, kVignetteMask, kMaskWidth, kMaskHeight, mask.data(), SDL_BLENDMODE_BLEND);
         }
     }
 
@@ -700,7 +1187,7 @@ namespace dao::launcher
         }
 
         const float scale = std::max(1.0f, SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay()));
-        SDL_Window* window = SDL_CreateWindow("Dragon Age: Origins - Launcher", int(900 * scale), int(600 * scale),
+        SDL_Window* window = SDL_CreateWindow("Dragon Age: Origins - Launcher", int(1120 * scale), int(630 * scale),
             SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
         SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
         if (!renderer)
@@ -711,6 +1198,7 @@ namespace dao::launcher
             SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
             return true;
         }
+        SDL_SetWindowMinimumSize(window, int(800 * scale), int(450 * scale));
         SDL_SetRenderVSync(renderer, 1);
 
         IMGUI_CHECKVERSION();
@@ -720,32 +1208,39 @@ namespace dao::launcher
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
         ApplyStyle(scale);
 
-        // The vendored ImGui has no built-in font; use the system fonts (Proton has Arial
-        // and Times New Roman look-alikes).
-        static const char* const kRegular[] = { "C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\arial.ttf",
+        // The vendored ImGui has no built-in font; use the system's serif fonts, like
+        // the game's menus (Proton has a Times New Roman look-alike).
+        static const char* const kRegular[] = { "C:\\Windows\\Fonts\\pala.ttf", "C:\\Windows\\Fonts\\georgia.ttf",
+            "C:\\Windows\\Fonts\\times.ttf", "C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\arial.ttf",
             nullptr };
-        static const char* const kBold[] = { "C:\\Windows\\Fonts\\seguisb.ttf", "C:\\Windows\\Fonts\\segoeuib.ttf",
-            "C:\\Windows\\Fonts\\arialbd.ttf", nullptr };
-        static const char* const kSerif[] = { "C:\\Windows\\Fonts\\palab.ttf", "C:\\Windows\\Fonts\\georgiab.ttf",
-            "C:\\Windows\\Fonts\\timesbd.ttf", "C:\\Windows\\Fonts\\times.ttf", nullptr };
+        static const char* const kItalic[] = { "C:\\Windows\\Fonts\\palai.ttf", "C:\\Windows\\Fonts\\georgiai.ttf",
+            "C:\\Windows\\Fonts\\timesi.ttf", nullptr };
+        static const char* const kBold[] = { "C:\\Windows\\Fonts\\palab.ttf", "C:\\Windows\\Fonts\\georgiab.ttf",
+            "C:\\Windows\\Fonts\\timesbd.ttf", "C:\\Windows\\Fonts\\arialbd.ttf", nullptr };
         State st;
         st.scale = scale;
-        if (!LoadFont(kRegular, 18.0f * scale))
+        g_state = &st;
+        ImFont* regular = LoadFont(kRegular, 19.0f * scale);
+        if (!regular)
         {
             LOGE("Launcher: no system font found; starting the game");
+            g_state = nullptr;
             ImGui::DestroyContext();
             SDL_DestroyRenderer(renderer);
             SDL_DestroyWindow(window);
             SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
             return true;
         }
-        st.buttonFont = LoadFont(kBold, 21.0f * scale);
-        if (!st.buttonFont)
-            st.buttonFont = io.Fonts->Fonts[0];
-        st.logoFont = LoadFont(kSerif, 58.0f * scale);
-        st.logoSmallFont = st.logoFont ? LoadFont(kSerif, 44.0f * scale) : nullptr;
-        if (!st.logoFont || !st.logoSmallFont)
-            st.logoFont = st.logoSmallFont = st.buttonFont;
+        st.helpFont = LoadFont(kItalic, 17.0f * scale);
+        st.headingFont = LoadFont(kBold, 20.0f * scale);
+        // Drawn at the window's size: baked large enough to scale down.
+        st.menuFont = LoadFont(kBold, 36.0f * scale);
+        st.titleFont = LoadFont(kBold, 48.0f * scale);
+        for (ImFont** font : { &st.helpFont, &st.headingFont, &st.menuFont, &st.titleFont })
+        {
+            if (!*font)
+                *font = regular;
+        }
 
         ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
         ImGui_ImplSDLRenderer3_Init(renderer);
@@ -757,18 +1252,7 @@ namespace dao::launcher
         st.mods = mods::Scan(st.modsRoot, st.settings.mods);
         if (const char* dir = getenv("DAO_LAUNCHER_SCREENSHOTS"))
             st.screenshotDir = dir;
-        {
-            const std::vector<uint8_t> art = LoadArt(gameRoot, st.artWidth, st.artHeight);
-            if (!art.empty())
-            {
-                st.art = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, st.artWidth,
-                    st.artHeight);
-                if (st.art)
-                    SDL_UpdateTexture(st.art, nullptr, art.data(), st.artWidth * 4);
-            }
-            if (!st.art)
-                LOGW("Launcher: no splash.dds art; plain background");
-        }
+        LoadArt(st, renderer);
 
         while (!st.play && !st.quit)
         {
@@ -796,42 +1280,47 @@ namespace dao::launcher
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
 
-            // Screenshot mode: 10 frames per shot (main, the configure tabs, mods),
-            // captured on the last one.
-            constexpr int kFramesPerShot = 10;
+            // Screenshot mode: 20 frames per shot (main, the configure tabs, mods),
+            // captured on the last one, after the view has faded in.
+            constexpr int kFramesPerShot = 20;
             constexpr int kShots = 1 + kConfigureTabs + 1;
             const int shot = st.screenshotDir.empty() ? -1 : st.screenshotFrame / kFramesPerShot;
             const bool shotStart = shot >= 0 && st.screenshotFrame % kFramesPerShot == 0;
             const bool shotNow = shot >= 0 && st.screenshotFrame % kFramesPerShot == kFramesPerShot - 1;
-            int forcedTab = -1;
             if (shotStart)
             {
                 SetView(st, shot == 0 ? View::Main : shot == kShots - 1 ? View::Mods : View::Configure);
-                forcedTab = shot >= 1 && shot <= kConfigureTabs ? shot - 1 : -1;
+                if (shot >= 1 && shot <= kConfigureTabs)
+                    st.configureTab = shot - 1;
             }
             if (shot >= kShots)
                 st.quit = true;
 
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
-            ImGui::SetNextWindowPos(viewport->WorkPos);
-            ImGui::SetNextWindowSize(viewport->WorkSize);
+            const Layout layout(viewport);
+            ImGui::SetNextWindowPos(viewport->Pos);
+            ImGui::SetNextWindowSize(viewport->Size);
             ImGui::Begin("launcher", nullptr,
                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                    ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoBackground);
+                    ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoBackground |
+                    ImGuiWindowFlags_NoScrollWithMouse);
             const View view = st.view;
             const bool viewChanged = st.viewChanged;
-            DrawBackground(st, view == View::Main ? 0.0f : 0.55f);
+            // Screenshots skip the fade.
+            st.fade = st.screenshotDir.empty()
+                ? std::clamp(float(ImGui::GetTime() - st.viewStart) / kFadeSeconds, 0.0f, 1.0f)
+                : 1.0f;
+            DrawScene(st, layout, view == View::Main ? 0.0f : 0.45f);
             switch (view)
             {
             case View::Main:
-                DrawLogo(st);
-                MainView(st);
+                MainView(st, layout);
                 break;
             case View::Configure:
-                PanelView(st, "Configure", forcedTab, ConfigureContents);
+                ConfigureView(st, layout);
                 break;
             case View::Mods:
-                PanelView(st, "Mods", -1, ModsContents);
+                ModsView(st, layout);
                 break;
             }
             // Focus moves to the new view's first item in the frame it's shown.
@@ -846,12 +1335,11 @@ namespace dao::launcher
             ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
             if (shotNow)
             {
-                if (SDL_Surface* surface = SDL_RenderReadPixels(renderer, nullptr))
-                {
-                    const auto path = st.screenshotDir / fmt::format("launcher_{}.bmp", shot);
-                    SDL_SaveBMP(surface, path.string().c_str());
-                    SDL_DestroySurface(surface);
-                }
+                const auto path = st.screenshotDir / fmt::format("launcher_{}.bmp", shot);
+                SDL_Surface* surface = SDL_RenderReadPixels(renderer, nullptr);
+                if (!surface || !SDL_SaveBMP(surface, path.string().c_str()))
+                    LOGW("Launcher: can't save {}: {}", path.string(), SDL_GetError());
+                SDL_DestroySurface(surface);
             }
             if (!st.screenshotDir.empty())
                 st.screenshotFrame++;
@@ -865,8 +1353,9 @@ namespace dao::launcher
         ImGui_ImplSDLRenderer3_Shutdown();
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
-        if (st.art)
-            SDL_DestroyTexture(st.art);
+        for (auto& [name, art] : st.art)
+            SDL_DestroyTexture(art.texture);
+        g_state = nullptr;
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);

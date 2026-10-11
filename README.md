@@ -81,7 +81,9 @@ saves, logs, the shader cache, and the Options menu it generates) and `mods/`.
 ## Playing
 
 - **Windows:** run `DAORecomp.exe` in the install folder. The launcher opens first
-  (hold Shift while starting to show it when it is turned off).
+  (hold Shift while starting to show it when it is turned off). It is drawn with the
+  title screen and menu art from your copy of the game (`guiexport.erf`), and works
+  with a mouse, the keyboard or a gamepad.
 - **Linux:** the program is a Windows executable; run it with Wine or Proton.
   - Steam: *Add a Non-Steam Game* → `DAORecomp.exe`, then in its properties force a
     Proton version (Proton includes vkd3d-proton for Direct3D 12).
