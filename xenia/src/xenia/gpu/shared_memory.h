@@ -104,6 +104,9 @@ class SharedMemory {
   // the pages they touch, the CPU data is properly loaded to the unmodified
   // regions in those pages.
   void RangeWrittenByGpu(uint32_t start, uint32_t length);
+  // DAO: whether the GPU wrote every page of the range (RangeWrittenByGpu) and
+  // the CPU hasn't written it since: its GPU copy is newer than the CPU's.
+  bool IsRangeWrittenByGpu(uint32_t start, uint32_t length);
 
  protected:
   SharedMemory(Memory& memory);

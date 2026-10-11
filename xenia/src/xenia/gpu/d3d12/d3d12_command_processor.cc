@@ -3526,66 +3526,12 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
     // GetResolveInfo calculated the written extent with.
     downscale_pixel_size_log2 =
         draw_util::GetResolveDownscalePixelSizeLog2(copy_dest_info);
-    if (downscale_pixel_size_log2 > 3) {
-      // 128bpp - not supported by the tiled scaled addressing reversal in the
-      // downscale shader.
-      XELOGGPU(
-          "Skipping readback of a resolution-scaled resolve to a 128bpp "
-          "destination - not supported by the downscale shader");
+    if (!GetScaledReadbackSource(written_address, written_length,
+                                 downscale_pixel_size_log2, readback_length,
+                                 downscale_tile_count, downscale_source_buffer,
+                                 downscale_source_offset)) {
       return true;
     }
-    // The scaled addressing is periodic per guest group - the written extent
-    // must be group-aligned for the reversal to be valid (tiled destinations
-    // are 32x32-tile-aligned, so this normally holds).
-    uint32_t group_bytes_log2 = downscale_pixel_size_log2 <= 2 ? 7 : 6;
-    if (written_address & ((UINT32_C(1) << group_bytes_log2) - 1)) {
-      XELOGGPU(
-          "Skipping readback of a resolution-scaled resolve to 0x{:08X} - the "
-          "destination is not aligned to the scaled addressing group size",
-          written_address);
-      return true;
-    }
-    uint32_t tile_bytes = (32 * 32) << downscale_pixel_size_log2;
-    downscale_tile_count = written_length / tile_bytes;
-    if (!downscale_tile_count) {
-      return true;
-    }
-    if (written_length % tile_bytes) {
-      // Only whole 32x32-texel tiles are downscaled - don't copy a garbage
-      // tail to the guest.
-      readback_length = downscale_tile_count * tile_bytes;
-      XELOGGPU(
-          "Readback of a resolution-scaled resolve to 0x{:08X}: length {} is "
-          "not a multiple of the {}-byte tile, truncating to {}",
-          written_address, written_length, tile_bytes, readback_length);
-    }
-    // The scaled resolve range made current by the render target cache during
-    // the resolve must contain the written extent.
-    uint32_t scale_area = texture_cache_->draw_resolution_scale_x() *
-                          texture_cache_->draw_resolution_scale_y();
-    uint64_t scaled_start = uint64_t(written_address) * scale_area;
-    uint64_t scaled_length = uint64_t(readback_length) * scale_area;
-    uint64_t range_start_scaled =
-        texture_cache_->GetCurrentScaledResolveRangeStartScaled();
-    uint64_t range_length_scaled =
-        texture_cache_->GetCurrentScaledResolveRangeLengthScaled();
-    if (!range_length_scaled || scaled_start < range_start_scaled ||
-        scaled_start + scaled_length >
-            range_start_scaled + range_length_scaled) {
-      XELOGGPU(
-          "Skipping readback of a resolution-scaled resolve to 0x{:08X} - the "
-          "written extent is not within the current scaled resolve range",
-          written_address);
-      return true;
-    }
-    downscale_source_buffer =
-        texture_cache_->GetCurrentScaledResolveBufferResource();
-    if (!downscale_source_buffer) {
-      return true;
-    }
-    downscale_source_offset =
-        scaled_start -
-        texture_cache_->GetCurrentScaledResolveBufferBaseOffset();
   }
 
   uint64_t resolve_key =
@@ -3630,103 +3576,11 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
   if (is_scaled) {
     // Scaled path: downscale on the GPU, then copy the 1x data to the
     // readback buffer.
-    if (size > resolve_downscale_buffer_size_) {
-      const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
-      ID3D12Device* device = provider.GetDevice();
-      D3D12_RESOURCE_DESC buffer_desc;
-      ui::d3d12::util::FillBufferResourceDesc(
-          buffer_desc, size, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-      ID3D12Resource* buffer;
-      if (SUCCEEDED(device->CreateCommittedResource(
-              &ui::d3d12::util::kHeapPropertiesDefault,
-              provider.GetHeapFlagCreateNotZeroed(), &buffer_desc,
-              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-              IID_PPV_ARGS(&buffer)))) {
-        // Defer the release of the old buffer - it may still be referenced
-        // by commands recorded for previous resolves.
-        if (resolve_downscale_buffer_) {
-          resources_for_deletion_.emplace_back(
-              GetCurrentSubmission(), resolve_downscale_buffer_.Detach());
-        }
-        resolve_downscale_buffer_.Attach(buffer);
-        resolve_downscale_buffer_size_ = size;
-      } else {
-        XELOGE("Failed to create a {} MB resolve downscale buffer", size >> 20);
-        return true;
-      }
-    }
-
-    ui::d3d12::util::DescriptorCpuGpuHandlePair downscale_descriptors[2];
-    if (!RequestOneUseSingleViewDescriptors(2, downscale_descriptors)) {
-      XELOGE("Failed to allocate descriptors for the resolve downscale");
+    if (!RecordScaledReadback(downscale_source_buffer, downscale_source_offset,
+                              readback_length, downscale_pixel_size_log2,
+                              downscale_tile_count, rb.buffers[write_index])) {
       return true;
     }
-
-    const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
-    ID3D12Device* device = provider.GetDevice();
-    uint32_t scale_area = texture_cache_->draw_resolution_scale_x() *
-                          texture_cache_->draw_resolution_scale_y();
-    // Both offsets are group-aligned, so they also satisfy the 16-byte raw
-    // view alignment.
-    uint32_t aligned_scaled_length =
-        uint32_t(xe::align<uint64_t>(uint64_t(readback_length) * scale_area,
-                                     D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT));
-    ui::d3d12::util::CreateBufferRawSRV(
-        device, downscale_descriptors[0].first, downscale_source_buffer,
-        aligned_scaled_length, downscale_source_offset);
-    uint32_t aligned_readback_length =
-        xe::align(readback_length, uint32_t(D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT));
-    ui::d3d12::util::CreateBufferRawUAV(device, downscale_descriptors[1].first,
-                                        resolve_downscale_buffer_.Get(),
-                                        aligned_readback_length, 0);
-
-    // The resolve wrote to the scaled resolve buffer via a UAV - transition
-    // it to a shader resource for the downscale.
-    texture_cache_->TransitionCurrentScaledResolveRange(
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    SubmitBarriers();
-
-    SetExternalPipeline(resolve_downscale_pipeline_.Get());
-    deferred_command_list_.D3DSetComputeRootSignature(
-        resolve_downscale_root_signature_.Get());
-    ResolveDownscaleConstants downscale_constants;
-    downscale_constants.scale_x = texture_cache_->draw_resolution_scale_x();
-    downscale_constants.scale_y = texture_cache_->draw_resolution_scale_y();
-    downscale_constants.pixel_size_log2 = downscale_pixel_size_log2;
-    downscale_constants.tile_count = downscale_tile_count;
-    // The source SRV is created at the offset of the written extent, so the
-    // shader reads from the start of the bound range.
-    downscale_constants.source_offset_bytes = 0;
-    downscale_constants.half_pixel_offset =
-        uint32_t(cvars::readback_resolve_half_pixel_offset);
-    deferred_command_list_.D3DSetComputeRoot32BitConstants(
-        UINT(ResolveDownscaleRootParameter::kConstants),
-        sizeof(downscale_constants) / sizeof(uint32_t), &downscale_constants,
-        0);
-    deferred_command_list_.D3DSetComputeRootDescriptorTable(
-        UINT(ResolveDownscaleRootParameter::kSource),
-        downscale_descriptors[0].second);
-    deferred_command_list_.D3DSetComputeRootDescriptorTable(
-        UINT(ResolveDownscaleRootParameter::kDestination),
-        downscale_descriptors[1].second);
-    // One thread group per 32x32 tile.
-    deferred_command_list_.D3DDispatch(downscale_tile_count, 1, 1);
-
-    // Copy the downscaled data to the readback buffer.
-    PushTransitionBarrier(resolve_downscale_buffer_.Get(),
-                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                          D3D12_RESOURCE_STATE_COPY_SOURCE);
-    SubmitBarriers();
-    deferred_command_list_.D3DCopyBufferRegion(rb.buffers[write_index], 0,
-                                               resolve_downscale_buffer_.Get(),
-                                               0, readback_length);
-    // Return the buffers to their steady states.
-    PushTransitionBarrier(resolve_downscale_buffer_.Get(),
-                          D3D12_RESOURCE_STATE_COPY_SOURCE,
-                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    texture_cache_->TransitionCurrentScaledResolveRange(
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    SubmitBarriers();
   } else {
     // Non-scaled path: copy resolved data from the shared memory to the
     // current frame's buffer.
@@ -3767,6 +3621,237 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
       read_source->Unmap(0, &readback_write_range);
     }
   }
+  return true;
+}
+
+bool D3D12CommandProcessor::GetScaledReadbackSource(
+    uint32_t address, uint32_t length, uint32_t pixel_size_log2,
+    uint32_t& length_out, uint32_t& tile_count_out,
+    ID3D12Resource*& buffer_out, uint64_t& offset_out) {
+  if (pixel_size_log2 > 3) {
+    // 128bpp - not supported by the tiled scaled addressing reversal in the
+    // downscale shader.
+    XELOGGPU(
+        "Skipping readback of a resolution-scaled resolve to a 128bpp "
+        "destination - not supported by the downscale shader");
+    return false;
+  }
+  // The scaled addressing is periodic per guest group - the written extent
+  // must be group-aligned for the reversal to be valid (tiled destinations
+  // are 32x32-tile-aligned, so this normally holds).
+  uint32_t group_bytes_log2 = pixel_size_log2 <= 2 ? 7 : 6;
+  if (address & ((UINT32_C(1) << group_bytes_log2) - 1)) {
+    XELOGGPU(
+        "Skipping readback of a resolution-scaled resolve to 0x{:08X} - the "
+        "destination is not aligned to the scaled addressing group size",
+        address);
+    return false;
+  }
+  uint32_t tile_bytes = (32 * 32) << pixel_size_log2;
+  tile_count_out = length / tile_bytes;
+  if (!tile_count_out) {
+    return false;
+  }
+  length_out = tile_count_out * tile_bytes;
+  if (length_out != length) {
+    // Only whole 32x32-texel tiles are downscaled - don't copy a garbage
+    // tail to the guest.
+    XELOGGPU(
+        "Readback of a resolution-scaled resolve to 0x{:08X}: length {} is "
+        "not a multiple of the {}-byte tile, truncating to {}",
+        address, length, tile_bytes, length_out);
+  }
+  // The scaled resolve range made current (by the render target cache during
+  // the resolve) must contain the extent.
+  uint32_t scale_area = texture_cache_->draw_resolution_scale_x() *
+                        texture_cache_->draw_resolution_scale_y();
+  uint64_t scaled_start = uint64_t(address) * scale_area;
+  uint64_t scaled_length = uint64_t(length_out) * scale_area;
+  uint64_t range_start_scaled =
+      texture_cache_->GetCurrentScaledResolveRangeStartScaled();
+  uint64_t range_length_scaled =
+      texture_cache_->GetCurrentScaledResolveRangeLengthScaled();
+  if (!range_length_scaled || scaled_start < range_start_scaled ||
+      scaled_start + scaled_length > range_start_scaled + range_length_scaled) {
+    XELOGGPU(
+        "Skipping readback of a resolution-scaled resolve to 0x{:08X} - the "
+        "written extent is not within the current scaled resolve range",
+        address);
+    return false;
+  }
+  buffer_out = texture_cache_->GetCurrentScaledResolveBufferResource();
+  offset_out =
+      scaled_start - texture_cache_->GetCurrentScaledResolveBufferBaseOffset();
+  return buffer_out != nullptr;
+}
+
+bool D3D12CommandProcessor::RecordScaledReadback(
+    ID3D12Resource* source, uint64_t source_offset, uint32_t length,
+    uint32_t pixel_size_log2, uint32_t tile_count, ID3D12Resource* dest) {
+  uint32_t size = AlignReadbackBufferSize(length);
+  if (size > resolve_downscale_buffer_size_) {
+    const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+    ID3D12Device* device = provider.GetDevice();
+    D3D12_RESOURCE_DESC buffer_desc;
+    ui::d3d12::util::FillBufferResourceDesc(
+        buffer_desc, size, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    ID3D12Resource* buffer;
+    if (SUCCEEDED(device->CreateCommittedResource(
+            &ui::d3d12::util::kHeapPropertiesDefault,
+            provider.GetHeapFlagCreateNotZeroed(), &buffer_desc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            IID_PPV_ARGS(&buffer)))) {
+      // Defer the release of the old buffer - it may still be referenced
+      // by commands recorded for previous resolves.
+      if (resolve_downscale_buffer_) {
+        resources_for_deletion_.emplace_back(
+            GetCurrentSubmission(), resolve_downscale_buffer_.Detach());
+      }
+      resolve_downscale_buffer_.Attach(buffer);
+      resolve_downscale_buffer_size_ = size;
+    } else {
+      XELOGE("Failed to create a {} MB resolve downscale buffer", size >> 20);
+      return false;
+    }
+  }
+
+  ui::d3d12::util::DescriptorCpuGpuHandlePair downscale_descriptors[2];
+  if (!RequestOneUseSingleViewDescriptors(2, downscale_descriptors)) {
+    XELOGE("Failed to allocate descriptors for the resolve downscale");
+    return false;
+  }
+
+  const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+  ID3D12Device* device = provider.GetDevice();
+  uint32_t scale_area = texture_cache_->draw_resolution_scale_x() *
+                        texture_cache_->draw_resolution_scale_y();
+  // Both offsets are group-aligned, so they also satisfy the 16-byte raw
+  // view alignment.
+  uint32_t aligned_scaled_length =
+      uint32_t(xe::align<uint64_t>(uint64_t(length) * scale_area,
+                                   D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT));
+  ui::d3d12::util::CreateBufferRawSRV(device, downscale_descriptors[0].first,
+                                      source, aligned_scaled_length,
+                                      source_offset);
+  uint32_t aligned_readback_length =
+      xe::align(length, uint32_t(D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT));
+  ui::d3d12::util::CreateBufferRawUAV(device, downscale_descriptors[1].first,
+                                      resolve_downscale_buffer_.Get(),
+                                      aligned_readback_length, 0);
+
+  // The resolve wrote to the scaled resolve buffer via a UAV - transition
+  // it to a shader resource for the downscale.
+  texture_cache_->TransitionCurrentScaledResolveRange(
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  SubmitBarriers();
+
+  SetExternalPipeline(resolve_downscale_pipeline_.Get());
+  deferred_command_list_.D3DSetComputeRootSignature(
+      resolve_downscale_root_signature_.Get());
+  ResolveDownscaleConstants downscale_constants;
+  downscale_constants.scale_x = texture_cache_->draw_resolution_scale_x();
+  downscale_constants.scale_y = texture_cache_->draw_resolution_scale_y();
+  downscale_constants.pixel_size_log2 = pixel_size_log2;
+  downscale_constants.tile_count = tile_count;
+  // The source SRV is created at the offset of the written extent, so the
+  // shader reads from the start of the bound range.
+  downscale_constants.source_offset_bytes = 0;
+  downscale_constants.half_pixel_offset =
+      uint32_t(cvars::readback_resolve_half_pixel_offset);
+  deferred_command_list_.D3DSetComputeRoot32BitConstants(
+      UINT(ResolveDownscaleRootParameter::kConstants),
+      sizeof(downscale_constants) / sizeof(uint32_t), &downscale_constants,
+      0);
+  deferred_command_list_.D3DSetComputeRootDescriptorTable(
+      UINT(ResolveDownscaleRootParameter::kSource),
+      downscale_descriptors[0].second);
+  deferred_command_list_.D3DSetComputeRootDescriptorTable(
+      UINT(ResolveDownscaleRootParameter::kDestination),
+      downscale_descriptors[1].second);
+  // One thread group per 32x32 tile.
+  deferred_command_list_.D3DDispatch(tile_count, 1, 1);
+
+  // Copy the downscaled data to the readback buffer.
+  PushTransitionBarrier(resolve_downscale_buffer_.Get(),
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                        D3D12_RESOURCE_STATE_COPY_SOURCE);
+  SubmitBarriers();
+  deferred_command_list_.D3DCopyBufferRegion(
+      dest, 0, resolve_downscale_buffer_.Get(), 0, length);
+  // Return the buffers to their steady states.
+  PushTransitionBarrier(resolve_downscale_buffer_.Get(),
+                        D3D12_RESOURCE_STATE_COPY_SOURCE,
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  texture_cache_->TransitionCurrentScaledResolveRange(
+      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  SubmitBarriers();
+  return true;
+}
+
+bool D3D12CommandProcessor::DaoReadGpuWrittenMemory(
+    uint32_t address, uint32_t length, uint32_t pixel_size_log2,
+    std::vector<uint8_t>& out) {
+  out.clear();
+  if (!length || !shared_memory_->IsRangeWrittenByGpu(address, length) ||
+      !BeginSubmission(false)) {
+    return false;
+  }
+  const bool scaled = texture_cache_->IsDrawResolutionScaled() &&
+                      texture_cache_->DaoIsRangeScaledResolved(address, length);
+  uint32_t read_length = length;
+  uint32_t tile_count = 0;
+  ID3D12Resource* scaled_source = nullptr;
+  uint64_t scaled_offset = 0;
+  if (scaled) {
+    if (!texture_cache_->MakeScaledResolveRangeCurrent(address, length)) {
+      return false;
+    }
+    if (!GetScaledReadbackSource(address, length, pixel_size_log2, read_length,
+                                 tile_count, scaled_source, scaled_offset)) {
+      return false;
+    }
+  }
+
+  const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+  D3D12_RESOURCE_DESC buffer_desc;
+  ui::d3d12::util::FillBufferResourceDesc(
+      buffer_desc, AlignReadbackBufferSize(read_length),
+      D3D12_RESOURCE_FLAG_NONE);
+  Microsoft::WRL::ComPtr<ID3D12Resource> readback;
+  if (FAILED(provider.GetDevice()->CreateCommittedResource(
+          &ui::d3d12::util::kHeapPropertiesReadback,
+          provider.GetHeapFlagCreateNotZeroed(), &buffer_desc,
+          D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+          IID_PPV_ARGS(&readback)))) {
+    XELOGE("Failed to create a {} KB readback buffer", read_length >> 10);
+    return false;
+  }
+  if (scaled) {
+    if (!RecordScaledReadback(scaled_source, scaled_offset, read_length,
+                              pixel_size_log2, tile_count, readback.Get())) {
+      return false;
+    }
+  } else {
+    shared_memory_->UseAsCopySource();
+    SubmitBarriers();
+    deferred_command_list_.D3DCopyBufferRegion(
+        readback.Get(), 0, shared_memory_->GetBuffer(), address, read_length);
+  }
+  if (!AwaitAllQueueOperationsCompletion()) {
+    // The copy may still run: released once its submission is done.
+    resources_for_deletion_.emplace_back(GetCurrentSubmission(),
+                                         readback.Detach());
+    return false;
+  }
+  D3D12_RANGE read_range = {0, read_length};
+  void* mapping;
+  if (FAILED(readback->Map(0, &read_range, &mapping))) {
+    return false;
+  }
+  out.assign(static_cast<const uint8_t*>(mapping),
+             static_cast<const uint8_t*>(mapping) + read_length);
+  D3D12_RANGE written_range = {};
+  readback->Unmap(0, &written_range);
   return true;
 }
 

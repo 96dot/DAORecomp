@@ -275,6 +275,57 @@ static void SwapInterruptHook(PPCContext& ctx, uint8_t* base, PPCFunc* original)
 }
 GAME_HOOK(sub_82CD4218, tu6_sub_82D9E0F8, SwapInterruptHook)
 
+// The game's save writer: r4 is the texture the render thread drew the save's
+// thumbnail into (or null), which it locks to write its pixels into the save
+// (scrnshot.bin). Resolves stay on the GPU, so it read zeros (black thumbnails):
+// the texture is read back from the GPU first. Its engine texture's methods, as
+// the writer uses them: +12 width, +16 height, +88 lock (level, rect, out
+// {pitch, bits}, flags), +92 unlock (level). The thumbnail is 8888 (436x256).
+constexpr uint32_t kThumbnailPixelSizeLog2 = 2;
+constexpr uint32_t kThumbnailMaxBytes = 16 << 20;
+static void SaveWriterHook(PPCContext& ctx, uint8_t* base, PPCFunc* original)
+{
+    const uint32_t texture = ctx.r4.u32;
+    const uint32_t vtable = texture && dao::gpu::XeniaActive() ? PPC_LOAD_U32(texture) : 0;
+    // Only an engine texture's (recompiled) methods.
+    uint32_t methods[4] = {};
+    bool known = vtable != 0;
+    const uint32_t offsets[4] = { 12, 16, 88, 92 };
+    for (uint32_t i = 0; known && i < 4; ++i)
+    {
+        methods[i] = PPC_LOAD_U32(vtable + offsets[i]);
+        known = dao::kernel::g_memory.FindFunction(methods[i]) != nullptr;
+    }
+    if (known)
+    {
+        const uint32_t width = uint32_t(dao::kernel::CallGuest(methods[0], { texture }));
+        const uint32_t height = uint32_t(dao::kernel::CallGuest(methods[1], { texture }));
+        // The out arguments (a RECT, 16 bytes, and {pitch, bits}, 8): at the
+        // hooked function's entry nothing lives below the stack pointer, and
+        // CallGuest's frames start 0x100 below it.
+        const uint32_t rect = ctx.r1.u32 - 48;
+        const uint32_t locked = ctx.r1.u32 - 24;
+        PPC_STORE_U32(rect, 0);
+        PPC_STORE_U32(rect + 4, 0);
+        PPC_STORE_U32(rect + 8, width);
+        PPC_STORE_U32(rect + 12, height);
+        PPC_STORE_U32(locked, 0);
+        PPC_STORE_U32(locked + 4, 0);
+        dao::kernel::CallGuest(methods[2], { texture, 0, rect, locked, 0 });
+        const uint32_t pitch = PPC_LOAD_U32(locked);
+        const uint32_t bits = PPC_LOAD_U32(locked + 4);
+        dao::kernel::CallGuest(methods[3], { texture, 0 });
+        // Whole pages: with resolution scaling only whole 32x32 tiles (4 KB at
+        // 32bpp) are read back, and a partial last one would be left out.
+        const uint64_t bytes = (uint64_t(pitch) * height + 4095) & ~uint64_t(4095);
+        if (bits && bytes && bytes <= kThumbnailMaxBytes &&
+            !dao::gpu::ReadBackGpuWrittenMemory(bits, uint32_t(bytes), kThumbnailPixelSizeLog2))
+            LOGI("Save thumbnail at {:08X}: nothing newer on the GPU, or not read back", bits);
+    }
+    original(ctx, base);
+}
+GAME_HOOK(sub_82302150, tu6_sub_82332EA0, SaveWriterHook)
+
 DAO_IMPORT_AS(VdQueryVideoMode, dao::imp::VdQueryVideoMode)
 DAO_IMPORT_AS(VdQueryVideoFlags, dao::imp::VdQueryVideoFlags)
 DAO_IMPORT_AS(VdGetCurrentDisplayInformation, dao::imp::VdGetCurrentDisplayInformation)

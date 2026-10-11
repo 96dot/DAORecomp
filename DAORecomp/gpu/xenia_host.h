@@ -65,4 +65,11 @@ namespace dao::gpu
     void PrepareGuestWrite(uint32_t address, uint32_t length);
     // Debug (DAO_GPU_INVALIDATE_ALL): drops every GPU copy of guest memory.
     void InvalidateAllGpuCopies();
+
+    // Resolves stay on the GPU: copies what the GPU wrote to [address, +length)
+    // (a physical-memory virtual address) into guest memory, for the CPU to
+    // read. pixelSizeLog2: of the resolved format. Blocks until the GPU thread
+    // has run it and the GPU is done; false if the GPU's data isn't newer than
+    // guest memory's, or it couldn't be read back.
+    bool ReadBackGpuWrittenMemory(uint32_t address, uint32_t length, uint32_t pixelSizeLog2);
 }

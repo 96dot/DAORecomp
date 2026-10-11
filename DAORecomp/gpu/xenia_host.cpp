@@ -12,7 +12,9 @@
 #include "xenia/base/byte_order.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
+#include "xenia/base/threading.h"
 #include "xenia/dao_host.h"
+#include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/gpu/d3d12/d3d12_graphics_system.h"
 #include "xenia/gpu/d3d12/dao_upscale.h"
 #include "xenia/gpu/xenos.h"
@@ -258,6 +260,33 @@ namespace dao::gpu
     void XeniaWriteRegister(uint32_t address, uint32_t value)
     {
         s_graphics->WriteRegister(address, value);
+    }
+
+    bool ReadBackGpuWrittenMemory(uint32_t address, uint32_t length, uint32_t pixelSizeLog2)
+    {
+        if (!s_graphics || !IsPhysicalAddress(address) || !length)
+            return false;
+        // Within the 512 MB of physical memory (the 0xE view is offset by a page).
+        constexpr uint32_t kPhysicalSize = 0x20000000;
+        const uint32_t physical = PhysicalAddressOf(address);
+        if (physical >= kPhysicalSize || length > kPhysicalSize - physical)
+            return false;
+        auto* processor = static_cast<xe::gpu::d3d12::D3D12CommandProcessor*>(s_graphics->command_processor());
+        std::vector<uint8_t> data;
+        bool read = false;
+        xe::threading::Fence done;
+        processor->CallInThread([&] {
+            read = processor->DaoReadGpuWrittenMemory(physical, length, pixelSizeLog2, data);
+            done.Signal();
+        });
+        done.Wait();
+        // Shorter than length if only whole tiles of a scaled resolve were read.
+        if (!read || data.size() > length)
+            return false;
+        // Through the write watches, so the GPU's copies are reloaded from it.
+        PrepareGuestWrite(address, uint32_t(data.size()));
+        memcpy(g_memory.Translate<uint8_t>(address), data.data(), data.size());
+        return true;
     }
 
     bool XeniaWantsSingleSampleScene()

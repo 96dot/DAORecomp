@@ -1233,6 +1233,11 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
   // internally before the failure according to Jesse Natalie from the DirectX
   // Discord server.
   paint_context_.present_completion_timeline->SignalAndAdvance(direct_queue);
+  // DAO: the reason and, with DAO_DRED, where the GPU stopped.
+  if (present_result == DXGI_ERROR_DEVICE_REMOVED ||
+      present_result == DXGI_ERROR_DEVICE_RESET) {
+    provider_.LogDeviceRemoved();
+  }
   switch (present_result) {
     case DXGI_ERROR_DEVICE_REMOVED:
       return PaintResult::kGpuLostExternally;

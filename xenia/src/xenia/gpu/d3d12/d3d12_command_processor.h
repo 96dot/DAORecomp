@@ -234,6 +234,19 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // Returns the text to display in the GPU backend name in the window title.
   std::string GetWindowTitleText() const;
 
+  // DAO: resolves stay on the GPU (unless readback_resolve is on), so the CPU
+  // doesn't see what they wrote: copies the GPU's data of a range written by
+  // the GPU into out (downscaled to 1x if resolved at the draw resolution
+  // scale), for the few things the game reads on the CPU, such as its save
+  // thumbnails. address is physical; pixel_size_log2: the resolved format's.
+  // To be called on the command processor thread (CallInThread); waits for the
+  // GPU. Of a range resolved at the draw resolution scale, only whole 32x32
+  // tiles are read (out may be shorter than length). False if the GPU's data
+  // isn't newer than the CPU's, or it can't be read back.
+  bool DaoReadGpuWrittenMemory(uint32_t address, uint32_t length,
+                               uint32_t pixel_size_log2,
+                               std::vector<uint8_t>& out);
+
  protected:
   bool SetupContext() override;
   void ShutdownContext() override;
@@ -334,6 +347,21 @@ class D3D12CommandProcessor final : public CommandProcessor {
   bool IssueCopy() override;
   XE_NOINLINE
   bool IssueCopy_ReadbackResolvePath();
+  // For reading back a range written by a resolve at the draw resolution
+  // scale, made current in the scaled resolve buffer: its whole 32x32-texel
+  // tiles (length_out, a part of length), their count, and where they are in
+  // the scaled resolve buffer. False if it can't be read back.
+  bool GetScaledReadbackSource(uint32_t address, uint32_t length,
+                               uint32_t pixel_size_log2, uint32_t& length_out,
+                               uint32_t& tile_count_out,
+                               ID3D12Resource*& buffer_out,
+                               uint64_t& offset_out);
+  // Records downscaling the tiles from GetScaledReadbackSource to 1x and
+  // copying them (length bytes) to the start of dest, in the copy destination
+  // state.
+  bool RecordScaledReadback(ID3D12Resource* source, uint64_t source_offset,
+                            uint32_t length, uint32_t pixel_size_log2,
+                            uint32_t tile_count, ID3D12Resource* dest);
   void InitializeTrace() override;
 
  private:
