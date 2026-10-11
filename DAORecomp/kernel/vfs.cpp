@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "vfs.h"
 
+#include "text.h"
+
 namespace dao::kernel
 {
     namespace fs = std::filesystem;
@@ -22,14 +24,6 @@ namespace dao::kernel
     static std::vector<Device> s_devices;
     static std::unordered_map<std::string, std::string> s_symlinks; // lowercase "game:" -> device path
     static fs::path s_userRoot;
-
-    static std::string Lower(std::string_view s)
-    {
-        std::string out(s);
-        for (char& c : out)
-            c = char(tolower(uint8_t(c)));
-        return out;
-    }
 
     static std::string Normalize(std::string_view path)
     {

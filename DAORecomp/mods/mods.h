@@ -35,6 +35,13 @@ namespace dao::mods
 
     std::filesystem::path ModsRoot(const std::filesystem::path& gameRoot);
 
+    // Folders under mods/ starting with this aren't mods (the work folder of mods
+    // being added).
+    constexpr char kHiddenPrefix = '.';
+
+    // A mod folder's description (mod.toml), file count and PC files.
+    ModInfo Describe(const std::filesystem::path& folder);
+
     // The folders under mods/ in the saved load order. Folders not in the saved
     // list are appended (enabled); saved entries whose folder is gone are dropped.
     std::vector<ModInfo> Scan(const std::filesystem::path& modsRoot, const std::vector<ModState>& saved);

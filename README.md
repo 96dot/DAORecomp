@@ -123,6 +123,11 @@ apply at once; when you leave the menu, the game lists the ones that take effect
 the next time it starts. Turning off dynamic shadows and post-processing there (or in the
 launcher) makes the game faster on low-power devices such as the Steam Deck.
 
+Mods go in `mods/` (see `mods/README.txt`); the easiest way to add one is to drop its
+archive, folder or files on the launcher window (archives are opened with Windows'
+`tar.exe`, in Windows 10 1803 and later). Mods must be made for the Xbox 360 version: PC
+mods with models, textures or archives are marked as such and not loaded.
+
 Shaders are compiled the first time something is drawn, and that draw is skipped
 until then, so new places can show objects popping in for a moment. Compiled shaders
 are kept in `userdata/shader_cache/` and compiled again in the background at every
@@ -157,6 +162,8 @@ start, so this happens once per place.
   - `DAO_LAUNCHER_SCREENSHOTS=<folder>`: saves each launcher view (the title screen,
     the four Configure tabs, Mods) as `launcher_0.bmp` to `launcher_5.bmp`, and the
     Update page as `launcher_6.bmp` when the update check finds a release, then quits.
+  - `DAO_LAUNCHER_DROP=<path>|<path>...`: with `DAO_LAUNCHER_SCREENSHOTS`, adds those
+    as mods as if dropped on the window (tests adding mods).
 
 Never commit game files or anything generated from them (`game/`, `ppc/`, `analysis/`,
 built executables); `.gitignore` excludes them.

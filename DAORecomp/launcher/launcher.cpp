@@ -5,13 +5,18 @@
 
 #include <shellapi.h>
 
+#include <future>
+#include <ranges>
+
 #include <SDL3/SDL.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <backends/imgui_impl_sdl3.h>
 #include <backends/imgui_impl_sdlrenderer3.h>
 
+#include "mods/mod_install.h"
 #include "mods/mods.h"
+#include "text.h"
 #include "patches/patches.h"
 #include "settings.h"
 #include "version.h"
@@ -241,6 +246,14 @@ namespace dao::launcher
             // Whether default.xex is in gameRoot (checked once, at startup).
             bool gameFound = false;
             std::unique_ptr<Updater> updater;
+            // Mods dropped on the window: the paths of the drop under way, the
+            // install running in the background, and how the last one went.
+            std::vector<fs::path> dropped;
+            std::future<mods::InstallResult> modInstall;
+            std::stop_source modStop;
+            std::vector<mods::InstallResult::Line> modMessages;
+            // Scroll the mod list to the selected mod (just added).
+            bool scrollToMod = false;
             // The release the updater found and its notes, taken from it once.
             std::optional<Release> release;
             std::vector<NoteLine> releaseNotes;
@@ -281,6 +294,7 @@ namespace dao::launcher
             return st.release ? &*st.release : nullptr;
         }
 
+
         // Where the game's screens go in the window: the scene covers it; the menus fit
         // in it, anchored to its sides.
         struct Layout
@@ -316,14 +330,6 @@ namespace dao::launcher
         {
             const float a = float(color >> IM_COL32_A_SHIFT & 0xFF) * std::clamp(alpha, 0.0f, 1.0f);
             return (color & ~IM_COL32_A_MASK) | ImU32(a + 0.5f) << IM_COL32_A_SHIFT;
-        }
-
-        // A path as UTF-8 (path::string() is in the ANSI code page, and throws for the
-        // characters it lacks).
-        std::string Utf8(const fs::path& path)
-        {
-            const std::u8string text = path.u8string();
-            return std::string(text.begin(), text.end());
         }
 
         const Texture* Art(const State& st, const char* name)
@@ -679,16 +685,75 @@ namespace dao::launcher
             st.viewStart = ImGui::GetTime();
         }
 
+        bool AddingMods(const State& st)
+        {
+            return st.modInstall.valid();
+        }
+
+        // Adds the mods just dropped on the window, in the background (copying and
+        // unpacking can take a while), and shows the Mods page.
+        void AddDroppedMods(State& st)
+        {
+            std::vector<fs::path> dropped = std::move(st.dropped);
+            st.dropped.clear();
+            if (dropped.empty())
+                return;
+            SetView(st, View::Mods);
+            if (AddingMods(st))
+            {
+                st.modMessages = { { "Still adding the last mods: drop these again when it's done.", true } };
+                return;
+            }
+            st.modMessages.clear();
+            st.modInstall = std::async(std::launch::async,
+                [root = st.modsRoot, dropped = std::move(dropped), stop = st.modStop.get_token()] {
+                    return mods::Install(root, dropped, stop);
+                });
+        }
+
+        // When the background install is done: the new mods at the end of the list
+        // (the last one selected) and the outcome.
+        void FinishAddingMods(State& st)
+        {
+            if (!AddingMods(st) || st.modInstall.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                return;
+            mods::InstallResult result;
+            try
+            {
+                result = st.modInstall.get();
+            }
+            catch (const std::exception& error)
+            {
+                LOGE("Mods: adding failed: {}", error.what());
+                result.lines.push_back({ "Can't add the mods: something went wrong (see dao.log).", true });
+            }
+            for (mods::ModInfo& mod : result.mods)
+            {
+                // (A folder deleted while the launcher was open may have the same name.)
+                std::erase_if(st.mods, [&](const mods::ModInfo& old) {
+                    return _stricmp(old.folder.c_str(), mod.folder.c_str()) == 0;
+                });
+                st.mods.push_back(std::move(mod));
+            }
+            if (!result.mods.empty())
+            {
+                st.selectedMod = int(st.mods.size()) - 1;
+                st.scrollToMod = true;
+            }
+            st.modMessages = std::move(result.lines);
+        }
+
         void MainView(State& st, const Layout& layout)
         {
-            const bool gameFound = st.gameFound;
+            // Not while mods are being added (they'd be left out).
+            const bool canPlay = st.gameFound && !AddingMods(st);
             DrawLogo(st, layout);
 
-            if (MenuItem(st, layout, "Play", kMenuTop, gameFound) ||
-                (gameFound && ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)))
+            if (MenuItem(st, layout, "Play", kMenuTop, canPlay) ||
+                (canPlay && ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)))
                 st.play = true;
             if (st.viewChanged)
-                ImGui::SetKeyboardFocusHere(gameFound ? -1 : 0);
+                ImGui::SetKeyboardFocusHere(canPlay ? -1 : 0);
             if (MenuItem(st, layout, "Configure", kMenuTop + kMenuStep))
                 SetView(st, View::Configure);
             if (MenuItem(st, layout, "Mods", kMenuTop + 2 * kMenuStep))
@@ -709,7 +774,7 @@ namespace dao::launcher
             ImGui::SetCursorScreenPos(ImVec2(layout.pos.x + margin, layout.pos.y + layout.size.y - margin - height));
             ImGui::BeginGroup();
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, st.fade);
-            if (!gameFound)
+            if (!st.gameFound)
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, kError);
                 ImGui::Text("Game data not found in %s", Utf8(st.gameRoot).c_str());
@@ -984,7 +1049,10 @@ namespace dao::launcher
         void UpdateContents(State& st)
         {
             Updater& updater = *st.updater;
-            const Release& release = *FoundRelease(st);
+            const Release* found = FoundRelease(st);
+            if (!found)
+                return;
+            const Release& release = *found;
             const Updater::State state = updater.GetState();
             Section(release.name.c_str());
             ImGui::Text("This is %s; %s is available.", Version(), release.tag.c_str());
@@ -1031,6 +1099,23 @@ namespace dao::launcher
         {
             HelpText("Each mod is a folder in mods/ that mirrors the game folder, e.g. "
                      "mods/MyMod/packages/core/override/. Mods lower in the list win over mods above them.");
+            ImGui::Spacing();
+
+            HelpText(mods::CanOpenArchives()
+                    ? "To add a mod, drop its archive (.zip, .7z, .rar), folder or files on this window: its files "
+                      "are sorted into place."
+                    : "To add a mod, drop its folder or files on this window: its files are sorted into place.");
+            ImGui::Spacing();
+            if (AddingMods(st))
+                ImGui::TextUnformatted("Adding...");
+            ImGui::PushTextWrapPos(0.0f);
+            for (const auto& line : st.modMessages)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, line.problem ? kError : kText);
+                ImGui::TextUnformatted(line.text.c_str());
+                ImGui::PopStyleColor();
+            }
+            ImGui::PopTextWrapPos();
             ImGui::Spacing();
 
             if (ImGui::Button("Open mods folder"))
@@ -1094,6 +1179,11 @@ namespace dao::launcher
                     ImGui::TableNextColumn();
                     if (ImGui::Selectable(mod.name.c_str(), st.selectedMod == i, ImGuiSelectableFlags_SpanAllColumns))
                         st.selectedMod = i;
+                    if (st.scrollToMod && st.selectedMod == i)
+                    {
+                        ImGui::SetScrollHereY();
+                        st.scrollToMod = false;
+                    }
                     if (mod.IsForPc())
                     {
                         ImGui::SameLine();
@@ -1340,23 +1430,24 @@ namespace dao::launcher
 
         ImFont* LoadFont(const char* const* files, float size)
         {
-            // Latin, and the punctuation and arrows of release notes (dashes, quotes,
-            // ellipses).
-            static constexpr ImWchar kGlyphs[] = { 0x0020, 0x00FF, 0x2010, 0x2027, 0x2190, 0x21FF, 0 };
-            // The serif fonts have no arrows; Segoe UI's fill in.
-            static constexpr ImWchar kArrows[] = { 0x2190, 0x21FF, 0 };
-            static constexpr const char* kArrowFont = "C:\\Windows\\Fonts\\segoeui.ttf";
+            // Latin, Greek and Cyrillic (mod names), and the punctuation and arrows of
+            // release notes (dashes, quotes, ellipses).
+            static constexpr ImWchar kGlyphs[] = { 0x0020, 0x017F, 0x0370, 0x03FF, 0x0400, 0x04FF, 0x2010, 0x2027,
+                0x2190, 0x21FF, 0 };
+            // The serif fonts have no arrows, and some lack the other alphabets: Segoe
+            // UI's fill in (merged glyphs don't replace the font's own).
+            static constexpr const char* kFallbackFont = "C:\\Windows\\Fonts\\segoeui.ttf";
             ImFontAtlas& fonts = *ImGui::GetIO().Fonts;
             for (const char* const* file = files; *file; file++)
             {
                 if (!fs::exists(*file))
                     continue;
                 ImFont* font = fonts.AddFontFromFileTTF(*file, size, nullptr, kGlyphs);
-                if (font && fs::exists(kArrowFont))
+                if (font && fs::exists(kFallbackFont))
                 {
                     ImFontConfig merge;
                     merge.MergeMode = true;
-                    fonts.AddFontFromFileTTF(kArrowFont, size, &merge, kArrows);
+                    fonts.AddFontFromFileTTF(kFallbackFont, size, &merge, kGlyphs);
                 }
                 return font;
             }
@@ -1595,9 +1686,19 @@ namespace dao::launcher
         st.modsRoot = mods::ModsRoot(gameRoot);
         st.gameFound = fs::exists(gameRoot / "default.xex");
         st.settings = ReadSettings(userRoot);
+        mods::CleanUpInstalls(st.modsRoot);
         st.mods = mods::Scan(st.modsRoot, st.settings.mods);
         if (const char* dir = getenv("DAO_LAUNCHER_SCREENSHOTS"))
+        {
             st.screenshotDir = dir;
+            // A drop to test adding mods with: paths separated by |.
+            if (const wchar_t* drop = _wgetenv(L"DAO_LAUNCHER_DROP"))
+            {
+                for (const auto part : std::views::split(std::wstring_view(drop), L'|'))
+                    st.dropped.push_back(std::wstring_view(part.begin(), part.end()));
+                AddDroppedMods(st);
+            }
+        }
         LoadArt(st, renderer);
         st.updater = std::make_unique<Updater>();
         if (st.settings.checkForUpdates)
@@ -1625,7 +1726,16 @@ namespace dao::launcher
                 ImGui_ImplSDL3_ProcessEvent(&event);
                 if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
                     st.quit = true;
+                // Files dropped on the window: one drop is its paths between
+                // begin and complete.
+                else if (event.type == SDL_EVENT_DROP_BEGIN)
+                    st.dropped.clear();
+                else if (event.type == SDL_EVENT_DROP_FILE && event.drop.data)
+                    st.dropped.push_back(FromUtf8(event.drop.data));
+                else if (event.type == SDL_EVENT_DROP_COMPLETE)
+                    AddDroppedMods(st);
             }
+            FinishAddingMods(st);
             if (flags & SDL_WINDOW_MINIMIZED)
                 continue;
 
@@ -1643,10 +1753,14 @@ namespace dao::launcher
             const int shot = st.screenshotDir.empty() ? -1 : st.screenshotFrame / kFramesPerShot;
             const bool shotStart = shot >= 0 && st.screenshotFrame % kFramesPerShot == 0;
             const bool shotNow = shot >= 0 && st.screenshotFrame % kFramesPerShot == kFramesPerShot - 1;
-            // The update's page waits for the check.
+            // The mods page waits for mods being added, the update's page for the check.
             const bool updateShot = shot == kUpdateShot;
-            const bool shotWaits = updateShot && st.updater->GetState() == Updater::State::Checking;
-            if (shotStart && !shotWaits)
+            const bool shotWaits = (shot == kModsShot && AddingMods(st)) ||
+                (updateShot && st.updater->GetState() == Updater::State::Checking);
+            // (The update's page only when there's an update.)
+            if (shot > kUpdateShot || (updateShot && !shotWaits && !FoundRelease(st)))
+                st.quit = true;
+            else if (shotStart && !shotWaits)
             {
                 SetView(st, shot == 0 ? View::Main
                         : shot == kModsShot ? View::Mods
@@ -1655,8 +1769,6 @@ namespace dao::launcher
                 if (shot >= 1 && shot <= kConfigureTabs)
                     st.configureTab = shot - 1;
             }
-            if (shot > kUpdateShot || (updateShot && !shotWaits && !FoundRelease(st)))
-                st.quit = true;
 
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
             const Layout layout(viewport);
@@ -1717,6 +1829,13 @@ namespace dao::launcher
             frameStart = SDL_GetTicksNS();
         }
 
+        // Mods still being added: stopped (those done are kept).
+        if (AddingMods(st))
+        {
+            st.modStop.request_stop();
+            st.modInstall.wait();
+            FinishAddingMods(st);
+        }
         st.settings.mods = mods::ToState(st.mods);
         SaveSettings(userRoot, st.settings);
         LOGI("Launcher: {}", st.play ? "play" : "quit");
