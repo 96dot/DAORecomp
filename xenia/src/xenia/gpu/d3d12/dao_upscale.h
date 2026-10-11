@@ -16,9 +16,9 @@
 //   - color: the render target right after the last full-screen pass that reads
 //     the scene texture (tonemapped, no UI yet);
 //   - motion vectors: each opaque scene draw's vertex shader is run again with
-//     stream output, with this frame's constants and with the constants of the
-//     matching draw of the previous frame (same shaders and vertex data, the
-//     closest constants), both unjittered. At the swap, the captured triangles
+//     stream output, with this frame's constants and, if they differ, with the
+//     constants of the matching draw of the previous frame (same shaders and
+//     vertex data, the closest constants), both unjittered. At the swap, the captured triangles
 //     are drawn into the motion vector texture where they match the scene
 //     depth. Covers camera, object and skinned motion.
 // At the swap, the FSR output is composited with the UI (where the front buffer

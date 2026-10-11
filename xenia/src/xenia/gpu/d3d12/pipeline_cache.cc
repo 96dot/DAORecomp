@@ -3209,6 +3209,8 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
     state_desc.BlendState.IndependentBlendEnable = true;
     const bool alpha_blend_factor_supported =
         command_processor_.GetD3D12Provider().IsAlphaBlendFactorSupported();
+    // 16 entries since 4 bits from the pipeline storage file are passed
+    // directly.
     const D3D12_BLEND kBlendFactorMap[] = {
         D3D12_BLEND_ZERO,
         D3D12_BLEND_ONE,
@@ -3227,6 +3229,7 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
                                      : D3D12_BLEND_BLEND_FACTOR,
         alpha_blend_factor_supported ? D3D12_BLEND_INV_ALPHA_FACTOR
                                      : D3D12_BLEND_INV_BLEND_FACTOR,
+        D3D12_BLEND_ZERO,
     };
     // 8 entries for safety since 3 bits from the guest are passed directly.
     static constexpr D3D12_BLEND_OP kBlendOpMap[] = {

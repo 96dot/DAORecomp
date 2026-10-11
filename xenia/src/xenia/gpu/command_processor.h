@@ -221,6 +221,10 @@ class CommandProcessor {
   }
 
   void WorkerThreadMain();
+  bool HasPendingFns() {
+    std::lock_guard<std::mutex> lock(pending_fns_mutex_);
+    return !pending_fns_.empty();
+  }
   virtual bool SetupContext() = 0;
   virtual void ShutdownContext() = 0;
   // rarely needed, most register writes have no special logic here
@@ -595,10 +599,6 @@ class CommandProcessor {
   // Functions to run on the worker thread, queued from any thread.
   std::mutex pending_fns_mutex_;
   std::queue<std::function<void()>> pending_fns_;
-  bool HasPendingFns() {
-    std::lock_guard<std::mutex> lock(pending_fns_mutex_);
-    return !pending_fns_.empty();
-  }
 
   // MicroEngine binary from PM4_ME_INIT
   std::vector<uint32_t> me_bin_;

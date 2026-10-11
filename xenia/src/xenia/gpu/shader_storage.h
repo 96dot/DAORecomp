@@ -134,20 +134,23 @@ inline bool WriteShaderStorageHeader(FILE* file) {
 //                                  uint32_t ucode_dword_count,
 //                                  uint64_t ucode_data_hash)
 // Callback should return true to continue reading, false to stop.
+// Far more than any Xenos shader: larger counts are corruption.
+constexpr uint32_t kMaxStoredUcodeDwords = 0xFFFF;
+
 template <typename Callback>
 inline uint64_t ReadShaderEntries(FILE* file, Callback&& callback) {
   uint64_t valid_bytes = sizeof(ShaderStorageFileHeader);
 
   ShaderStoredHeader shader_header;
   std::vector<uint32_t> ucode_dwords;
-  ucode_dwords.reserve(0xFFFF);
+  ucode_dwords.reserve(kMaxStoredUcodeDwords);
 
   while (true) {
     if (!fread(&shader_header, sizeof(shader_header), 1, file)) {
       break;
     }
-    // Far more than any Xenos shader: a corrupted entry (not resized to).
-    if (shader_header.ucode_dword_count > 0xFFFF) {
+    // Checked before resizing to it.
+    if (shader_header.ucode_dword_count > kMaxStoredUcodeDwords) {
       break;
     }
     size_t ucode_byte_count =
@@ -463,7 +466,7 @@ class ShaderStorageWriter {
     std::memset(&shader_header, 0, sizeof(shader_header));
 
     std::vector<uint32_t> ucode_guest_endian;
-    ucode_guest_endian.reserve(0xFFFF);
+    ucode_guest_endian.reserve(kMaxStoredUcodeDwords);
 
     bool flush_shaders = false;
     bool flush_pipelines = false;

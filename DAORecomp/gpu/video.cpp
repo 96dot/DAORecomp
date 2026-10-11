@@ -246,10 +246,11 @@ namespace dao::imp
 // vblank (last flip + interval). The game presents its 3D scenes with interval 2,
 // i.e. at 30 fps; clamping the interval to 1 lets them flip on every vblank.
 // A late flip (its vblank passed) waits for the next vblank unless less of the
-// current one has passed than the threshold (percent): with the threshold at 100,
-// late frames are shown right away instead of dropping to the next vblank (no
-// tearing here: the host presents with its own vsync), so a frame taking a bit
-// longer than a vblank costs that bit rather than a whole vblank.
+// current one has passed than the threshold (percent): with the threshold at 100
+// (set for interval 1 presents too), late frames are shown right away instead of
+// dropping to the next vblank, so a frame taking a bit longer than a vblank costs
+// that bit rather than a whole vblank. The guest flip only chooses which frame
+// the host presents next; tearing is up to the host's own vsync setting.
 extern "C" PPC_FUNC(__imp__sub_82CD4218);
 PPC_FUNC(sub_82CD4218)
 {

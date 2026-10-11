@@ -701,7 +701,7 @@ void DaoUpscalerImpl::DestroyContext() {
   // at swaps, which end their submissions) and which this may be called in the
   // middle of: ending it would drop the rest of the frame's commands.
   const uint64_t current_submission = cp_.GetCurrentSubmission();
-  if (current_submission > 1) {
+  if (current_submission > 1) {  // Otherwise nothing was submitted yet.
     cp_.CheckSubmissionCompletion(current_submission - 1);
   }
   ffx_destroy_(&context_, nullptr);
@@ -1130,7 +1130,7 @@ void DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
       for (size_t i = 0; i < constants.size(); ++i) {
         distance += std::abs(std::bit_cast<float>(constants[i]) -
                              std::bit_cast<float>(candidate.constants[i]));
-        // Checked every 4 registers.
+        // Checked every 16 floats (4 registers).
         if ((i & 15) == 15 && !(distance < best_distance)) {
           return;
         }

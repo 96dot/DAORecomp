@@ -88,13 +88,13 @@ saves, logs, and the shader cache) and `mods/`.
 
   Linux support is untested so far. The program needs Wine's support for placeholder
   memory views (`VirtualAlloc2`/`MapViewOfFile3`) and Direct3D 12 through vkd3d-proton.
+  FSR 4 needs AMD's Windows driver and is unlikely to work under Proton; choose FSR 3.1
+  in the launcher.
 
 Shaders are compiled the first time something is drawn, and that draw is skipped
 until then, so new places can show objects popping in for a moment. Compiled shaders
 are kept in `userdata/shader_cache/` and compiled again in the background at every
 start, so this happens once per place.
-  FSR 4 needs AMD's Windows driver and is unlikely to work under Proton; choose FSR 3.1
-  in the launcher.
 
 ## Developing
 
