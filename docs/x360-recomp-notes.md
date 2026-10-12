@@ -4,6 +4,9 @@ What this project (Dragon Age: Origins, title 454108C0, XenonRecomp + a custom r
 taught us that should carry over to the next Xbox 360 game. Addresses given as examples
 are DAO's; the patterns are what matter.
 
+The step-by-step plan for the next port (what to reuse, how each hook was found, test
+recipes) is in [porting-playbook.md](porting-playbook.md).
+
 ## Order of work that worked
 
 1. Decrypt the XEX, recompile, and get the generated C++ to build with zero warnings
