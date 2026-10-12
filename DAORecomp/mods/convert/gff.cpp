@@ -41,6 +41,26 @@ namespace dao::mods::gff
                 std::reverse(data + i, data + i + component);
         }
 
+        // The flags a value of (type, flags) is read and written with: a generic field
+        // is always an inline (typeflags, ref) pair.
+        uint16_t SlotFlags(uint16_t type, uint16_t flags)
+        {
+            return type == kGeneric && !(flags & kList) ? 0 : flags;
+        }
+
+        // A list's items' flags: generic list elements are (typeflags, ref) pairs
+        // whatever the field's other flags say.
+        uint16_t ItemFlags(uint16_t type, uint16_t flags)
+        {
+            return type == kGeneric ? 0 : uint16_t(flags & ~kList);
+        }
+
+        // A list of u8s is packed: its count, then its bytes (Value::Kind::Bytes).
+        bool IsByteList(uint16_t type, uint16_t itemFlags)
+        {
+            return type == kU8 && !itemFlags;
+        }
+
         class Reader
         {
         public:
@@ -56,8 +76,7 @@ namespace dao::mods::gff
                 if (depth > kMaxDepth)
                     throw Malformed("nested too deeply");
                 Spend(sizeof(Value));
-                if (type == kGeneric && !(flags & kList))
-                    flags = 0;   // A generic field is always an inline (typeflags, ref) pair.
+                flags = SlotFlags(type, flags);
 
                 Value value;
                 if (flags & kList)
@@ -67,9 +86,8 @@ namespace dao::mods::gff
                         return value;
                     const uint64_t base = uint64_t(dataOffset_) + ref;
                     const uint32_t count = U32(base);
-                    // Generic list elements are (typeflags, ref) pairs whatever the field's other flags say.
-                    const uint16_t sub = type == kGeneric ? 0 : uint16_t(flags & ~kList);
-                    if (type == kU8 && !sub)
+                    const uint16_t sub = ItemFlags(type, flags);
+                    if (IsByteList(type, sub))
                     {
                         Need(base + 4, count);
                         Spend(count);
@@ -237,14 +255,13 @@ namespace dao::mods::gff
             {
                 if (depth > kMaxDepth)
                     throw Malformed("nested too deeply");
-                if (type == kGeneric && !(flags & kList))
-                    flags = 0;
+                flags = SlotFlags(type, flags);
                 if (flags & kList)
                 {
                     if (v.kind == Value::Kind::Null)
                         return Put32(at, kNull);
-                    const uint16_t sub = type == kGeneric ? 0 : uint16_t(flags & ~kList);
-                    if (type == kU8 && !sub)
+                    const uint16_t sub = ItemFlags(type, flags);
+                    if (IsByteList(type, sub))
                     {
                         const std::vector<uint8_t> empty;
                         const std::vector<uint8_t>& bytes = v.kind == Value::Kind::Bytes ? v.bytes : empty;
