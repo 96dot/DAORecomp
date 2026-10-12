@@ -292,7 +292,7 @@ namespace dao::kernel
                 {
                     const uint64_t now = SystemTime100ns();
                     static_cast<GuestThread*>(thread.get())->apcQueue.push_back(
-                        { timer->apcRoutine, timer->apcContext, uint32_t(now), uint32_t(now >> 32) });
+                        { 0, timer->apcRoutine, timer->apcContext, uint32_t(now), uint32_t(now >> 32), 0 });
                     NotifyDispatcher(*thread);
                 }
             }

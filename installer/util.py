@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tarfile
 import threading
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -17,6 +18,10 @@ HOST = "windows" if IS_WINDOWS else "linux"
 EXE = ".exe" if IS_WINDOWS else ""
 # Running as the bundled installer executable (PyInstaller).
 FROZEN = getattr(sys, "frozen", False)
+
+if IS_WINDOWS:
+    # Programs run by name are found on PATH only, never in the current folder.
+    os.environ["NoDefaultCurrentDirectoryInExePath"] = "1"
 
 
 def _work_root():
@@ -162,30 +167,59 @@ def download(reporter, dl, dest_dir):
         reporter.log(f"{name}: already downloaded")
         return path
     partial = path.with_name(name + ".part")
+    have = partial.stat().st_size if partial.exists() else 0
+    if have >= dl.size:
+        # Complete (an earlier run stopped before checking it), or too long to be it.
+        if have == dl.size and sha256_file(partial) == dl.sha256:
+            partial.replace(path)
+            return path
+        partial.unlink()
+        have = 0
     reporter.log(f"Downloading {dl.url} ({dl.size / 2**20:.0f} MB)")
     request = urllib.request.Request(dl.url, headers={"User-Agent": "dao-recomp-installer"})
-    have = partial.stat().st_size if partial.exists() else 0
-    if 0 < have < dl.size:
+    if have:
         request.add_header("Range", f"bytes={have}-")
-    with urllib.request.urlopen(request, timeout=60) as response:
-        if have and response.status != 206:
-            have = 0  # the server ignored the range; start over
-        with open(partial, "ab" if have else "wb") as out:
-            done, last = have, -1
-            while chunk := response.read(1 << 20):
-                out.write(chunk)
-                done += len(chunk)
-                reporter.progress(min(done / dl.size, 1.0))
-                percent = done * 100 // dl.size
-                if percent // 10 != last:
-                    last = percent // 10
-                    reporter.log(f"  {percent}%")
-                reporter.check_cancel()
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            if have and response.status != 206:
+                have = 0  # the server ignored the range; start over
+            with open(partial, "ab" if have else "wb") as out:
+                done, last = have, -1
+                while chunk := response.read(1 << 20):
+                    done += len(chunk)
+                    if done > dl.size:
+                        raise InstallError(f"{name}: the download is larger than it should be. Try again later.")
+                    out.write(chunk)
+                    reporter.progress(done / dl.size)
+                    percent = done * 100 // dl.size
+                    if percent // 10 != last:
+                        last = percent // 10
+                        reporter.log(f"  {percent}%")
+                    reporter.check_cancel()
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        # What arrived is kept: running again carries on from there.
+        raise InstallError(f"Can't download {name} ({getattr(e, 'reason', e)}). Check the internet connection "
+                           f"and try again.")
     if sha256_file(partial) != dl.sha256:
         partial.unlink()
         raise InstallError(f"{name}: checksum mismatch (download corrupted or changed upstream). Try again.")
     partial.replace(path)
     return path
+
+
+def _plain_member(member):
+    """Whether a tar entry is a file, folder or link that stays inside the folder."""
+    def inside(name):
+        path = Path(name)
+        return (bool(name) and not name.startswith(("/", "\\")) and not path.is_absolute() and not path.drive
+                and ".." not in path.parts)
+    if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
+        return False
+    if not inside(member.name):
+        return False
+    if member.issym():
+        return inside(os.path.normpath(os.path.join(os.path.dirname(member.name), member.linkname)))
+    return not member.islnk() or inside(member.linkname)
 
 
 def extract(reporter, archive, top_dir, dest):
@@ -219,6 +253,9 @@ def extract(reporter, archive, top_dir, dest):
                 if hasattr(tarfile, "data_filter"):
                     tar.extract(member, staging, filter="data")
                 else:
+                    # An older Python: the "data" filter's main checks by hand.
+                    if not _plain_member(member):
+                        raise InstallError(f"{archive.name}: unsafe entry {member.name}")
                     tar.extract(member, staging)
                 if i % 200 == 0:
                     reporter.progress(i / len(members))

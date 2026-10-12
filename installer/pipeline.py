@@ -5,14 +5,15 @@ import os
 import re
 import shutil
 import struct
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import deps, shortcuts, sources, toolchain
-from .util import (EXE, FROZEN, IS_WINDOWS, REPO, SOURCE, VERSION, InstallError, check_host, clean_env, human_size,
-                   run)
+from .util import (EXE, FROZEN, GIT, IS_WINDOWS, REPO, SOURCE, VERSION, InstallError, check_host, clean_env,
+                   human_size, run)
 
 sys.path.insert(0, str(SOURCE / "scripts"))
 import patch_recompiler  # noqa: E402
@@ -45,14 +46,34 @@ class Options:
 SOURCE_MANIFEST = "dao-source-files.txt"
 
 
-def sync_source(reporter):
-    """The executable carries the project source; copy it into the work folder, changing
-    only files that differ (so rebuilds stay incremental) and removing ones it dropped."""
-    if not FROZEN or SOURCE == REPO:
-        return
+def _source_files():
+    """The project's files under SOURCE, as relative POSIX paths."""
+    if FROZEN:
+        files = (p.relative_to(SOURCE).as_posix() for p in SOURCE.rglob("*") if p.is_file())
+    else:
+        # A checkout: only its tracked files (never the game's, nor builds).
+        out = subprocess.run([*GIT, "-C", str(SOURCE), "ls-files", "-z"], capture_output=True, check=True,
+                             creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0).stdout
+        files = (rel for rel in out.decode("utf-8").split("\0") if rel and (SOURCE / rel).is_file())
     # Not VERSION: the executable's own (util.VERSION), which doesn't belong in a checkout.
-    files = sorted(rel for p in SOURCE.rglob("*") if p.is_file() and (rel := p.relative_to(SOURCE).as_posix())
-                   != "VERSION")
+    return sorted(rel for rel in files if rel != "VERSION")
+
+
+def _plain_relative(rel):
+    path = Path(rel)
+    return (bool(rel) and not rel.startswith(("/", "\\")) and not path.is_absolute() and not path.drive
+            and ".." not in path.parts)
+
+
+def sync_source(reporter):
+    """Copies the project source into the work folder (when that is somewhere else), changing
+    only files that differ (so rebuilds stay incremental) and removing ones it dropped."""
+    if SOURCE.resolve() == REPO.resolve():
+        return
+    try:
+        files = _source_files()
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise InstallError(f"Can't list the project's files in {SOURCE}: {e}")
     REPO.mkdir(parents=True, exist_ok=True)
     manifest = REPO / SOURCE_MANIFEST
     old = set(manifest.read_text(encoding="utf-8").splitlines()) if manifest.exists() else set()
@@ -60,12 +81,15 @@ def sync_source(reporter):
     for rel in files:
         src, dst = SOURCE / rel, REPO / rel
         data = src.read_bytes()
-        if not dst.exists() or dst.read_bytes() != data:
+        # (The size first: most files are unchanged, and then only the source is read.)
+        if not dst.is_file() or dst.stat().st_size != len(data) or dst.read_bytes() != data:
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(data)
             changed += 1
-    for rel in old - set(files) - {""}:
-        (REPO / rel).unlink(missing_ok=True)
+    # The manifest is only ever this function's, but a damaged one mustn't reach outside.
+    for rel in old - set(files):
+        if _plain_relative(rel):
+            (REPO / rel).unlink(missing_ok=True)
     manifest.write_text("\n".join(files), encoding="utf-8")
     reporter.log(f"Source: {len(files)} files in {REPO} ({changed} updated)")
 
@@ -77,8 +101,7 @@ def _iso_xex_sha1(iso):
         base, entries = xiso.read_entries(f)
         for path, is_dir, sector, size in entries:
             if path.lower() == "default.xex" and not is_dir:
-                f.seek(base + sector * xiso.SECTOR)
-                return hashlib.sha1(f.read(size)).hexdigest()
+                return xiso.hash_file(f, base, sector, size)
     return None
 
 
@@ -168,6 +191,7 @@ def title_update_installed(update):
 
 def install_title_update(reporter, package, update):
     """Extracts Title Update 6's package (the player's file, checked first) into title_update/."""
+    work = update.with_name(update.name + ".partial")
     try:
         with stfs.Package(package) as pkg:
             if pkg.title_id != deps.GAME_TITLE_ID or pkg.content_type != stfs.CONTENT_INSTALLER:
@@ -175,7 +199,6 @@ def install_title_update(reporter, package, update):
             if pkg.media_id != deps.GAME_MEDIA_ID:
                 raise InstallError(f"{package.name} is the title update for another edition of the game (disc "
                                    f"{pkg.media_id:08X}); yours needs the one for disc {deps.GAME_MEDIA_ID:08X}.")
-            work = update.with_name(update.name + ".partial")
             if work.exists():
                 shutil.rmtree(work)
             reporter.log(f"Extracting {pkg.display_name} ({len(pkg.files)} files) to {update}")
@@ -193,9 +216,14 @@ def install_title_update(reporter, package, update):
     if not xexp.is_file() or _file_sha1(xexp) != deps.TU6_XEXP_SHA1:
         shutil.rmtree(work)
         raise InstallError(f"{package.name} is not Title Update 6, the one this recompilation is made for.")
+    # The old one aside first, so an interruption leaves one of them in place.
+    old = update.with_name(update.name + ".old")
+    if old.exists():
+        shutil.rmtree(old)
     if update.exists():
-        shutil.rmtree(update)
+        update.rename(old)
     work.rename(update)
+    shutil.rmtree(old, ignore_errors=True)
 
 
 def _existing_parent(path):
@@ -260,6 +288,8 @@ def recompile(reporter, recompiler, game, update=None):
     name = "ppc_tu6" if update else "ppc"
     config_name = "DAO_tu6" if update else "DAO"
     out = BUILD / f"{name}_gen"
+    for stale in BUILD.glob(f"{out.name}.old-*"):  # (from runs whose rmtree couldn't finish)
+        shutil.rmtree(stale, ignore_errors=True)
     if out.exists():
         # Renamed first: Windows can finish deleting a folder after rmtree returns
         # (a scanner holding a file), and recreating it then fails.
@@ -321,12 +351,22 @@ exec "${WINE:-wine}" DAORecomp.exe "$@"
 """
 
 
+def _copy_over(src, dst):
+    """Copies src over dst whole or not at all: next to it first, then swapped in."""
+    new = dst.with_name(dst.name + ".new")
+    try:
+        shutil.copy2(src, new)
+        os.replace(new, dst)
+    finally:
+        new.unlink(missing_ok=True)
+
+
 def _copy_when_free(reporter, src, dst, wait=30.0, interval=0.5):
     """Copies over dst, waiting up to `wait` seconds while it's in use (the launcher
     closing after starting an update)."""
     for attempt in range(int(wait / interval)):
         try:
-            shutil.copy2(src, dst)
+            _copy_over(src, dst)
             return
         except PermissionError:
             if attempt == 0:
@@ -341,7 +381,7 @@ def _replace_exe(reporter, built, exe):
     replaced, but lets it be renamed. Then the new exe deletes the old one
     (DAORecomp.old.exe) when it starts; if the copy fails, the old one is put back."""
     try:
-        shutil.copy2(built, exe)
+        _copy_over(built, exe)
         return
     except PermissionError:
         if not IS_WINDOWS:
@@ -408,7 +448,8 @@ def build_setup(reporter, engine, out, jobs=0):
         raise InstallError("The launcher-only exe is built on Windows.")
     toolchain.ensure_git(reporter)
     sources.ensure_all(reporter)
-    tc = toolchain.ensure_toolchain(reporter, True)
+    # (The pinned LLVM, never one the build machine happens to have.)
+    tc = toolchain.ensure_toolchain(reporter, True, "download")
     build = BUILD / "setup"
     _configure(reporter, tc, REPO, build, {"DAO_LAUNCHER_ONLY": "ON", "DAO_VERSION": VERSION})
     _build(reporter, tc, build, "DAORecomp", jobs)

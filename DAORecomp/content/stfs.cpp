@@ -301,7 +301,9 @@ namespace dao::content
                 else
                 {
                     total += length;
-                    if (total > uint64_t(m_totalBlocks) << 12)
+                    // (No more than the package holds: a chain looping on one block
+                    // would otherwise be read over and over.)
+                    if (total > std::min(uint64_t(m_totalBlocks) << 12, m_size - m_base))
                     {
                         error = "damaged (bad file size)";
                         return false;
@@ -320,6 +322,16 @@ namespace dao::content
         std::error_code ec;
         // Up to a level-0 table's blocks at a time, where a file's blocks are in order.
         std::vector<uint8_t> buffer(size_t(kLevels[0]) * kBlock);
+        uint64_t total = 0;
+        for (const StfsFile& file : files)
+            total += file.size;
+        // A gigabyte to spare, as mods::Extract keeps.
+        const fs::space_info space = fs::space(into, ec);
+        if (!ec && space.available < total + (uint64_t(1) << 30))
+        {
+            error = "not enough free space";
+            return false;
+        }
         for (const StfsFile& file : files)
         {
             if (stop.stop_requested())
@@ -341,6 +353,12 @@ namespace dao::content
             bool ok = true;
             while (ok && left > 0)
             {
+                if (stop.stop_requested())
+                {
+                    error = "stopped";
+                    ok = false;
+                    break;
+                }
                 uint32_t count = 1;
                 if (file.contiguous)
                 {

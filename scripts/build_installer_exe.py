@@ -17,7 +17,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 WORK = REPO / "build" / "installer-exe"
-PYINSTALLER = "pyinstaller==6.22.3"
+# PyInstaller and its dependencies, pinned by hash.
+REQUIREMENTS = REPO / "scripts" / "installer-requirements.txt"
 NAME = "DAORecomp-Installer"
 
 
@@ -51,7 +52,8 @@ def main():
     python = env_dir / "Scripts" / "python.exe"
     if not python.exists():
         venv.EnvBuilder(with_pip=True).create(env_dir)
-    subprocess.run([python, "-m", "pip", "install", "-q", "--disable-pip-version-check", PYINSTALLER], check=True)
+    subprocess.run([python, "-m", "pip", "install", "-q", "--disable-pip-version-check", "--require-hashes",
+                    "--only-binary=:all:", "-r", REQUIREMENTS], check=True)
 
     subprocess.run([
         python, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--console",
@@ -60,6 +62,7 @@ def main():
         # The helper scripts the installer imports from the bundled source at run time.
         "--paths", REPO / "scripts",
         "--hidden-import", "xiso", "--hidden-import", "sync_dir", "--hidden-import", "patch_recompiler",
+        "--hidden-import", "stfs", "--hidden-import", "prefix_symbols",
         "--add-data", f"{staging}{os.pathsep}source",
         REPO / "install.py",
     ], check=True)

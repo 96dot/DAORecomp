@@ -268,29 +268,38 @@ def write_if_changed(path, text):
     return True
 
 
-def patch_context(path):
+def read(path):
+    return open(path, encoding='utf-8').read()
+
+
+def patch_file(path, transform):
+    """Writes transform(original) to path. The original is kept next to it as .orig, for as
+    long as the file is still that original or its patched form: a checkout of another
+    version replaces the file, and that version becomes the original."""
     orig = path + '.orig'
-    if not os.path.exists(orig):
+    current = read(path)
+    if not os.path.exists(orig) or current not in (read(orig), transform(read(orig))):
         shutil.copyfile(path, orig)
-    s = open(orig, encoding='utf-8').read()
-    assert s.count(CONTEXT_ANCHOR) == 1, 'ppc_context anchor'
-    if write_if_changed(path, s.replace(CONTEXT_ANCHOR, CONTEXT_ADDITION)):
+    if write_if_changed(path, transform(read(orig))):
         print('patched', path)
+
+
+def patch_context_text(s):
+    assert s.count(CONTEXT_ANCHOR) == 1, 'ppc_context anchor'
+    return s.replace(CONTEXT_ANCHOR, CONTEXT_ADDITION)
+
+
+def patch_recompiler_text(s):
+    for needle in (ANCHOR, OLD_VCMPBFP, OLD_BDNZF, OLD_MFTB):
+        assert s.count(needle) == 1, needle[:60]
+    s = s.replace(OLD_VCMPBFP, '').replace(OLD_BDNZF, NEW_BDNZF).replace(OLD_MFTB, NEW_MFTB)
+    return s.replace(ANCHOR, NEW_CASES + ANCHOR)
 
 
 def patch(path):
     """Patches recompiler.cpp at path (and XenonUtils/ppc_context.h next to it)."""
-    orig = path + '.orig'
-    if not os.path.exists(orig):
-        shutil.copyfile(path, orig)
-    s = open(orig, encoding='utf-8').read()
-    for needle in (ANCHOR, OLD_VCMPBFP, OLD_BDNZF, OLD_MFTB):
-        assert s.count(needle) == 1, needle[:60]
-    s = s.replace(OLD_VCMPBFP, '').replace(OLD_BDNZF, NEW_BDNZF).replace(OLD_MFTB, NEW_MFTB)
-    s = s.replace(ANCHOR, NEW_CASES + ANCHOR)
-    if write_if_changed(path, s):
-        print('patched', path)
-    patch_context(os.path.join(os.path.dirname(path), '..', 'XenonUtils', 'ppc_context.h'))
+    patch_file(path, patch_recompiler_text)
+    patch_file(os.path.join(os.path.dirname(path), '..', 'XenonUtils', 'ppc_context.h'), patch_context_text)
 
 
 def main():

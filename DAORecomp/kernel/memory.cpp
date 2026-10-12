@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "memory.h"
 #include "types.h"
+#include "gpu/xenia_host.h"
 
 namespace dao::kernel
 {
@@ -86,10 +87,10 @@ namespace dao::kernel
         DWORD oldProtect;
         VirtualProtect(base, 0x10000, PAGE_NOACCESS, &oldProtect);
 
-        s_heap4K.Init("v00000000", 0x00000000, 0x40000000, 0x1000);
+        s_heap4K.Init("v00000000", 0x00000000, 0x40000000, 0x1000, 0x00000000);
         s_heap4K.AllocFixed(0, 0x10000, false, X_PAGE_NOACCESS);
-        s_heap64K.Init("v40000000", 0x40000000, 0x3F000000, 0x10000);
-        s_physical.Init("physical", 0x00000000, uint32_t(kPhysicalSize), 0x1000);
+        s_heap64K.Init("v40000000", 0x40000000, 0x3F000000, 0x10000, 0x40000000);
+        s_physical.Init("physical", 0x00000000, uint32_t(kPhysicalSize), 0x1000, 0xA0000000);
         s_physical.AllocFixed(0x1FFF0000, 0x10000, false, X_PAGE_NOACCESS);
 
         // Fill the recompiled-function lookup table.
@@ -110,13 +111,42 @@ namespace dao::kernel
 
     // ---------------------------------------------------------------- PageHeap
 
-    void PageHeap::Init(const char* name, uint32_t base, uint32_t size, uint32_t pageSize)
+    void PageHeap::Init(const char* name, uint32_t base, uint32_t size, uint32_t pageSize, uint32_t view)
     {
         m_name = name;
         m_base = base;
         m_size = size;
         m_pageSize = pageSize;
+        m_view = view;
         m_pages.assign(size / pageSize, Page{});
+    }
+
+    void PageHeap::Commit(size_t i, ZeroList& zero)
+    {
+        auto& page = m_pages[i];
+        if (page.state == 2)
+            return;
+        m_committedPages++;
+        if (page.everCommitted)
+        {
+            if (!zero.empty() && zero.back().first + zero.back().second == i)
+                zero.back().second++;
+            else
+                zero.push_back({ i, 1 });
+        }
+        page.everCommitted = 1;
+        page.state = 2;
+    }
+
+    void PageHeap::ZeroPages(const ZeroList& zero)
+    {
+        for (const auto& [first, count] : zero)
+        {
+            const uint32_t address = m_view + uint32_t(first * m_pageSize);
+            const uint32_t length = uint32_t(count * m_pageSize);
+            dao::gpu::PrepareGuestWrite(address, length);
+            memset(g_memory.Translate(address), 0, length);
+        }
     }
 
     bool PageHeap::RangeFree(size_t first, size_t count) const
@@ -127,7 +157,7 @@ namespace dao::kernel
         return true;
     }
 
-    void PageHeap::Mark(size_t first, size_t count, bool commit, uint32_t protect)
+    void PageHeap::Mark(size_t first, size_t count, bool commit, uint32_t protect, ZeroList& zero)
     {
         for (size_t i = first; i < first + count; i++)
         {
@@ -136,15 +166,7 @@ namespace dao::kernel
             page.allocPages = i == first ? uint32_t(count) : 0;
             page.protect = uint16_t(protect);
             if (commit)
-            {
-                if (page.state != 2)
-                    m_committedPages++;
-                if (!page.everCommitted)
-                    page.everCommitted = 1;
-                else if (page.state != 2)
-                    memset(g_memory.Translate(m_base + uint32_t(i) * m_pageSize), 0, m_pageSize);
-                page.state = 2;
-            }
+                Commit(i, zero);
             else if (page.state == 0)
             {
                 page.state = 1;
@@ -158,6 +180,15 @@ namespace dao::kernel
         if (size == 0)
             return 0;
 
+        ZeroList zero;
+        const uint32_t address = AllocLocked(size, alignment, commit, protect, topDown, low, high, zero);
+        ZeroPages(zero);
+        return address;
+    }
+
+    uint32_t PageHeap::AllocLocked(uint32_t size, uint32_t alignment, bool commit, uint32_t protect, bool topDown,
+        uint32_t low, uint32_t high, ZeroList& zero)
+    {
         std::lock_guard lock(m_mutex);
         const size_t count = (size_t(size) + m_pageSize - 1) / m_pageSize;
         const size_t align = std::max<size_t>(1, alignment / m_pageSize);
@@ -173,7 +204,7 @@ namespace dao::kernel
             {
                 if (!RangeFree(first, count))
                     return false;
-                Mark(first, count, commit, protect);
+                Mark(first, count, commit, protect, zero);
                 return true;
             };
 
@@ -203,6 +234,14 @@ namespace dao::kernel
 
     bool PageHeap::AllocFixed(uint32_t address, uint32_t size, bool commit, uint32_t protect)
     {
+        ZeroList zero;
+        const bool ok = AllocFixedLocked(address, size, commit, protect, zero);
+        ZeroPages(zero);
+        return ok;
+    }
+
+    bool PageHeap::AllocFixedLocked(uint32_t address, uint32_t size, bool commit, uint32_t protect, ZeroList& zero)
+    {
         std::lock_guard lock(m_mutex);
         const size_t first = (address - m_base) / m_pageSize;
         const size_t last = (size_t(address) + size - 1 - m_base) / m_pageSize;
@@ -223,21 +262,14 @@ namespace dao::kernel
             // Within an existing allocation: just change state/protection.
             for (size_t i = first; i <= last; i++)
             {
-                auto& page = m_pages[i];
-                if (commit && page.state != 2)
-                {
-                    if (page.everCommitted)
-                        memset(g_memory.Translate(m_base + uint32_t(i) * m_pageSize), 0, m_pageSize);
-                    page.everCommitted = 1;
-                    page.state = 2;
-                    m_committedPages++;
-                }
-                page.protect = uint16_t(protect);
+                if (commit)
+                    Commit(i, zero);
+                m_pages[i].protect = uint16_t(protect);
             }
             return true;
         }
 
-        Mark(first, last - first + 1, commit, protect);
+        Mark(first, last - first + 1, commit, protect, zero);
         return true;
     }
 
@@ -435,16 +467,15 @@ namespace dao::kernel
     {
         const uint32_t align = std::max(alignment, pageSize);
         const uint32_t rounded = (size + pageSize - 1) & ~(pageSize - 1);
+        if (!rounded)
+            return 0; // nothing asked for, or a size that wraps
         const uint32_t viewBase = ViewBaseForPageSize(pageSize);
         if (viewBase == 0xE0000000)
             minPhys = std::max<uint32_t>(minPhys, 0x1000); // physical page 0 has no 0xE alias
         const uint32_t phys = s_physical.Alloc(rounded, align, true, protect, true, minPhys,
             std::min<uint32_t>(maxPhys, uint32_t(kPhysicalSize - 1)));
-        if (!phys && rounded)
-        {
-            // The 0x1FFF0000 guard page makes a top-down search start just below it.
+        if (!phys)
             return 0;
-        }
         return viewBase == 0xE0000000 ? viewBase + phys - 0x1000 : viewBase + phys;
     }
 

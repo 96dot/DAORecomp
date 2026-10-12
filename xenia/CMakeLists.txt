@@ -16,7 +16,7 @@ get_filename_component(XE_TP_PARENT ${XE_TP} DIRECTORY)
 # Sources of one Xenia directory, filtered like Xenia's xe_platform_sources: no
 # tests/mains/demos, only the Windows and x64 variants of platform files.
 function(dao_xenia_sources target dir)
-    file(GLOB _all ${dir}/*.cc ${dir}/*.cpp ${dir}/*.c ${dir}/*.h ${dir}/*.inc)
+    file(GLOB _all CONFIGURE_DEPENDS ${dir}/*.cc ${dir}/*.cpp ${dir}/*.c ${dir}/*.h ${dir}/*.inc)
     set(_sources)
     foreach(src ${_all})
         get_filename_component(_name ${src} NAME_WE)

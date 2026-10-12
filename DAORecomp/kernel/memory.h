@@ -67,11 +67,14 @@ namespace dao::kernel
     extern GuestMemory g_memory;
 
     // Page-granular allocator over one guest range. All memory is host-committed up
-    // front; "reserve" vs "commit" is bookkeeping (plus zeroing on first commit).
+    // front; "reserve" vs "commit" is bookkeeping, plus zeroing when a page is committed
+    // again (a first commit gets fresh, zeroed host pages).
     class PageHeap
     {
     public:
-        void Init(const char* name, uint32_t base, uint32_t size, uint32_t pageSize);
+        // view: the guest address that page 0 is reached at (for zeroing), when the heap's
+        // addresses aren't guest addresses themselves (the physical heap's).
+        void Init(const char* name, uint32_t base, uint32_t size, uint32_t pageSize, uint32_t view);
 
         // Returns 0 on failure.
         uint32_t Alloc(uint32_t size, uint32_t alignment, bool commit, uint32_t protect, bool topDown,
@@ -110,12 +113,22 @@ namespace dao::kernel
             uint8_t everCommitted = 0;
         };
 
+        // Runs of pages (first, count) committed again, zeroed by ZeroPages once the lock is
+        // released: the zeroing can hit pages the GPU watches, and its handler takes Xenia's
+        // lock, which is held around calls into this heap.
+        using ZeroList = std::vector<std::pair<size_t, size_t>>;
+
         bool RangeFree(size_t first, size_t count) const;
-        void Mark(size_t first, size_t count, bool commit, uint32_t protect);
+        void Mark(size_t first, size_t count, bool commit, uint32_t protect, ZeroList& zero);
+        uint32_t AllocLocked(uint32_t size, uint32_t alignment, bool commit, uint32_t protect, bool topDown,
+            uint32_t low, uint32_t high, ZeroList& zero);
+        bool AllocFixedLocked(uint32_t address, uint32_t size, bool commit, uint32_t protect, ZeroList& zero);
+        void Commit(size_t i, ZeroList& zero);
+        void ZeroPages(const ZeroList& zero);
 
         std::mutex m_mutex;
         const char* m_name = "";
-        uint32_t m_base = 0, m_size = 0, m_pageSize = 0;
+        uint32_t m_base = 0, m_size = 0, m_pageSize = 0, m_view = 0;
         std::vector<Page> m_pages;
         uint64_t m_committedPages = 0;
     };

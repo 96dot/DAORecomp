@@ -54,7 +54,9 @@ def ensure_build_tools(reporter):
 
 def ensure_git(reporter):
     """Uses the installed git, or on Windows downloads a portable MinGit."""
-    if shutil.which("git"):
+    found = shutil.which("git")
+    if found:
+        util.GIT[:] = [found]
         return
     if not IS_WINDOWS:
         raise InstallError("git was not found. Install git and run this again.")
@@ -67,8 +69,8 @@ def ensure_git(reporter):
 LLVM_TOOLS = ["clang-cl", "lld-link", "llvm-lib", "llvm-rc"] + ([] if IS_WINDOWS else ["clang", "clang++"])
 
 
-def llvm_version(bindir):
-    """The major version of the LLVM in bindir if it has every tool the build needs."""
+def llvm_full_version(bindir):
+    """The version ("22.1.8") of the LLVM in bindir if it has every tool the build needs."""
     if not all((Path(bindir) / (t + EXE)).exists() for t in LLVM_TOOLS):
         return None
     try:
@@ -77,8 +79,14 @@ def llvm_version(bindir):
                              creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
-    match = re.search(r"clang version (\d+)", out)
-    return int(match.group(1)) if match else None
+    match = re.search(r"clang version (\d+(?:\.\d+)*)", out)
+    return match.group(1) if match else None
+
+
+def llvm_version(bindir):
+    """The major version of the LLVM in bindir if it has every tool the build needs."""
+    full = llvm_full_version(bindir)
+    return int(full.split(".")[0]) if full else None
 
 
 def _system_llvm_candidates():
@@ -112,11 +120,13 @@ def ensure_llvm(reporter, choice="auto"):
         return bindir
 
     pinned = LLVM_DIR / "bin"
-    version = llvm_version(pinned)
-    if version is not None:
+    version = llvm_full_version(pinned)
+    if version == deps.LLVM_VERSION:
         reporter.log(f"LLVM {version}: {pinned}")
         return pinned
-    if choice == "auto":
+    if version is not None:
+        reporter.log(f"LLVM {version} in {LLVM_DIR} is not the pinned {deps.LLVM_VERSION}.")
+    if choice == "auto" and version is None:
         for bindir in _system_llvm_candidates():
             version = llvm_version(bindir)
             if version is not None and version >= deps.LLVM_MIN_MAJOR:
@@ -128,7 +138,7 @@ def ensure_llvm(reporter, choice="auto"):
     dl = deps.LLVM[HOST]
     archive = download(reporter, dl, DOWNLOADS)
     extract(reporter, archive, dl.top_dir, LLVM_DIR)
-    if llvm_version(pinned) is None:
+    if llvm_full_version(pinned) != deps.LLVM_VERSION:
         raise InstallError(f"The LLVM download in {LLVM_DIR} lacks one of {', '.join(LLVM_TOOLS)}.")
     archive.unlink()
     return pinned
@@ -158,11 +168,7 @@ def ensure_winsysroot(reporter, accept_license):
                            f"({deps.MSVC_LICENSE_URL}) to continue.")
 
     xwin = XWIN_DIR / ("xwin" + EXE)
-    if not xwin.exists():
-        dl = deps.XWIN[HOST]
-        archive = download(reporter, dl, DOWNLOADS)
-        extract(reporter, archive, dl.top_dir, XWIN_DIR)
-        archive.unlink()
+    _ensure_download(reporter, deps.XWIN[HOST], XWIN_DIR, deps.XWIN_VERSION, "xwin")
 
     if WINSYSROOT.exists():
         shutil.rmtree(WINSYSROOT)

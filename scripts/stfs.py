@@ -42,14 +42,6 @@ def _text(raw):
     return "".join(c for c in text if c >= " " and c != "\x7f")
 
 
-def is_package(path):
-    try:
-        with open(path, "rb") as f:
-            return f.read(4) in MAGICS
-    except OSError:
-        return False
-
-
 class Package:
     def __init__(self, path):
         self.path = path
@@ -167,7 +159,9 @@ class Package:
                     dirs[index] = (path + "/", depth + 1)
                 else:
                     total += length
-                    if total > (self.total_blocks << 12):
+                    # (No more than the package holds: a chain looping on one block
+                    # would otherwise be read over and over.)
+                    if total > min(self.total_blocks << 12, self.size - self.base):
                         raise Error("damaged (bad file size)")
                     files.append((path, length, start, bool(flags & 0x40)))
                 index += 1

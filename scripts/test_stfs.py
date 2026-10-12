@@ -80,7 +80,7 @@ class Package:
         self.entries.append(e)
         return len(self.entries) - 1
 
-    def write(self, path, magic=b"LIVE", read_only=True, volume_type=0, cut=0):
+    def write(self, path, magic=b"LIVE", read_only=True, volume_type=0, cut=0, claimed_blocks=None):
         total = self.free
         h = bytearray(BASE)
         h[:4] = magic
@@ -93,7 +93,7 @@ class Package:
         vd[2] = 1 if read_only else 0
         vd[3:5] = (1).to_bytes(2, "little")
         vd[5:8] = (0).to_bytes(3, "little")
-        struct.pack_into(">I", vd, 0x1C, total)
+        struct.pack_into(">I", vd, 0x1C, claimed_blocks or total)
         h[0x379:0x379 + 0x24] = vd
         struct.pack_into(">I", h, 0x3A9, volume_type)
         name = "Test package".encode("utf-16-be")
@@ -170,6 +170,13 @@ def case_list():
     for i in range(3):
         p.file(f"same{i}", b"", start=1, size=3 * BLOCK)    # all on the same blocks
     cases.append(("files larger than the package", p, {}, "damaged (bad file size)"))
+
+    # One block chained to itself, in a package claiming far more blocks than it holds:
+    # read in a loop, it would write the claimed size.
+    p = Package()
+    p.file("loop", data(BLOCK, 6), contiguous=False, size=50 * BLOCK)
+    p.next[1] = 1
+    cases.append(("a chain looping on itself", p, {"claimed_blocks": 100000}, "damaged (bad file size)"))
 
     p = Package()
     p.file("f", data(BLOCK, 5), start=900)

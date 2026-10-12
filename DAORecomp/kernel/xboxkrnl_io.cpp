@@ -425,7 +425,10 @@ namespace dao::imp
                 b[1] = host.access;
                 b[2] = host.write;
                 b[3] = host.write;
-                b[4] = host.attributes;
+                // FileAttributes is a u32 at offset 32, then 4 bytes of padding.
+                auto* attributes = reinterpret_cast<u32*>(b + 4);
+                attributes[0] = host.attributes;
+                attributes[1] = 0;
             }
             break;
         case XFileStandardInformation:

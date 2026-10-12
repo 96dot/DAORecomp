@@ -20,8 +20,14 @@ mkdir build\%OUT%_gen
 rem XenonRecomp writes to out_directory_path from the TOML; point a temp copy at the _gen folder.
 powershell -NoProfile -Command "(Get-Content config\%CONFIG%.toml) -replace '^out_directory_path = .*', 'out_directory_path = \"../build/%OUT%_gen\"' | Set-Content config\%CONFIG%.gen.toml"
 tools\xexdump\build\XenonRecomp\XenonRecomp\XenonRecomp.exe config\%CONFIG%.gen.toml tools\XenonRecomp\XenonUtils\ppc_context.h > analysis\%LOG%.txt 2>&1
+set RC=%ERRORLEVEL%
 del config\%CONFIG%.gen.toml
 findstr /v /c:"Recompiling functions" analysis\%LOG%.txt
+rem A failed recompile leaves ppc\ as it was.
+if not "%RC%"=="0" (
+    echo XenonRecomp failed ^(exit code %RC%^)
+    exit /b %RC%
+)
 if /i "%~1"=="tu6" python -I scripts\prefix_symbols.py build\%OUT%_gen tu6 || exit /b 1
 python -I scripts\sync_dir.py build\%OUT%_gen %OUT%
 exit /b 0
