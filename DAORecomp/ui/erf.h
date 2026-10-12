@@ -1,6 +1,9 @@
 #pragma once
 // Reading the game's files: its ERF V2.1 archives (packages/*/data/*.erf) and the
-// zlib data in them.
+// zlib data in them; and the PC version's archives (ERF V2.0, as the game's scripts'
+// archives are too, and V2.2).
+
+#include <variant>
 
 namespace dao::ui
 {
@@ -55,4 +58,37 @@ namespace dao::ui
     // One entry of an archive (see ErfArchive::Read).
     std::optional<std::vector<uint8_t>> ReadErfEntry(const std::filesystem::path& archive, std::string_view name,
         uint32_t maxSize);
+
+    // A PC archive: ERF V2.0, or V2.2 (whose entries may be compressed), with UTF-16
+    // names. Its directory as written: what its names and places may be is the
+    // caller's to check.
+    class PcErfArchive
+    {
+    public:
+        struct Entry
+        {
+            std::wstring name;
+            uint32_t offset, packedSize, size;
+        };
+
+        // Why not, if it isn't an archive this can read or has more than
+        // `maxEntries` entries.
+        static std::variant<PcErfArchive, std::string> Open(const std::filesystem::path& path,
+            uint32_t maxEntries);
+
+        bool IsV22() const { return v22_; }
+        uint64_t FileSize() const { return fileSize_; }
+        const std::vector<Entry>& Entries() const { return entries_; }
+
+        // An entry's data (unpacked); nothing if it's damaged or more than `maxSize`
+        // bytes.
+        std::optional<std::vector<uint8_t>> Read(const Entry& entry, uint32_t maxSize) const;
+
+    private:
+        std::filesystem::path path_;
+        uint64_t fileSize_ = 0;
+        bool v22_ = false;
+        bool compressed_ = false;
+        std::vector<Entry> entries_;
+    };
 }

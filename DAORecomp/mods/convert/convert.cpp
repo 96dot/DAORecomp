@@ -16,8 +16,6 @@
 #include "text.h"
 #include "ui/erf.h"
 
-#include "third_party/stb/stb_image.h"
-
 namespace dao::mods
 {
     namespace fs = std::filesystem;
@@ -175,74 +173,38 @@ namespace dao::mods
             return mods::ReadHead(path, kFormatHeadBytes);
         }
 
-        // A PC archive: ERF V2.0, or V2.2 (whose files may be compressed), with UTF-16 names.
+        // A PC archive (ui::PcErfArchive) whose files can be unpacked: plain names,
+        // in the file, not sharing data.
         class PcArchive
         {
         public:
             struct Entry
             {
-                std::string name;
-                uint32_t offset, packedSize, size;
+                std::string name;   // UTF-8
+                ui::PcErfArchive::Entry erf;
             };
 
             static std::variant<PcArchive, std::string> Open(const fs::path& path)
             {
-                constexpr size_t kHeaderSize = 56;
                 constexpr uint32_t kMaxEntries = 1u << 16;
-                constexpr size_t kNameChars = 32;
-                std::error_code ec;
-                const uint64_t fileSize = fs::file_size(path, ec);
-                if (ec)
-                    return std::string("it can't be read");
-                const auto header = ui::ReadFileBytes(path, 0, uint32_t(std::min<uint64_t>(fileSize, kHeaderSize)));
-                if (!header || header->size() < 32)
-                    return std::string("it's damaged");
-                std::string magic;
-                for (size_t i = 0; i < 8; ++i)
-                    magic += (*header)[2 * i + 1] == 0 ? char((*header)[2 * i]) : '?';
-                if (magic == "ERF V3.0")
-                    return std::string("it's made for Dragon Age II");
-                const bool v22 = magic == "ERF V2.2";
-                if (magic != "ERF V2.0" && !v22)
-                    return std::string("it isn't an archive this can read");
-                PcArchive archive;
-                archive.path_ = path;
-                archive.fileSize_ = fileSize;
-                const uint32_t count = ui::ReadLE32(*header, 16);
-                if (v22)
+                auto opened = ui::PcErfArchive::Open(path, kMaxEntries);
+                if (auto* error = std::get_if<std::string>(&opened))
+                    return std::move(*error);
+                PcArchive archive(std::move(std::get<ui::PcErfArchive>(opened)));
+                for (const ui::PcErfArchive::Entry& erf : archive.erf_.Entries())
                 {
-                    if (header->size() < kHeaderSize)
-                        return std::string("it's damaged");
-                    const uint32_t flags = ui::ReadLE32(*header, 32);
-                    if ((flags >> 4) & 0xF)
-                        return std::string("it's encrypted (downloadable content)");
-                    archive.compressed_ = (flags >> 29) != 0;
-                }
-                const size_t entriesAt = v22 ? 56 : 32, entrySize = v22 ? 76 : 72;
-                if (count > kMaxEntries)
-                    return std::string("it's damaged");
-                const auto table = ui::ReadFileBytes(path, entriesAt, uint32_t(count * entrySize));
-                if (!table)
-                    return std::string("it's damaged");
-                for (uint32_t i = 0; i < count; ++i)
-                {
-                    const std::span<const uint8_t> raw(table->data() + i * entrySize, entrySize);
-                    std::wstring name;
-                    for (size_t c = 0; c < kNameChars && (raw[2 * c] || raw[2 * c + 1]); ++c)
-                        name += wchar_t(raw[2 * c] | raw[2 * c + 1] << 8);
-                    Entry entry{ WideToUtf8(name), ui::ReadLE32(raw, 64), ui::ReadLE32(raw, 68), 0 };
-                    entry.size = v22 ? ui::ReadLE32(raw, 72) : entry.packedSize;
+                    Entry entry{ WideToUtf8(erf.name), erf };
                     if (!IsPlainName(entry.name))
                         return fmt::format("a file in it has a name a file can't have ({})", entry.name);
-                    if (uint64_t(entry.offset) + entry.packedSize > fileSize)
+                    if (uint64_t(erf.offset) + erf.packedSize > archive.erf_.FileSize())
                         return std::string("it's damaged");
                     archive.entries_.push_back(std::move(entry));
                 }
                 // Files don't share data (else a small archive could unpack to a lot).
                 std::vector<std::pair<uint64_t, uint64_t>> spans;   // (offset, end)
                 for (const Entry& entry : archive.entries_)
-                    if (entry.packedSize)
-                        spans.emplace_back(entry.offset, uint64_t(entry.offset) + entry.packedSize);
+                    if (entry.erf.packedSize)
+                        spans.emplace_back(entry.erf.offset, uint64_t(entry.erf.offset) + entry.erf.packedSize);
                 std::ranges::sort(spans);
                 for (size_t i = 1; i < spans.size(); ++i)
                     if (spans[i].first < spans[i - 1].second)
@@ -255,35 +217,13 @@ namespace dao::mods
             // An entry's data (unpacked); nothing if it's damaged or too big.
             std::optional<std::vector<uint8_t>> Read(const Entry& entry) const
             {
-                if (entry.size > kMaxFileBytes || entry.packedSize > kMaxFileBytes)
-                    return std::nullopt;
-                auto data = ui::ReadFileBytes(path_, entry.offset, entry.packedSize);
-                if (!data || !compressed_ || entry.size == 0)
-                    return data;
-                // Deflate packs at most about 1032 to 1: more is damage (and an
-                // allocation for nothing).
-                if (entry.packedSize == 0 || entry.size / entry.packedSize > 1032)
-                    return std::nullopt;
-                // BioWare's zlib (a byte, then a raw deflate stream), a raw stream or a
-                // zlib one, whichever unpacks to the size.
-                std::vector<uint8_t> out(entry.size);
-                const auto* in = reinterpret_cast<const char*>(data->data());
-                auto* dst = reinterpret_cast<char*>(out.data());
-                const int size = int(entry.size), packed = int(data->size());
-                if (stbi_zlib_decode_buffer(dst, size, in, packed) == size ||
-                    stbi_zlib_decode_noheader_buffer(dst, size, in, packed) == size ||
-                    (packed > 1 && stbi_zlib_decode_noheader_buffer(dst, size, in + 1, packed - 1) == size))
-                    return out;
-                // Stored as it is.
-                if (entry.packedSize == entry.size)
-                    return data;
-                return std::nullopt;
+                return erf_.Read(entry.erf, kMaxFileBytes);
             }
 
         private:
-            fs::path path_;
-            uint64_t fileSize_ = 0;
-            bool compressed_ = false;
+            explicit PcArchive(ui::PcErfArchive erf) : erf_(std::move(erf)) {}
+
+            ui::PcErfArchive erf_;
             std::vector<Entry> entries_;
         };
 

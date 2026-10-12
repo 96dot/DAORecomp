@@ -11,33 +11,21 @@ namespace dao::mods
     namespace
     {
         // The entry names of an ERF V2.0 archive (the scripts' archives are in that
-        // format, as on the PC): "ERF V2.0" in UTF-16, the entry count at 16, then
-        // 72-byte entries from 32: the name (32 UTF-16 characters), offset, size.
+        // format, as on the PC).
         void ReadErf20Names(const fs::path& path, std::unordered_map<std::string, uint32_t>& names, uint32_t archive)
         {
-            constexpr size_t kEntriesOffset = 32, kEntrySize = 72, kNameBytes = 64;
             // More than any of the game's archives has.
             constexpr uint32_t kMaxEntries = 1 << 20;
-            const auto header = ui::ReadFileBytes(path, 0, kEntriesOffset);
-            if (!header || memcmp(header->data(), "E\0R\0F\0 \0V\0" "2\0.\0" "0\0", 16) != 0)
+            const auto erf = ui::PcErfArchive::Open(path, kMaxEntries);
+            const auto* opened = std::get_if<ui::PcErfArchive>(&erf);
+            if (!opened || opened->IsV22())
                 return;
-            const uint32_t count = ui::ReadLE32(*header, 16);
-            if (count > kMaxEntries)
-                return;
-            const auto entries = ui::ReadFileBytes(path, kEntriesOffset, count * uint32_t(kEntrySize));
-            if (!entries)
-                return;
-            for (uint32_t i = 0; i < count; ++i)
+            for (const ui::PcErfArchive::Entry& entry : opened->Entries())
             {
                 std::string name;
-                for (size_t at = i * kEntrySize; at < i * kEntrySize + kNameBytes; at += 2)
-                {
-                    const uint16_t c = (*entries)[at] | (*entries)[at + 1] << 8;
-                    if (c == 0)
-                        break;
-                    // The game's names are ASCII.
+                // The game's names are ASCII.
+                for (const wchar_t c : entry.name)
                     name += c < 0x80 ? char(c) : '?';
-                }
                 names.emplace(Lower(name), archive);
             }
         }
