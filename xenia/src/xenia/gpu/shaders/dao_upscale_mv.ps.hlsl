@@ -12,7 +12,15 @@ float2 main(DaoMvInterpolators input) : SV_Target {
     discard;
   }
   // From the pixel now to the same point one frame ago, in pixels, unjittered.
+  // previous.z is the point's w a frame ago. At or behind the camera (w near 0
+  // or below) it had no place on screen then, and the divide by w would give
+  // infinities FSR spreads over the image: no motion. Anything else not finite
+  // (a NaN from the game's own math) is left out the same way.
+  if (input.previous.z <= 1.0e-6) {
+    return float2(0.0, 0.0);
+  }
   float2 current = input.position.xy - dao_mv_jitter;
   float2 previous = DaoMvToScreen(input.previous.xy, input.previous.z);
-  return previous - current;
+  float2 motion = previous - current;
+  return all(isfinite(motion)) ? motion : float2(0.0, 0.0);
 }

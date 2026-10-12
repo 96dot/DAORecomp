@@ -1,4 +1,13 @@
 /**
+ ******************************************************************************
+ * Xenia : Xbox 360 Emulator Research Project                                 *
+ ******************************************************************************
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
+ * Released under the BSD license - see LICENSE in the root for more details. *
+ ******************************************************************************
+ */
+
+/**
  * DAO recomp: replacement for Xenia's xe::Memory.
  *
  * Guest memory belongs to the DAO runtime (DAORecomp/kernel/memory.*): one 4 GB

@@ -272,16 +272,39 @@ namespace dao::gpu
         if (physical >= kPhysicalSize || length > kPhysicalSize - physical)
             return false;
         auto* processor = static_cast<xe::gpu::d3d12::D3D12CommandProcessor*>(s_graphics->command_processor());
-        std::vector<uint8_t> data;
-        bool read = false;
-        xe::threading::Fence done;
-        processor->CallInThread([&] {
-            read = processor->DaoReadGpuWrittenMemory(physical, length, pixelSizeLog2, data);
-            done.Signal();
+        // Shared with the GPU thread, which may finish after this has given up waiting.
+        struct Readback
+        {
+            std::mutex mutex;
+            std::condition_variable cv;
+            bool done = false;
+            bool read = false;
+            std::vector<uint8_t> data;
+        };
+        const auto readback = std::make_shared<Readback>();
+        processor->CallInThread([readback, processor, physical, length, pixelSizeLog2] {
+            std::vector<uint8_t> data;
+            const bool read = processor->DaoReadGpuWrittenMemory(physical, length, pixelSizeLog2, data);
+            std::lock_guard lock(readback->mutex);
+            readback->read = read;
+            readback->data = std::move(data);
+            readback->done = true;
+            readback->cv.notify_all();
         });
-        done.Wait();
+        // A GPU that has stopped leaves the caller, a game thread, without the data
+        // rather than stuck. A readback takes milliseconds; 5 s is only reached if
+        // the GPU thread is gone or hung. The lambda holds the state it writes, so
+        // it may finish after this returns.
+        constexpr auto kReadbackTimeout = std::chrono::seconds(5);
+        std::unique_lock lock(readback->mutex);
+        if (!readback->cv.wait_for(lock, kReadbackTimeout, [&] { return readback->done; }))
+        {
+            LOGW("GPU: reading back {:08X} (+{}) took too long", address, length);
+            return false;
+        }
+        const std::vector<uint8_t>& data = readback->data;
         // Shorter than length if only whole tiles of a scaled resolve were read.
-        if (!read || data.size() > length)
+        if (!readback->read || data.size() > length)
             return false;
         // Through the write watches, so the GPU's copies are reloaded from it.
         PrepareGuestWrite(address, uint32_t(data.size()));

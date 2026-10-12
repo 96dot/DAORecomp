@@ -9,6 +9,7 @@
 
 #include "xenia/ui/d3d12/d3d12_presenter.h"
 
+#include <algorithm>
 #include <climits>
 #include <cstdint>
 #include <memory>
@@ -1184,7 +1185,9 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
         display_hdr
             ? std::max(float(cvars::present_hdr_peak) / paper_white, 1.0f)
             : 1.0f,
-        float(cvars::present_hdr_gamma), pq ? 1.0f : 0.0f};
+        // DAO: a gamma from the config the shader can use.
+        float(std::clamp(cvars::present_hdr_gamma, 1.0, 3.0)),
+        pq ? 1.0f : 0.0f};
     command_list->SetGraphicsRoot32BitConstants(1, 4, hdr_constants, 0);
     command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     command_list->DrawInstanced(3, 1, 0, 0);

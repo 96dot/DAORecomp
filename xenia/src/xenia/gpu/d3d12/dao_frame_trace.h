@@ -2,8 +2,8 @@
 // DAO_GPU_FRAME_TRACE=<swap number> logs, for the frame after that swap, every
 // draw (shaders, render targets, sampled textures), resolve and the swap itself
 // to xenia.log with the "FT" prefix.
-// Also keeps per-swap draw statistics (always on, a few counters) for the
-// flicker detector in DAORecomp/gpu/frame_history.cpp.
+// Also keeps per-swap draw counts (always on) and, with DAO_FRAME_HISTORY, the
+// draw lists for the flicker detector in DAORecomp/gpu/frame_history.cpp.
 #pragma once
 
 #include <array>
@@ -101,6 +101,12 @@ inline bool GetFrameDraws(uint32_t swap, std::vector<DrawRecord>& out) {
 inline void CountSubmittedDraw(const RegisterFile& regs, uint32_t index_base,
                                uint32_t count, uint32_t prim) {
   ++CurrentStats().submitted;
+  // The draw lists are only for DAO_FRAME_HISTORY's flicker reports (main.cpp
+  // starts the detector on the same variable).
+  static const bool record_draws = std::getenv("DAO_FRAME_HISTORY") != nullptr;
+  if (!record_draws) {
+    return;
+  }
   CurrentDraws().push_back(
       {index_base,
        regs.values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0] & ~uint32_t(3),

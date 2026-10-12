@@ -82,6 +82,12 @@ namespace dao
                 LOGW("config.toml: unknown Xenia option '{}'", name);
                 return;
             }
+            // (TOML allows nan and inf, which no option means; the GPU would get them as constants.)
+            if (const auto* number = value.as_floating_point(); number && !std::isfinite(number->get()))
+            {
+                LOGW("config.toml: '{}' isn't a number; left as it was", name);
+                return;
+            }
             it->second->LoadConfigValue(&value);
             LOGI("config.toml: {} = {}", name, it->second->config_value());
         }

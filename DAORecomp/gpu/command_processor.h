@@ -1,9 +1,9 @@
 #pragma once
-// A minimal Xenos command processor. It consumes the PM4 ring buffer the game's D3D
-// writes, executes the packets that have CPU-visible side effects (fences, memory
-// writes, waits, interrupts, register writes) and publishes the read pointer, so the
-// game's D3D layer sees a live GPU. Draw packets are not executed: rendering will be
-// done by a host renderer, not by interpreting PM4.
+// A minimal Xenos command processor, used only when the Xenia GPU isn't running. It
+// consumes the PM4 ring buffer the game's D3D writes, executes the packets that have
+// CPU-visible side effects (fences, memory writes, waits, interrupts, register
+// writes) and publishes the read pointer, so the game's D3D layer sees a live GPU.
+// Draw packets are not executed (Xenia's D3D12 backend renders them otherwise).
 
 namespace dao::gpu
 {

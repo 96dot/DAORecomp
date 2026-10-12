@@ -85,13 +85,12 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-// Stream output of the scene draws' positions (float4 per vertex, appended to a
-// shared buffer or, for strips with cuts, in buffers of their own), followed by
-// the filled-size counters (one per buffer, 16 bytes apart). One for each of
-// the last two frames: a draw's previous positions are those its match wrote
-// in the previous frame.
+// Stream output of the scene draws' positions (float4 per vertex, each draw in a
+// part of its own), followed by the filled-size counters (one per draw, 16
+// bytes apart). One for each of the last two frames: a draw's previous
+// positions are those its match wrote in the previous frame.
 constexpr uint32_t kStreamOutDataSize = 96 << 20;
-constexpr uint32_t kStreamOutCounterCount = 4096;
+constexpr uint32_t kStreamOutCounterCount = 16384;
 constexpr uint32_t kStreamOutCounterSize = kStreamOutCounterCount * 16;
 constexpr uint32_t kStreamOutBufferSize =
     kStreamOutDataSize + kStreamOutCounterSize;
@@ -121,7 +120,18 @@ struct Texture {
   uint32_t height = 0;
 };
 
+// Whether to log the n-th (from 0) of a message that may come every frame: the
+// first 10, then every 1000th.
+bool LogNth(std::atomic<uint32_t>& count) {
+  const uint32_t n = count.fetch_add(1, std::memory_order_relaxed);
+  return n < 10 || n % 1000 == 0;
+}
+
 void FfxMessage(uint32_t type, const wchar_t* message) {
+  static std::atomic<uint32_t> s_errors{0}, s_warnings{0};
+  if (!LogNth(type == FFX_API_MESSAGE_TYPE_ERROR ? s_errors : s_warnings)) {
+    return;
+  }
   std::string text;
   for (const wchar_t* c = message; c && *c; ++c) {
     text += char(*c < 128 ? *c : '?');
@@ -450,9 +460,7 @@ class DaoUpscalerImpl {
     bool bind_pipeline;
     // Triangle list vertices of the positions written (0 if none).
     uint32_t output_vertex_count;
-    // Whether the stream output buffer is bound before the draw (otherwise
-    // it's appended to the bound one).
-    bool bind_stream_out;
+    // Bound before the draw, unbound after it.
     D3D12_STREAM_OUTPUT_BUFFER_VIEW stream_out_view;
     // Drawn in the motion vector pass: the previous frame's draw of it wrote
     // positions.
@@ -722,13 +730,7 @@ class DaoUpscalerImpl {
   uint32_t stream_out_used_ = 0;
   uint32_t stream_out_counters_used_ = 0;
   bool stream_out_reset_ = false;
-  // Draws are appended to one stream output buffer (rebinding it for every
-  // draw is slow): where it starts, its filled-size counter, and the
-  // submission it was bound in (UINT64_MAX if not bound).
-  uint32_t stream_out_append_start_ = 0;
-  uint32_t stream_out_append_counter_ = 0;
-  uint64_t stream_out_append_submission_ = UINT64_MAX;
-  // Whether draws since the last CloseStreamOut bound stream output buffers.
+  // Whether a draw since the last CloseStreamOut bound a stream output buffer.
   bool stream_out_bound_ = false;
   uint32_t motion_matched_ = 0;
   uint32_t motion_unmatched_ = 0;
@@ -1434,6 +1436,9 @@ void DaoUpscalerImpl::BeforeDraw(const Shader& vertex_shader, bool indexed,
 }
 
 void DaoUpscalerImpl::AfterDraw() {
+  // A draw's stream output buffer is bound for that draw only (see
+  // CaptureMotion).
+  CloseStreamOut();
   if (hudless_pending_) {
     hudless_pending_ = false;
     CaptureHudless();
@@ -1829,27 +1834,16 @@ bool DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   // below), but without the previous ones (new this frame, or they weren't
   // written), the motion is unknown and left at zero.
 
-  // Appended to the shared stream output buffer, except for strips with cuts:
-  // they write fewer triangles than counted, so where their positions end is
-  // unknown, and they get buffers of their own.
-  const bool own_buffers =
-      cp_.primitive_topology_ == D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP &&
-      strip_cuts;
-  const uint64_t submission = cp_.GetCurrentSubmission();
-  const bool new_append_buffer =
-      !own_buffers && stream_out_append_submission_ == UINT64_MAX;
-  const uint32_t output_size = output_vertex_count * 16;
-  const uint32_t own_size = (output_size + 255) & ~uint32_t(255);
-  uint32_t offset = stream_out_used_;
-  if (own_buffers || new_append_buffer) {
-    offset = (offset + 255) & ~uint32_t(255);
-  }
-  const uint32_t new_counters = own_buffers || new_append_buffer ? 1 : 0;
+  // Each draw writes to a part of the buffer and a filled-size counter of its
+  // own, bound for that draw only (unbound in AfterDraw). Appending draws to
+  // one buffer left bound was faster, but on AMD the GPU could hang when
+  // another program's GPU work preempted this one's between those draws.
+  const uint32_t size = (output_vertex_count * 16 + 255) & ~uint32_t(255);
+  const uint32_t offset = (stream_out_used_ + 255) & ~uint32_t(255);
   if (!stream_out_pipeline || !EnsureStreamOutBuffers() ||
       output_vertex_count > (1u << 20) ||
-      offset + uint64_t(own_buffers ? own_size : output_size) >
-          kStreamOutDataSize ||
-      stream_out_counters_used_ + new_counters > kStreamOutCounterCount) {
+      offset + uint64_t(size) > kStreamOutDataSize ||
+      stream_out_counters_used_ >= kStreamOutCounterCount) {
     ++motion_skipped_;
     return false;
   }
@@ -1872,42 +1866,16 @@ bool DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   const D3D12_GPU_VIRTUAL_ADDRESS buffer =
       stream_out_buffers_[motion_frame_]->GetGPUVirtualAddress();
   D3D12_STREAM_OUTPUT_BUFFER_VIEW& view = draw.stream_out_view;
-  if (own_buffers) {
-    const uint32_t counter =
-        kStreamOutDataSize + stream_out_counters_used_ * 16;
-    view.BufferLocation = buffer + offset;
-    view.SizeInBytes = own_size;
-    view.BufferFilledSizeLocation = buffer + counter;
-    draw.bind_stream_out = true;
-    draw.motion.current_offset = offset;
-    draw.motion.current_counter = counter;
-    draw.motion.current_in_buffer = 0;
-    stream_out_used_ = offset + own_size;
-    ++stream_out_counters_used_;
-    // Appending draws after this bind their buffer again (a new one).
-    stream_out_append_submission_ = UINT64_MAX;
-  } else {
-    if (new_append_buffer) {
-      stream_out_append_start_ = offset;
-      stream_out_append_counter_ =
-          kStreamOutDataSize + stream_out_counters_used_ * 16;
-      ++stream_out_counters_used_;
-    }
-    draw.bind_stream_out = false;
-    if (stream_out_append_submission_ != submission) {
-      // Not bound yet, or bound in an earlier command list: bound again, it
-      // continues where its counter is.
-      view.BufferLocation = buffer + stream_out_append_start_;
-      view.SizeInBytes = kStreamOutDataSize - stream_out_append_start_;
-      view.BufferFilledSizeLocation = buffer + stream_out_append_counter_;
-      draw.bind_stream_out = true;
-      stream_out_append_submission_ = submission;
-    }
-    draw.motion.current_offset = offset;
-    draw.motion.current_counter = stream_out_append_counter_;
-    draw.motion.current_in_buffer = offset - stream_out_append_start_;
-    stream_out_used_ = offset + output_size;
-  }
+  const uint32_t counter = kStreamOutDataSize + stream_out_counters_used_ * 16;
+  view.BufferLocation = buffer + offset;
+  view.SizeInBytes = size;
+  view.BufferFilledSizeLocation = buffer + counter;
+  draw.motion.current_offset = offset;
+  draw.motion.current_counter = counter;
+  // (Its positions start where its binding does.)
+  draw.motion.current_in_buffer = 0;
+  stream_out_used_ = offset + size;
+  ++stream_out_counters_used_;
   if (previous) {
     // Where the previous frame's draw wrote its positions, in its buffer.
     draw.motion.previous_offset = previous->motion.current_offset;
@@ -1920,15 +1888,11 @@ bool DaoUpscalerImpl::CaptureMotion(const Shader& vertex_shader, bool indexed,
   } else {
     ++motion_unmatched_;
   }
-  if (draw.bind_stream_out) {
-    stream_out_bound_ = true;
-  }
+  stream_out_bound_ = true;
   // Pipeline binds are costly with stream output (Vulkan ends and resumes
   // transform feedback), so the pipeline stays bound for the next draw.
   draw.bind_pipeline = stream_out_bound_pipeline_ != stream_out_pipeline;
-  if (draw.bind_pipeline || draw.bind_stream_out) {
-    cp_.GetDeferredCommandList().DaoCallback(ExecuteBeginStreamOut, &draw);
-  }
+  cp_.GetDeferredCommandList().DaoCallback(ExecuteBeginStreamOut, &draw);
   stream_out_bound_pipeline_ = stream_out_pipeline;
   stream_out_guest_pipeline_ = pipeline_state;
   stream_out_binds_ = cp_.pipeline_binds_;
@@ -1941,19 +1905,15 @@ void DaoUpscalerImpl::ExecuteBeginStreamOut(
   if (draw.bind_pipeline) {
     command_list->SetPipelineState(draw.stream_out_pipeline);
   }
-  if (draw.bind_stream_out) {
-    command_list->SOSetTargets(0, 1, &draw.stream_out_view);
-  }
+  command_list->SOSetTargets(0, 1, &draw.stream_out_view);
 }
 
 void DaoUpscalerImpl::ExecuteRestorePipeline(
     void* context, ID3D12GraphicsCommandList* command_list) {
-  // The stream output buffer stays bound, unused by the other pipelines.
   command_list->SetPipelineState(static_cast<ID3D12PipelineState*>(context));
 }
 
 void DaoUpscalerImpl::CloseStreamOut() {
-  stream_out_append_submission_ = UINT64_MAX;
   if (!stream_out_bound_) {
     return;
   }
@@ -2260,7 +2220,8 @@ void DaoUpscalerImpl::ExecuteDispatch(void* context,
   }
   params.desc.commandList = command_list;
   ffxReturnCode_t result = self.ffx_dispatch_(&self.context_, &params.desc.header);
-  if (result != FFX_API_RETURN_OK) {
+  static std::atomic<uint32_t> s_failures{0};
+  if (result != FFX_API_RETURN_OK && LogNth(s_failures)) {
     XELOGE("FSR: dispatch failed ({})", result);
   }
 }

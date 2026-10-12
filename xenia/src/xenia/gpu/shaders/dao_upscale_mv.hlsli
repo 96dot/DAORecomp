@@ -17,8 +17,8 @@ cbuffer DaoMvConstants : register(b0) {
   // Byte offsets of this draw's current and previous positions (float4 each,
   // in dao_mv_positions and dao_mv_previous_positions) and of the filled-size
   // counters of the stream output buffers they were written into, and where
-  // in those buffers they are (the counters count from the buffer start;
-  // draws are appended).
+  // in those buffers they are (the counters count from the buffer start; each
+  // draw now has a buffer of its own, so 0).
   uint dao_mv_current_offset;
   uint dao_mv_previous_offset;
   uint dao_mv_current_counter;

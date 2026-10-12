@@ -703,6 +703,9 @@ class TextureCache {
   // Checks if there are any pages that contain scaled resolve data within the
   // range.
   bool IsRangeScaledResolved(uint32_t start_unscaled, uint32_t length_unscaled);
+  // DAO: whether every page of the range holds scaled resolve data.
+  bool DaoIsRangeAllScaledResolved(uint32_t start_unscaled,
+                                   uint32_t length_unscaled);
 
   // For a texture whose outdated data the implementation has written itself.
   bool MakeUpToDateAndWatch(Texture& texture) {

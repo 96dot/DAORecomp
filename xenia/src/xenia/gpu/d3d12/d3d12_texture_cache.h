@@ -194,11 +194,10 @@ class D3D12TextureCache final : public TextureCache {
     assert_true(IsDrawResolutionScaled());
     return scaled_resolve_current_range_length_scaled_;
   }
-  // DAO: whether any page of the range holds scaled resolve data.
-  bool DaoIsRangeScaledResolved(uint32_t start_unscaled,
-                                uint32_t length_unscaled) {
-    return IsRangeScaledResolved(start_unscaled, length_unscaled);
-  }
+  // DAO: whether every page of the range holds scaled resolve data (a range
+  // only partly resolved isn't read from the scaled buffer, whose other pages
+  // hold nothing of it).
+  using TextureCache::DaoIsRangeAllScaledResolved;
   // The resource of the buffer containing the current scaled resolve range,
   // and the offset of the start of the buffer within the scaled physical
   // memory address space (the buffer index is also its gigabyte offset).

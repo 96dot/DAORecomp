@@ -197,6 +197,11 @@ static fs::path FindGameRoot()
 
 int main(int argc, char** argv)
 {
+    // DLLs loaded by name (FidelityFX's and the optional dxcompiler/dxilconv, next to
+    // the exe; the system's) come from this program's folder and System32, not the
+    // current folder or PATH.
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+
     // Real pixels everywhere (launcher, game window, 4K swap chain): without
     // this, Windows stretches the window on scaled displays and reports scaled
     // coordinates.

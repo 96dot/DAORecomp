@@ -1,6 +1,6 @@
-// xboxkrnl Vd* (video driver) exports. The GPU itself is not emulated: the plan is
-// to hook the game's D3D layer onto a host renderer. Until then these report a
-// 1280x720 display and record the ring buffer / interrupt setup for later use.
+// xboxkrnl Vd* (video driver) exports: the display mode (1280x720), and the ring
+// buffer, interrupt and swap setup, handed to the vendored Xenia GPU (xenia_host.cpp),
+// or to the minimal command processor when Xenia isn't running.
 #include "stdafx.h"
 #include "kernel/function.h"
 #include "gpu/video.h"

@@ -1,6 +1,6 @@
 # Xenia's GPU (Direct3D 12 backend), UI/presenter and base libraries, vendored from
-# tools/xenia-canary (Xenia is BSD-licensed, see tools/xenia-canary/LICENSE) and
-# patched to run inside the DAO runtime: scripts/patch_xenia.py,
+# tools/xenia-canary (Xenia is BSD-licensed, see LICENSE here) and
+# patched to run inside the DAO runtime (see PATCHES.md):
 # src/xenia/memory.h (memory shim) and src/xenia/dao_host.h (runtime services).
 #
 # Third-party libraries come from tools/xenia-canary/third_party (fetched by

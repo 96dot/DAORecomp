@@ -94,7 +94,7 @@ recipes) is in [porting-playbook.md](porting-playbook.md).
 
 - **Xenia's GPU vs reimplementing D3D9:** we first planned a native reimplementation of
   the game's static D3D9 on a modern API, as UnleashedRecomp does. Vendoring Xenia's
-  D3D12 GPU (patched by `scripts/patch_xenia.py`) got correct rendering in a day. It
+  D3D12 GPU (changes listed in `xenia/PATCHES.md`) got correct rendering in a day. It
   still allowed 4K (resolution scale with tiled resources), HDR output and FSR 3/4,
   added as patches. Start there, and replace pieces only when they block a goal.
 - **Frame rate:**

@@ -328,8 +328,10 @@ class Presenter {
   // GPU thread to size the temporal upscaler output (a stale value only delays
   // a resize by a frame).
   void GetPaintSurfaceSize(uint32_t& width_out, uint32_t& height_out) const {
-    width_out = surface_width_in_paint_connection_;
-    height_out = surface_height_in_paint_connection_;
+    width_out =
+        surface_width_in_paint_connection_.load(std::memory_order_relaxed);
+    height_out =
+        surface_height_in_paint_connection_.load(std::memory_order_relaxed);
   }
 
   const GuestOutputPaintConfig& GetGuestOutputPaintConfigFromUIThread() const {
@@ -927,9 +929,10 @@ class Presenter {
   // surface.
   bool surface_paint_connection_has_implicit_vsync_ = false;
   // Modifiable only by the UI thread, can be read by the thread that's
-  // painting.
-  uint32_t surface_width_in_paint_connection_ = 0;
-  uint32_t surface_height_in_paint_connection_ = 0;
+  // painting and (DAO) by the GPU thread through GetPaintSurfaceSize, hence
+  // atomic.
+  std::atomic<uint32_t> surface_width_in_paint_connection_ = 0;
+  std::atomic<uint32_t> surface_height_in_paint_connection_ = 0;
 
   // Can be set by both the UI thread and the guest output thread before doing
   // window_->RequestPaint() - whether an extra painting (preceded by

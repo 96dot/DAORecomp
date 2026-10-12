@@ -1131,6 +1131,29 @@ bool TextureCache::IsRangeEverResolved(uint32_t start, uint32_t length) const {
   return false;
 }
 
+// DAO
+bool TextureCache::DaoIsRangeAllScaledResolved(uint32_t start_unscaled,
+                                               uint32_t length_unscaled) {
+  if (!IsDrawResolutionScaled()) {
+    return false;
+  }
+  start_unscaled = std::min(start_unscaled, SharedMemory::kBufferSize);
+  length_unscaled =
+      std::min(length_unscaled, SharedMemory::kBufferSize - start_unscaled);
+  if (!length_unscaled) {
+    return false;
+  }
+  uint32_t page_first = start_unscaled >> 12;
+  uint32_t page_last = (start_unscaled + length_unscaled - 1) >> 12;
+  auto global_lock = global_critical_region_.Acquire();
+  for (uint32_t page = page_first; page <= page_last; ++page) {
+    if (!(scaled_resolve_pages_[page >> 5] & (UINT32_C(1) << (page & 31)))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool TextureCache::IsRangeScaledResolved(uint32_t start_unscaled,
                                          uint32_t length_unscaled) {
   if (!IsDrawResolutionScaled()) {

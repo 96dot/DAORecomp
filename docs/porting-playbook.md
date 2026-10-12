@@ -32,7 +32,7 @@ method given here, never by copying an address.
 | 1 | Binary | XEX decrypted, hash checked, image zero-filled to its size | `scripts/xiso.py`, loader in `kernel/module.cpp` |
 | 2 | Recompile | XenonRecomp output builds with zero warnings | `patch_recompiler.py`, `recomp.cmd`, `find_switches.py`, `fix_functions.py`, `find_helpers.py`, `gen_stubs.py` |
 | 3 | Kernel | steady frame loop with `DAO_GPU=null` (fake command processor) | all of `DAORecomp/kernel/`, `gpu/command_processor.cpp` |
-| 4 | Rendering | title screen renders through Xenia's D3D12 | `xenia/` + `patch_xenia.py`, `gpu/xenia_host.cpp`, `gpu/xenia_memory.cpp` |
+| 4 | Rendering | title screen renders through Xenia's D3D12 | `xenia/` (changes in `xenia/PATCHES.md`), `gpu/xenia_host.cpp`, `gpu/xenia_memory.cpp` |
 | 5 | Audio, input, settings | music and voices play, pad works, `config.toml` read | `apu/` (XMA decoder), `input/`, `settings.cpp` |
 | 6 | Playable | new game, save, load, keyboard UI, 60 fps | `ui/keyboard.cpp`, save-name logic in `kernel/xam.cpp` |
 | 7 | Graphics | resolution scale, FSR, HDR, in-game options | `xenia/.../dao_upscale.*`, HDR shaders, `ui/options_movie.cpp` |
@@ -107,10 +107,12 @@ match by hand.
 8. Character naming impossible (keyboard UI stub).
 9. "Save file is corrupt" after resuming (content display name rewritten).
 10. Black save thumbnails (GPU-only resolves).
-11. Open: an intermittent GPU hang (`DXGI_ERROR_DEVICE_HUNG`) only with FSR motion
-    vectors on; `DAO_DRED=1` showed an indexed draw after a barrier/copy group. If it
-    shows up in the next game, start from there; the workaround is
-    `dao_motion_vectors = false` under `[xenia]`.
+11. A GPU hang (`DXGI_ERROR_DEVICE_HUNG`) with FSR motion vectors on, only while
+    another program used the GPU too. Several draws streamed out (D3D12 stream
+    output) under one binding, appended; on AMD a preemption between them could
+    hang the GPU. Fixed by binding each draw its own buffer part and counter and
+    unbinding after it (about 0.7 ms a frame). `DAO_DRED=1` shows the hung draw;
+    a small D3D11 compute load running alongside reproduces it.
 
 ## Test recipes
 

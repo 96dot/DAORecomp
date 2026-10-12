@@ -3797,7 +3797,7 @@ bool D3D12CommandProcessor::DaoReadGpuWrittenMemory(
     return false;
   }
   const bool scaled = texture_cache_->IsDrawResolutionScaled() &&
-                      texture_cache_->DaoIsRangeScaledResolved(address, length);
+                      texture_cache_->DaoIsRangeAllScaledResolved(address, length);
   uint32_t read_length = length;
   uint32_t tile_count = 0;
   ID3D12Resource* scaled_source = nullptr;
