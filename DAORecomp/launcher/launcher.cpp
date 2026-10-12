@@ -2653,6 +2653,36 @@ namespace dao::launcher
         SDL_Window* window = SDL_CreateWindow(mode.setup ? "Dragon Age: Origins - Setup" : "Dragon Age: Origins - Launcher",
             int(kWindowWidth * scale),
             int(kWindowHeight * scale), SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
+        // The exe's icon (MAINICON in res/daorecomp.rc) on the title bar and taskbar
+        // button at the window's DPI (SDL's window class takes it from the exe at the
+        // system's). Freed after the window.
+        struct WindowIcons
+        {
+            HICON big = nullptr, small = nullptr;
+            ~WindowIcons()
+            {
+                for (HICON icon : { big, small })
+                    if (icon)
+                        DestroyIcon(icon);
+            }
+        } icons;
+        const HWND hwnd = window ? static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window),
+                                       SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr))
+                                 : nullptr;
+        if (hwnd)
+        {
+            const UINT dpi = GetDpiForWindow(hwnd);
+            const auto load = [dpi](int metric) {
+                const int size = GetSystemMetricsForDpi(metric, dpi);
+                return static_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr), L"MAINICON", IMAGE_ICON, size, size, 0));
+            };
+            icons.big = load(SM_CXICON);
+            icons.small = load(SM_CXSMICON);
+            if (icons.big)
+                SendMessageW(hwnd, WM_SETICON, ICON_BIG, LPARAM(icons.big));
+            if (icons.small)
+                SendMessageW(hwnd, WM_SETICON, ICON_SMALL, LPARAM(icons.small));
+        }
         // DAO_BACKGROUND=1 (automated tests): behind the other windows, unfocused.
         const char* background = getenv("DAO_BACKGROUND");
         if (window && background && atoi(background))

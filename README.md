@@ -206,6 +206,9 @@ start, so this happens once per place.
 - `scripts/` also has the development tools used to analyse the game and build the
   shaders (`build_xenia_shaders.py` needs FXC from the Windows SDK and xenia-canary's
   FidelityFX-CAS/FSR submodules; the compiled shaders are committed).
+- `scripts/make_icon.py` draws the program's icon (`DAORecomp/res/daorecomp.ico`,
+  original art); it needs Pillow, and the .ico is committed, so it's only run to
+  change the icon.
 - The in-game Graphics tab is ActionScript 2 (`DAORecomp/ui/graphics_tab.as`), which
   `scripts/as2c.py` compiles to `DAORecomp/ui/graphics_tab_as.h`; run
   `python scripts/as2c.py DAORecomp/ui/graphics_tab.as DAORecomp/ui/graphics_tab_as.h kGraphicsTabScript`

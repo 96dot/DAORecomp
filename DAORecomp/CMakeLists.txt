@@ -13,6 +13,9 @@ set(DAO_IMGUI_BACKENDS
     ${DAO_XENIA_THIRD_PARTY}/imgui/misc/cpp/imgui_stdlib.cpp)
 set_source_files_properties(${DAO_IMGUI_BACKENDS} PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_OPTIONS -w)
 
+# The icon (res/daorecomp.rc), in both builds.
+set(DAO_ICON ${CMAKE_CURRENT_SOURCE_DIR}/res/daorecomp.rc)
+
 # The launcher-only build's entry point (DAO_LAUNCHER_ONLY, see ../CMakeLists.txt).
 set(DAO_SETUP_MAIN ${CMAKE_CURRENT_SOURCE_DIR}/launcher/setup_main.cpp)
 
@@ -31,7 +34,7 @@ if (DAO_LAUNCHER_ONLY)
         ${CMAKE_CURRENT_SOURCE_DIR}/hash.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/program.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/version.cpp)
-    add_executable(DAORecomp ${DAO_LAUNCHER_SOURCES} ${DAO_IMGUI_BACKENDS})
+    add_executable(DAORecomp ${DAO_LAUNCHER_SOURCES} ${DAO_IMGUI_BACKENDS} ${DAO_ICON})
     set(DAO_VERSION "dev" CACHE STRING "The release this is built from (e.g. v0.2.0)")
     set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/version.cpp PROPERTIES
         SKIP_PRECOMPILE_HEADERS ON COMPILE_DEFINITIONS "DAO_VERSION=\"${DAO_VERSION}\"")
@@ -55,7 +58,7 @@ if (DAO_LAUNCHER_ONLY)
 endif()
 
 list(REMOVE_ITEM DAO_RUNTIME_SOURCES ${DAO_SETUP_MAIN})
-add_executable(DAORecomp ${DAO_RUNTIME_SOURCES} ${DAO_IMGUI_BACKENDS})
+add_executable(DAORecomp ${DAO_RUNTIME_SOURCES} ${DAO_IMGUI_BACKENDS} ${DAO_ICON})
 
 # The release the installer builds (its tag), for the launcher's update check.
 set(DAO_VERSION "dev" CACHE STRING "The release this is built from (e.g. v0.2.0)")

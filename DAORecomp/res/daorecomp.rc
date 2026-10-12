@@ -1,0 +1,3 @@
+// The program's icon (drawn by scripts/make_icon.py): the exe's in Explorer, and the
+// windows' (Xenia's game window loads MAINICON; the launcher sets it on its own).
+MAINICON ICON "daorecomp.ico"
