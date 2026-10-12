@@ -8,6 +8,7 @@
 #include "kernel/vfs.h"
 #include "launcher/game_art.h"
 #include "text.h"
+#include "ui/palette.h"
 
 #include "third_party/imgui/imgui.h"
 #include "xenia/ui/graphics_provider.h"
@@ -24,12 +25,8 @@ namespace dao::ui
 {
     namespace
     {
-        // The game's menus: cream serif text, gold edges, dark warm panels (as the launcher's).
-        constexpr ImU32 kText = IM_COL32(236, 226, 204, 255);
-        constexpr ImU32 kTextDim = IM_COL32(190, 178, 154, 255);
-        constexpr ImU32 kGold = IM_COL32(176, 146, 92, 255);
-        constexpr ImU32 kGoldBright = IM_COL32(232, 204, 140, 255);
-        constexpr ImU32 kShadow = IM_COL32(0, 0, 0, 200);
+        // The game's menus' colours, as the launcher's.
+        using namespace palette;
 
         // The game's art: the Options screen's panel, section and footer bars, and the
         // controller's buttons.
@@ -140,12 +137,6 @@ namespace dao::ui
             wchar_t w = wchar_t(c);
             CharUpperBuffW(&w, 1);
             return char16_t(w);
-        }
-
-        ImU32 WithAlpha(ImU32 color, float alpha)
-        {
-            const float a = float(color >> IM_COL32_A_SHIFT & 0xFF) * std::clamp(alpha, 0.0f, 1.0f);
-            return (color & ~IM_COL32_A_MASK) | ImU32(a + 0.5f) << IM_COL32_A_SHIFT;
         }
 
         struct Sprite
