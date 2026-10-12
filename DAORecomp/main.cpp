@@ -202,6 +202,16 @@ int main(int argc, char** argv)
     // current folder or PATH.
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
 
+    // A window program: no console behind the launcher. The log is in dao.log and goes to
+    // stdout too (so a redirected file or pipe gets it); DAO_CONSOLE=1 also shows it in a
+    // console, the one it was started from or a new one.
+    if (getenv("DAO_CONSOLE") && GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_UNKNOWN &&
+        (AttachConsole(ATTACH_PARENT_PROCESS) || AllocConsole()))
+    {
+        freopen("CONOUT$", "w", stdout);
+        freopen("CONOUT$", "w", stderr);
+    }
+
     // Real pixels everywhere (launcher, game window, 4K swap chain): without
     // this, Windows stretches the window on scaled displays and reports scaled
     // coordinates.

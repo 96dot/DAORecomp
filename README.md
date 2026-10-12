@@ -155,7 +155,9 @@ folder there is a backup that couldn't be put in place; the log says why.)
   *Configure → Advanced → Add to Steam* adds the game to Steam as a non-Steam game, for
   each Steam account on the PC, with library artwork drawn from the title screen. Steam
   starts it with `--play`, straight into the game (for Big Picture). Steam has to be
-  closed for that: the launcher asks first, and starts it again after. The old
+  closed for that: the launcher asks first, and starts it again after. If Steam gets
+  stuck while closing, the launcher offers to end it after 15 seconds. If Windows still
+  can't let go of it after that, Steam won't start again until the PC is restarted. The old
   `shortcuts.vdf` is kept beside it as `shortcuts.vdf.daorecomp-backup`.
 - **Linux:** the program is a Windows executable; run it with Wine or Proton.
   - Steam: *Add a Non-Steam Game* → `DAORecomp.exe`, then in its properties force a
@@ -228,6 +230,10 @@ start, so this happens once per place.
   serves the result from `userdata/generated/`.
 - `scripts/check_include_case.py` finds `#include`s whose case differs from the file on
   disk, which only breaks builds on Linux.
+- `DAO_CONSOLE=1` shows the log (`userdata/dao.log`) as it's written, in the console
+  the game was started from or a new one. The game has no console of its own, but
+  output redirected to a file or a pipe gets the log without this. Closing a console it
+  opened ends the game.
 - Diagnostics, set as environment variables (results in `userdata/xenia.log`):
   - `DAO_GPU_TIMING=1`: GPU time per section of a frame and pipeline statistics per
     kind of draw and per shader pair, every 300 frames (`GT` lines; slows rendering).

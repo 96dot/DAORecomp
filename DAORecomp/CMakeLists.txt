@@ -112,8 +112,10 @@ target_link_libraries(DAORecomp PRIVATE
     winhttp
     bcrypt)
 
-# Recompiled code recurses on the host stack as deeply as the guest does.
-target_link_options(DAORecomp PRIVATE /STACK:16777216 /MAP)
+# Recompiled code recurses on the host stack as deeply as the guest does. A window
+# program, like the launcher-only build above: no console window behind it
+# (DAO_CONSOLE=1 gets one, see main.cpp).
+target_link_options(DAORecomp PRIVATE /STACK:16777216 /MAP /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
 
 target_precompile_headers(DAORecomp PRIVATE stdafx.h)
 

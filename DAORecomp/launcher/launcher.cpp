@@ -245,6 +245,17 @@ namespace dao::launcher
             // The Steam accounts that got the game.
             int accounts = 0;
             std::string error;
+            // Steam has exited but can't start again until Windows lets go of it.
+            bool steamStuck = false;
+        };
+
+        // Between the popup and the work in the background.
+        struct SteamControl
+        {
+            // Waiting for Steam to close.
+            std::atomic<bool> closing = false;
+            // Asked to end a Steam stuck while closing.
+            std::atomic<bool> end = false;
         };
 
         // A line of release notes, ready to show.
@@ -373,6 +384,8 @@ namespace dao::launcher
             SteamStep steamStep = SteamStep::None;
             std::vector<steam::Artwork> steamArt;
             std::future<SteamResult> steamTask;
+            std::shared_ptr<SteamControl> steamControl;
+            std::chrono::steady_clock::time_point steamWaitStart;
             SteamResult steamResult;
             // Setup: have the installed game's launcher add it to Steam.
             bool installSteam = false;
@@ -1325,36 +1338,64 @@ namespace dao::launcher
 
         // Steam's close takes a while with games' cloud saves to sync, or an update.
         constexpr std::chrono::seconds kSteamCloseTimeout{ 180 };
+        // After this long closing, the popup offers to end Steam (it can get stuck).
+        constexpr std::chrono::seconds kSteamStuckAfter{ 15 };
 
         void StartSteamWork(State& st)
         {
             st.steamStep = SteamStep::Working;
+            st.steamControl = std::make_shared<SteamControl>();
+            st.steamWaitStart = std::chrono::steady_clock::now();
             st.steamTask = std::async(std::launch::async,
-                [steamPath = st.steamPath, artwork = std::move(st.steamArt), exe = ProgramPath()] {
+                [steamPath = st.steamPath, artwork = std::move(st.steamArt), exe = ProgramPath(),
+                    control = st.steamControl] {
                     SteamResult result;
-                    // (Started again if it was closed, even when adding failed.)
-                    bool closed = false;
+                    const bool wasOpen = steam::IsRunning(steamPath);
                     try
                     {
-                        if (steam::IsRunning(steamPath))
+                        bool closed = !wasOpen;
+                        if (wasOpen && !steam::RequestShutdown(steamPath))
+                            result.error = fmt::format("can't ask Steam to close (error {})", GetLastError());
+                        else if (wasOpen)
                         {
-                            if (!steam::Shutdown(steamPath, kSteamCloseTimeout))
+                            control->closing = true;
+                            const auto end = std::chrono::steady_clock::now() + kSteamCloseTimeout;
+                            closed = !steam::IsRunning(steamPath);
+                            while (!closed && std::chrono::steady_clock::now() < end)
                             {
-                                result.error = "Steam didn't close in time (start it again if it closes later)";
-                                return result;
+                                if (control->end.exchange(false))
+                                    steam::End(steamPath);
+                                Sleep(250);
+                                closed = !steam::IsRunning(steamPath);
                             }
-                            closed = true;
+                            control->closing = false;
+                            if (!closed)
+                                result.error = "Steam didn't close in time (start it again once it has)";
                         }
-                        // Started from Steam (Big Picture, a controller), straight into the game.
-                        const steam::Shortcut shortcut = { "Dragon Age: Origins", exe, "--play" };
-                        result.accounts = steam::AddShortcut(steamPath, shortcut, artwork, result.error);
+                        if (closed)
+                        {
+                            // Started from Steam (Big Picture, a controller), straight into the game.
+                            const steam::Shortcut shortcut = { "Dragon Age: Origins", exe, "--play" };
+                            result.accounts = steam::AddShortcut(steamPath, shortcut, artwork, result.error);
+                        }
                     }
                     catch (const std::exception& e)
                     {
                         LOGE("Launcher: adding to Steam failed: {}", e.what());
                         result.error = "something went wrong (see dao.log)";
                     }
-                    if (closed && !steam::Start(steamPath))
+                    // Open again if it was before, even when adding failed (and if it
+                    // closed after all); not while Windows still holds the old one.
+                    // (A few seconds for one that this closed or ended to go.)
+                    result.steamStuck = steam::IsStuck(steamPath);
+                    for (int tries = 0; wasOpen && result.steamStuck && tries < 20; tries++)
+                    {
+                        Sleep(250);
+                        result.steamStuck = steam::IsStuck(steamPath);
+                    }
+                    if (result.steamStuck)
+                        LOGW("Launcher: Steam has exited but Windows hasn't let go of it, so it can't start again");
+                    else if (wasOpen && !steam::IsRunning(steamPath) && !steam::Start(steamPath))
                         LOGW("Launcher: can't start Steam again (error {})", GetLastError());
                     return result;
                 });
@@ -1439,12 +1480,36 @@ namespace dao::launcher
                 // Added for some accounts, not all.
                 if (result.accounts > 0 && !result.error.empty())
                     HelpText(fmt::format("Not for every account: {}.", result.error).c_str());
+                if (result.steamStuck)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, kError);
+                    ImGui::TextUnformatted("Steam is stuck: it has ended, but Windows is still holding on to it, "
+                                           "so it won't start again until you restart the PC.");
+                    ImGui::PopStyleColor();
+                }
                 ImGui::Spacing();
                 if (ImGui::Button("OK") || cancel)
                     close = true;
                 // (The only item.)
                 if (ImGui::IsWindowAppearing())
                     ImGui::SetKeyboardFocusHere(-1);
+            }
+            else if (st.steamControl && st.steamControl->closing)
+            {
+                const auto waited = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now() - st.steamWaitStart);
+                ImGui::Text("Waiting for Steam to close (%d s)...", int(waited.count()));
+                if (waited >= kSteamStuckAfter)
+                {
+                    HelpText("Steam can take a while to close when it syncs cloud saves or updates. If it's stuck "
+                             "(its windows are gone but it doesn't finish, and it won't start again), end it here, "
+                             "as Task Manager's End task would. It's started again after.");
+                    ImGui::Spacing();
+                    ImGui::BeginDisabled(st.steamControl->end);
+                    if (ImGui::Button("End Steam"))
+                        st.steamControl->end = true;
+                    ImGui::EndDisabled();
+                }
             }
             else
                 ImGui::TextUnformatted("Adding the game to Steam...");
@@ -2835,7 +2900,9 @@ namespace dao::launcher
             while (SDL_PollEvent(&event))
             {
                 ImGui_ImplSDL3_ProcessEvent(&event);
-                if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
+                // (Not while adding to Steam: its result says what's become of Steam.)
+                if ((event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) &&
+                    st.steamStep != SteamStep::Working)
                     st.quit = true;
                 // Files dropped on the window: one drop is its paths between
                 // begin and complete.

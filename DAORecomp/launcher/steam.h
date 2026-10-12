@@ -26,13 +26,21 @@ namespace dao::launcher::steam
     // Proton or Wine (where adding the game is done in Steam itself).
     std::filesystem::path FindSteam();
 
-    // Whether the Steam in that folder is running.
+    // Whether the Steam in that folder is running (not counting one that has exited).
     bool IsRunning(const std::filesystem::path& steam);
 
-    // Asks Steam to exit and waits up to `timeout` for it; true once it's closed.
-    bool Shutdown(const std::filesystem::path& steam, std::chrono::seconds timeout);
+    // Whether a Steam that has exited is still held by Windows (a thread stuck in the
+    // kernel): it won't start again until that's let go of, or the PC is restarted.
+    bool IsStuck(const std::filesystem::path& steam);
 
-    // Starts Steam again (after Shutdown).
+    // Asks Steam to exit (IsRunning tells when it has).
+    bool RequestShutdown(const std::filesystem::path& steam);
+
+    // Ends Steam's steam.exe, for a Steam stuck while closing; false (logged) if none
+    // could be.
+    bool End(const std::filesystem::path& steam);
+
+    // Starts Steam again (after RequestShutdown).
     bool Start(const std::filesystem::path& steam);
 
     // Adds the shortcut (or updates the one for the same exe) to every Steam account

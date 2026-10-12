@@ -341,45 +341,93 @@ namespace dao::launcher::steam
         return fs::is_regular_file(steam / "steam.exe", ec) ? steam : fs::path();
     }
 
-    bool IsRunning(const fs::path& steam)
+    namespace
     {
-        const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (snapshot == INVALID_HANDLE_VALUE)
-            return false;
-        const std::string wanted = Lower(Utf8((steam / "steam.exe").lexically_normal()));
-        PROCESSENTRY32W entry = { .dwSize = sizeof(entry) };
-        bool found = false;
-        for (BOOL more = Process32FirstW(snapshot, &entry); more && !found; more = Process32NextW(snapshot, &entry))
+        // The steam.exe processes of the Steam in that folder that are still running,
+        // or with `exited` those that have exited but Windows still holds (a thread
+        // stuck in the kernel keeps the process and its handles, and Steam won't start
+        // again while they're held). One that's gone, though something still has it
+        // open, is neither. Opened with `access` (and PROCESS_QUERY_LIMITED_INFORMATION,
+        // and SYNCHRONIZE where allowed); the caller closes them.
+        std::vector<HANDLE> SteamProcesses(const fs::path& steam, DWORD access, bool exited = false)
         {
-            if (_wcsicmp(entry.szExeFile, L"steam.exe") != 0)
-                continue;
-            const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
-            if (!process)
-                continue;
-            wchar_t image[MAX_PATH * 2];
-            DWORD size = DWORD(std::size(image));
-            found = QueryFullProcessImageNameW(process, 0, image, &size) &&
-                Lower(Utf8(fs::path(image).lexically_normal())) == wanted;
-            CloseHandle(process);
+            access |= PROCESS_QUERY_LIMITED_INFORMATION;
+            std::vector<HANDLE> processes;
+            const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (snapshot == INVALID_HANDLE_VALUE)
+                return processes;
+            const std::string wanted = Lower(Utf8((steam / "steam.exe").lexically_normal()));
+            PROCESSENTRY32W entry = { .dwSize = sizeof(entry) };
+            for (BOOL more = Process32FirstW(snapshot, &entry); more; more = Process32NextW(snapshot, &entry))
+            {
+                if (_wcsicmp(entry.szExeFile, L"steam.exe") != 0)
+                    continue;
+                // (A Steam run as administrator may not allow waiting on it: then it's
+                // taken as not gone.)
+                HANDLE process = OpenProcess(access | SYNCHRONIZE, FALSE, entry.th32ProcessID);
+                const bool waitable = process;
+                if (!process)
+                    process = OpenProcess(access, FALSE, entry.th32ProcessID);
+                if (!process)
+                    continue;
+                wchar_t image[MAX_PATH * 2];
+                DWORD size = DWORD(std::size(image));
+                DWORD code = 0;
+                if (QueryFullProcessImageNameW(process, 0, image, &size) &&
+                    Lower(Utf8(fs::path(image).lexically_normal())) == wanted &&
+                    (!waitable || WaitForSingleObject(process, 0) == WAIT_TIMEOUT) &&
+                    GetExitCodeProcess(process, &code) && (code != STILL_ACTIVE) == exited)
+                    processes.push_back(process);
+                else
+                    CloseHandle(process);
+            }
+            CloseHandle(snapshot);
+            return processes;
         }
-        CloseHandle(snapshot);
-        return found;
+
+        bool AnySteamProcess(const fs::path& steam, bool exited)
+        {
+            const std::vector<HANDLE> processes = SteamProcesses(steam, 0, exited);
+            for (const HANDLE process : processes)
+                CloseHandle(process);
+            return !processes.empty();
+        }
     }
 
-    bool Shutdown(const fs::path& steam, std::chrono::seconds timeout)
+    bool IsRunning(const fs::path& steam)
     {
-        if (!IsRunning(steam))
-            return true;
-        if (!StartProgram(steam / "steam.exe", L"-shutdown", 0, steam))
-            return false;
-        const auto end = std::chrono::steady_clock::now() + timeout;
-        while (std::chrono::steady_clock::now() < end)
+        return AnySteamProcess(steam, false);
+    }
+
+    bool IsStuck(const fs::path& steam)
+    {
+        return AnySteamProcess(steam, true);
+    }
+
+    bool RequestShutdown(const fs::path& steam)
+    {
+        return StartProgram(steam / "steam.exe", L"-shutdown", 0, steam);
+    }
+
+    bool End(const fs::path& steam)
+    {
+        // (None found: it's run as administrator, or another user, or it has closed.)
+        const std::vector<HANDLE> processes = SteamProcesses(steam, PROCESS_TERMINATE);
+        bool ended = !processes.empty();
+        for (const HANDLE process : processes)
         {
-            if (!IsRunning(steam))
-                return true;
-            Sleep(250);
+            LOGW("Steam: ending steam.exe (process {}), stuck while closing", GetProcessId(process));
+            // (Exit code 1, as Task Manager's End task gives.)
+            if (!TerminateProcess(process, 1))
+            {
+                LOGW("Steam: can't end process {} (error {})", GetProcessId(process), GetLastError());
+                ended = false;
+            }
+            CloseHandle(process);
         }
-        return false;
+        if (processes.empty())
+            LOGW("Steam: can't open steam.exe to end it (run as administrator?)");
+        return ended;
     }
 
     bool Start(const fs::path& steam)
