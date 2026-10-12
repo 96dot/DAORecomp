@@ -236,9 +236,10 @@ namespace dao::launcher::steam
                 error = fmt::format("can't read {}", Utf8(file));
                 return 0;
             }
-            if (exists)
+            // (An empty one, as Steam may leave, is as none.)
+            const uintmax_t size = exists ? fs::file_size(file, ec) : 0;
+            if (exists && (ec || size > 0))
             {
-                const uintmax_t size = fs::file_size(file, ec);
                 std::vector<uint8_t> data(ec || size > kMaxFileSize ? 0 : size_t(size));
                 std::ifstream in(file, std::ios::binary);
                 size_t pos = 0;

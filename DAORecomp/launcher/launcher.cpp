@@ -326,6 +326,8 @@ namespace dao::launcher
             // and whether it has been (until then, the saved list isn't replaced).
             std::future<ModScan> modScan;
             bool modsRead = false;
+            // config.toml couldn't be parsed: it isn't saved over (defaults are shown).
+            bool settingsUnreadable = false;
             // The game's file names, for the mods' warnings: read once (with the mod
             // list), shared with the background work.
             std::shared_ptr<const mods::GameFiles> gameFiles;
@@ -1079,6 +1081,12 @@ namespace dao::launcher
                 ImGui::Text("Game data not found in %s", Utf8(st.gameRoot).c_str());
                 ImGui::PopStyleColor();
             }
+            else if (st.settingsUnreadable)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, kError);
+                ImGui::TextUnformatted("config.toml can't be read (see dao.log): changes here won't be saved");
+                ImGui::PopStyleColor();
+            }
             else
             {
                 const auto enabledMods =
@@ -1324,31 +1332,36 @@ namespace dao::launcher
             st.steamTask = std::async(std::launch::async,
                 [steamPath = st.steamPath, artwork = std::move(st.steamArt), exe = ProgramPath()] {
                     SteamResult result;
+                    // (Started again if it was closed, even when adding failed.)
+                    bool closed = false;
                     try
                     {
-                        const bool wasRunning = steam::IsRunning(steamPath);
-                        if (wasRunning && !steam::Shutdown(steamPath, kSteamCloseTimeout))
+                        if (steam::IsRunning(steamPath))
                         {
-                            result.error = "Steam didn't close in time (start it again if it closes later)";
-                            return result;
+                            if (!steam::Shutdown(steamPath, kSteamCloseTimeout))
+                            {
+                                result.error = "Steam didn't close in time (start it again if it closes later)";
+                                return result;
+                            }
+                            closed = true;
                         }
                         // Started from Steam (Big Picture, a controller), straight into the game.
                         const steam::Shortcut shortcut = { "Dragon Age: Origins", exe, "--play" };
                         result.accounts = steam::AddShortcut(steamPath, shortcut, artwork, result.error);
-                        if (wasRunning && !steam::Start(steamPath))
-                            LOGW("Launcher: can't start Steam again (error {})", GetLastError());
                     }
                     catch (const std::exception& e)
                     {
                         LOGE("Launcher: adding to Steam failed: {}", e.what());
                         result.error = "something went wrong (see dao.log)";
                     }
+                    if (closed && !steam::Start(steamPath))
+                        LOGW("Launcher: can't start Steam again (error {})", GetLastError());
                     return result;
                 });
             st.steamArt.clear();
         }
 
-        // Between frames: the artwork drawn (with the renderer), the work's result taken.
+        // Between frames: the artwork drawn (with the renderer).
         void UpdateSteam(State& st)
         {
             if (st.steamStep == SteamStep::Start && ImGui::GetFrameCount() > 0)
@@ -1360,7 +1373,12 @@ namespace dao::launcher
                 else
                     StartSteamWork(st);
             }
-            else if (st.steamStep == SteamStep::Working &&
+        }
+
+        // Each frame, minimized too: the work's result taken.
+        void FinishSteamWork(State& st)
+        {
+            if (st.steamStep == SteamStep::Working &&
                 st.steamTask.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
             {
                 st.steamResult = st.steamTask.get();
@@ -2145,11 +2163,7 @@ namespace dao::launcher
             if (st.installDest != st.checkedDest)
             {
                 st.checkedDest = st.installDest;
-                std::error_code ec;
-                // As installer/pipeline.py's game_extracted (which also checks the xex's hash).
-                const fs::path game = FromUtf8(st.installDest) / "game";
-                st.destHasGame = !st.installDest.empty() && fs::is_regular_file(game / "default.xex", ec) &&
-                    fs::is_regular_file(game / "dao-extracted.txt", ec);
+                st.destHasGame = !st.installDest.empty() && IsInstalledGame(FromUtf8(st.installDest));
             }
             return st.destHasGame;
         }
@@ -2622,11 +2636,15 @@ namespace dao::launcher
     static bool RunWindow(const fs::path& gameRoot, const fs::path& userRoot, const RunMode& mode,
         SetupResult* setup)
     {
-        if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
-        {
-            LOGE("Launcher: SDL_Init failed: {}; starting the game", SDL_GetError());
+        // No window: the game starts without the launcher; setup has nothing to show.
+        const auto noWindow = [&](const std::string& why) {
+            LOGE("Launcher: {}; {}", why, setup ? "setup can't be shown" : "starting the game");
+            if (setup)
+                setup->failed = true;
             return true;
-        }
+        };
+        if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
+            return noWindow(fmt::format("SDL_Init failed: {}", SDL_GetError()));
 
         // The window: 16:9 like the game's screens, at the display's scale; resizable
         // down to a size the menus still fit.
@@ -2649,11 +2667,11 @@ namespace dao::launcher
         SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
         if (!renderer)
         {
-            LOGE("Launcher: no window ({}); starting the game", SDL_GetError());
+            const std::string why = fmt::format("no window ({})", SDL_GetError());
             if (window)
                 SDL_DestroyWindow(window);
             SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
-            return true;
+            return noWindow(why);
         }
         SDL_SetWindowMinimumSize(window, int(kMinWidth * scale), int(kMinHeight * scale));
         if (!SDL_SetRenderVSync(renderer, 1))
@@ -2690,13 +2708,12 @@ namespace dao::launcher
         ImFont* regular = LoadFont(kRegular, 19.0f * scale);
         if (!regular)
         {
-            LOGE("Launcher: no system font found; starting the game");
             g_state = nullptr;
             ImGui::DestroyContext();
             SDL_DestroyRenderer(renderer);
             SDL_DestroyWindow(window);
             SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
-            return true;
+            return noWindow("no system font found");
         }
         st.helpFont = LoadFont(kItalic, 17.0f * scale);
         st.headingFont = LoadFont(kBold, 20.0f * scale);
@@ -2737,7 +2754,11 @@ namespace dao::launcher
         }
         else
         {
-            st.settings = ReadSettings(userRoot);
+            // (One that can't be read is left for the player to fix, not replaced with defaults.)
+            if (std::optional<Settings> settings = TryReadSettings(userRoot))
+                st.settings = *settings;
+            else
+                st.settingsUnreadable = true;
             mods::CleanUpInstalls(st.modsRoot);
             mods::CleanUpConversions(st.modsRoot);
             ReadMods(st, st.settings.mods);
@@ -2800,6 +2821,7 @@ namespace dao::launcher
             FinishReadingMods(st);
             FinishAddingMods(st);
             FinishConverting(st);
+            FinishSteamWork(st);
             // Installed: the new game's launcher takes over.
             st.installer.Poll();
             if (st.installer.GetState() == InstallRunner::State::Done)
@@ -2886,8 +2908,10 @@ namespace dao::launcher
             if (viewChanged && st.view == view)
                 st.viewChanged = false;
             ImGui::End();
-            // A downloaded update: its installer replaces the game's files, so close.
-            if (st.updater->GetState() == Updater::State::Ready && st.updater->Launch())
+            // A downloaded update: its installer replaces the game's files, so close (once
+            // mods and Steam are done with, and not if the game is starting).
+            if (st.updater->GetState() == Updater::State::Ready && !st.play && !ModsBusy(st) &&
+                st.steamStep != SteamStep::Working && st.updater->Launch())
                 st.quit = true;
 
             ImGui::Render();
@@ -2928,8 +2952,10 @@ namespace dao::launcher
         // (Not if the list couldn't be read: the saved one stays.)
         if (st.modsRead)
             st.settings.mods = mods::ToState(st.mods);
-        if (!st.setupOnly)
+        if (!st.setupOnly && !st.settingsUnreadable)
             SaveSettings(userRoot, st.settings);
+        else if (st.settingsUnreadable)
+            LOGW("Launcher: config.toml couldn't be read, so it isn't saved over");
         // (Closed while installing: the installer is stopped with st.)
         if (setup && st.installer.GetState() == InstallRunner::State::Done)
             *setup = { st.installer.Installed(), st.installSteam && !st.steamPath.empty() };

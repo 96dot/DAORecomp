@@ -335,7 +335,7 @@ namespace dao::launcher
         // Updates go into an install made by the installer (its game files are
         // what it rebuilds from), and only on Windows (under Wine/Proton the
         // installer can't run).
-        installable_ = !installRoot_.empty() && !IsUnderWine() && fs::exists(installRoot_ / "game" / "default.xex");
+        installable_ = !IsUnderWine() && IsInstalledGame(installRoot_);
         // The last update's installer (it may still be closing, then it goes next time).
         std::error_code ec;
         if (installable_)

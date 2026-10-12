@@ -142,16 +142,18 @@ namespace dao::mods
                     const uint32_t size = gff::PrimSize(f.type);
                     return size == 16 || size == 64 ? 16 : std::min(std::max(size, 1u), 8u);
                 };
-                std::vector<gff::FieldDef> order = src.fields;
-                std::ranges::stable_sort(order, [&](const gff::FieldDef& a, const gff::FieldDef& b) {
-                    const uint32_t aa = align(a), ab = align(b);
-                    return aa != ab ? aa > ab : a.offset < b.offset;
+                // (Alignment, field), each alignment worked out once.
+                std::vector<std::pair<uint32_t, gff::FieldDef>> order;
+                order.reserve(src.fields.size());
+                for (const gff::FieldDef& f : src.fields)
+                    order.emplace_back(align(f), f);
+                std::ranges::stable_sort(order, [](const auto& a, const auto& b) {
+                    return a.first != b.first ? a.first > b.first : a.second.offset < b.second.offset;
                 });
                 gff::Template out{ src.fourcc, 0, {} };
                 uint32_t at = 0, most = 1;
-                for (gff::FieldDef field : order)
+                for (auto [a, field] : order)
                 {
-                    const uint32_t a = align(field);
                     most = std::max(most, a);
                     at = (at + a - 1) / a * a;
                     field.offset = at;
@@ -268,6 +270,10 @@ namespace dao::mods
                 auto data = ui::ReadFileBytes(path_, entry.offset, entry.packedSize);
                 if (!data || !compressed_ || entry.size == 0)
                     return data;
+                // Deflate packs at most about 1032 to 1: more is damage (and an
+                // allocation for nothing).
+                if (entry.packedSize == 0 || entry.size / entry.packedSize > 1032)
+                    return std::nullopt;
                 // BioWare's zlib (a byte, then a raw deflate stream), a raw stream or a
                 // zlib one, whichever unpacks to the size.
                 std::vector<uint8_t> out(entry.size);
@@ -314,9 +320,12 @@ namespace dao::mods
         {
             std::set<std::string> places;
             std::string page;
-            for (size_t at = xml.find('<'); at != std::string_view::npos; at = xml.find('<', at + 1))
+            // (Each element from its '<' to its '>', the next looked for after that.)
+            size_t close = 0;
+            for (size_t at = xml.find('<'); at != std::string_view::npos && (close = xml.find('>', at)) != std::string_view::npos;
+                 at = xml.find('<', close))
             {
-                const std::string_view element = xml.substr(at, xml.find('>', at) - at);
+                const std::string_view element = xml.substr(at, close - at);
                 if (element.starts_with("<AtlasTexture"))
                     page = Lower(XmlAttribute(element, "Name"));
                 else if (element.starts_with("<SourceTexture"))
@@ -336,9 +345,11 @@ namespace dao::mods
         // case, without the extension.
         void FindNormalMaps(std::string_view mao, std::set<std::string>& out)
         {
-            for (size_t at = mao.find("<Texture"); at != std::string_view::npos; at = mao.find("<Texture", at + 1))
+            size_t close = 0;
+            for (size_t at = mao.find("<Texture"); at != std::string_view::npos && (close = mao.find('>', at)) != std::string_view::npos;
+                 at = mao.find("<Texture", close))
             {
-                const std::string_view element = mao.substr(at, mao.find('>', at) - at);
+                const std::string_view element = mao.substr(at, close - at);
                 if (Lower(XmlAttribute(element, "Name")).find("normal") == std::string::npos)
                     continue;
                 const std::string texture = Lower(XmlAttribute(element, "ResName"));

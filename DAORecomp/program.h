@@ -18,4 +18,9 @@ namespace dao
 
     // Whether this runs under Wine or Proton.
     bool IsUnderWine();
+
+    // Whether `installRoot` is an install the installer made: its game folder has the
+    // disc's files and the installer's marker (as installer/pipeline.py's game_extracted,
+    // which also checks the xex's hash).
+    bool IsInstalledGame(const std::filesystem::path& installRoot);
 }

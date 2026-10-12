@@ -268,6 +268,12 @@ namespace dao::mods
                 else if (IsFile(entry))
                     MoveOne(entry.path(), to / entry.path().filename(), moves);
             }
+            // (A folder that can't be listed is left behind, as a file that can't be moved is.)
+            if (ec)
+            {
+                moves.failed++;
+                moves.error = ec;
+            }
         }
 
         // Removes the empty folders under `dir` (left by moving files out).
@@ -584,6 +590,7 @@ namespace dao::mods
                 table.insert("description", manifest.description);
             std::ofstream file(folder / "mod.toml");
             file << table << "\n";
+            file.close();
             if (!file)
                 LOGW("Mods: can't write the mod.toml of {}", name);
         }

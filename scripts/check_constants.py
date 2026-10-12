@@ -40,7 +40,7 @@ CHECKS = [
 
 # (file, a name the installer uses, as a string literal there)
 NAMES = [
-    ("DAORecomp/launcher/launcher.cpp", python_string("installer/pipeline.py", "GAME_MARKER")),
+    ("DAORecomp/program.cpp", python_string("installer/pipeline.py", "GAME_MARKER")),
     ("DAORecomp/kernel/title_update.cpp", python_string("installer/pipeline.py", "UPDATE_FOLDER")),
     ("DAORecomp/main.cpp", "DAORecomp.old.exe"),
     ("installer/pipeline.py", "DAORecomp.old.exe"),

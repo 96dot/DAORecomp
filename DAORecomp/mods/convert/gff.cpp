@@ -84,6 +84,9 @@ namespace dao::mods::gff
                     value.kind = Value::Kind::List;
                     value.type = type;
                     value.flags = flags;
+                    // (Each item charges the budget as it's read; checked first, as the items are reserved.)
+                    if (budget_ / sizeof(Value) < count)
+                        throw Malformed("too big");
                     value.items.reserve(count);
                     for (uint32_t i = 0; i < count; ++i)
                         value.items.push_back(Read(type, sub, base + 4 + uint64_t(i) * size, depth + 1));
@@ -439,19 +442,32 @@ namespace dao::mods::gff
 
     uint32_t StructAlign(const Template& tpl, const std::vector<Template>& templates, int depth)
     {
-        if (depth > 16)
-            return 4;
-        for (const FieldDef& field : tpl.fields)
+        // The inline structs, nearest first, down to 16 deep: each template is looked at
+        // once, at its least depth (not once per path to it, which grows exponentially).
+        std::vector<bool> seen(templates.size());
+        std::vector<const Template*> level = { &tpl }, next;
+        for (; depth <= 16 && !level.empty(); depth++, level.swap(next))
         {
-            if ((field.flags & (kList | kRef)) || field.type == kGeneric)
-                continue;
-            if (field.flags & kStruct)
+            next.clear();
+            for (const Template* t : level)
             {
-                if (field.type < templates.size() && StructAlign(templates[field.type], templates, depth + 1) == 16)
-                    return 16;
+                for (const FieldDef& field : t->fields)
+                {
+                    if ((field.flags & (kList | kRef)) || field.type == kGeneric)
+                        continue;
+                    if (field.flags & kStruct)
+                    {
+                        if (field.type < templates.size() && !seen[field.type])
+                        {
+                            seen[field.type] = true;
+                            next.push_back(&templates[field.type]);
+                        }
+                    }
+                    else if (field.type == kVec4 || field.type == kQuat || field.type == kColor ||
+                        field.type == kMatrix)
+                        return 16;
+                }
             }
-            else if (field.type == kVec4 || field.type == kQuat || field.type == kColor || field.type == kMatrix)
-                return 16;
         }
         return 4;
     }

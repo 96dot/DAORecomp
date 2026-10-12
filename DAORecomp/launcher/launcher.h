@@ -30,6 +30,8 @@ namespace dao::launcher
         std::filesystem::path installed;
         // Whether that one's launcher is to add the game to Steam.
         bool addToSteam = false;
+        // Whether setup couldn't show its window (no display, renderer or font; see the log).
+        bool failed = false;
     };
 
     // Setup, the launcher-only build players download: the Install view for `dest`,

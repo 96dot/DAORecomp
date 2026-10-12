@@ -36,6 +36,14 @@ namespace dao
         return ntdll && GetProcAddress(ntdll, "wine_get_version");
     }
 
+    bool IsInstalledGame(const fs::path& installRoot)
+    {
+        std::error_code ec;
+        const fs::path game = installRoot / "game";
+        return !installRoot.empty() && fs::is_regular_file(game / "default.xex", ec) &&
+            fs::is_regular_file(game / "dao-extracted.txt", ec);
+    }
+
     bool StartProgram(const fs::path& program, std::wstring_view arguments, DWORD flags, const fs::path& folder)
     {
         std::wstring command = QuoteArgument(program) + L" " + std::wstring(arguments);

@@ -23,9 +23,8 @@ namespace
     // install (to update it), else the old installer's default.
     fs::path DefaultDest()
     {
-        std::error_code ec;
         const fs::path here = dao::ProgramPath().parent_path();
-        if (!here.empty() && fs::is_regular_file(here / "game" / "default.xex", ec))
+        if (dao::IsInstalledGame(here))
             return here;
         const fs::path home = EnvPath(L"USERPROFILE");
         return home.empty() ? fs::path() : home / "Games" / "DAORecomp";
@@ -73,6 +72,12 @@ int main(int, char**)
     LOGI("Dragon Age: Origins recomp setup - install folder {}", dao::Utf8(dest));
 
     const dao::launcher::SetupResult setup = dao::launcher::RunSetup(dest, iso, update);
+    if (setup.failed)
+    {
+        const std::wstring text = L"Setup can't open its window. What went wrong is in " + (work / "setup.log").wstring();
+        MessageBoxW(nullptr, text.c_str(), L"Dragon Age: Origins - Setup", MB_OK | MB_ICONERROR);
+        return 1;
+    }
     if (setup.installed.empty())
         return 0;
     // The new game's launcher, shown even if the install's settings skip it; it adds
