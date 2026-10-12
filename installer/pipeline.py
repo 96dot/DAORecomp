@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import sys
 import time
 from dataclasses import dataclass
@@ -260,7 +261,11 @@ def recompile(reporter, recompiler, game, update=None):
     config_name = "DAO_tu6" if update else "DAO"
     out = BUILD / f"{name}_gen"
     if out.exists():
-        shutil.rmtree(out)
+        # Renamed first: Windows can finish deleting a folder after rmtree returns
+        # (a scanner holding a file), and recreating it then fails.
+        old = out.with_name(f"{out.name}.old-{os.getpid()}")
+        out.rename(old)
+        shutil.rmtree(old, ignore_errors=True)
     out.mkdir(parents=True)
     config = (REPO / "config" / f"{config_name}.toml").read_text(encoding="utf-8")
     replacements = {
@@ -363,6 +368,40 @@ def install(reporter, built, dest, with_shortcuts=False):
     if with_shortcuts and IS_WINDOWS:
         shortcuts.create(reporter, dest)
     reporter.log(f"Installed {VERSION} to {dest}")
+
+
+# ------------------------------------------------- the exe players download
+
+# The footer after the installer appended to the launcher-only DAORecomp.exe:
+# magic, the installer's offset and size (little-endian u64) and its SHA-256, as
+# DAORecomp/launcher/install_runner.cpp reads it.
+ENGINE_MAGIC = b"DAORecompEngine1"
+
+
+def append_engine(launcher, engine, out):
+    """Writes `out`: the launcher-only exe with the installer executable appended (Windows
+    ignores data after an image; the launcher extracts it to run it)."""
+    image = Path(launcher).read_bytes()
+    data = Path(engine).read_bytes()
+    footer = ENGINE_MAGIC + struct.pack("<QQ", len(image), len(data)) + hashlib.sha256(data).digest()
+    Path(out).write_bytes(image + data + footer)
+
+
+def build_setup(reporter, engine, out, jobs=0):
+    """Builds what players download: DAORecomp.exe with the launcher and its Install view
+    but no game code (DAO_LAUNCHER_ONLY), with the installer executable `engine` in it.
+    Accepts the Microsoft build tools license for the download (as the CI does)."""
+    check_host()
+    if not IS_WINDOWS:
+        raise InstallError("The launcher-only exe is built on Windows.")
+    toolchain.ensure_git(reporter)
+    sources.ensure_all(reporter)
+    tc = toolchain.ensure_toolchain(reporter, True)
+    build = BUILD / "setup"
+    _configure(reporter, tc, REPO, build, {"DAO_LAUNCHER_ONLY": "ON", "DAO_VERSION": VERSION})
+    _build(reporter, tc, build, "DAORecomp", jobs)
+    append_engine(build / "DAORecomp" / "DAORecomp.exe", engine, out)
+    reporter.log(f"Built {out} ({human_size(Path(out).stat().st_size)})")
 
 
 # ----------------------------------------------------------------------- all

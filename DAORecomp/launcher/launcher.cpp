@@ -16,6 +16,7 @@
 #include <imgui_stdlib.h>
 
 #include "content/install.h"
+#include "content/xiso.h"
 #include "launcher/install_runner.h"
 #include "mods/convert/convert.h"
 #include "mods/mod_install.h"
@@ -337,6 +338,11 @@ namespace dao::launcher
             // Whether installDest has the game's files, as of checkedDest.
             std::string checkedDest;
             bool destHasGame = false;
+            // The menu art copied out of the disc image being chosen (artIso), while
+            // there's no installed game to take it from.
+            SDL_Renderer* renderer = nullptr;
+            std::string artIso;
+            std::future<bool> isoArt;
             // DAO_LAUNCHER_SCREENSHOTS=<dir>: show each view, save it as BMP, quit.
             fs::path screenshotDir;
             int screenshotFrame = 0;
@@ -1833,10 +1839,62 @@ namespace dao::launcher
             {
                 st.checkedDest = st.installDest;
                 std::error_code ec;
-                st.destHasGame = !st.installDest.empty() &&
-                    fs::is_regular_file(FromUtf8(st.installDest) / "game" / "default.xex", ec);
+                // As installer/pipeline.py's game_extracted (which also checks the xex's hash).
+                const fs::path game = FromUtf8(st.installDest) / "game";
+                st.destHasGame = !st.installDest.empty() && fs::is_regular_file(game / "default.xex", ec) &&
+                    fs::is_regular_file(game / "dao-extracted.txt", ec);
             }
             return st.destHasGame;
+        }
+
+        // The menus' art archive, as the game has it (and LoadGameArt reads it).
+        constexpr const char* kArtArchive = "packages/core/data/guiexport.erf";
+        // Far larger than the game's (18 MB).
+        constexpr uint64_t kMaxArtArchiveSize = 256ull << 20;
+
+        void LoadArt(State& st, SDL_Renderer* renderer);
+
+        // Where setup keeps the art archive from the disc image: a folder laid out as
+        // the game's, in the installer's work folder.
+        fs::path SetupArtRoot()
+        {
+            return InstallerWorkFolder() / "setup-art";
+        }
+
+        // Setup before the game is installed: once a disc image is chosen, its menu art
+        // is copied out (in the background) and the screens get it.
+        void UpdateIsoArt(State& st)
+        {
+            if (st.isoArt.valid())
+            {
+                if (st.isoArt.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                    return;
+                if (st.isoArt.get() && st.art.empty())
+                {
+                    st.gameRoot = SetupArtRoot();
+                    LoadArt(st, st.renderer);
+                }
+                return;
+            }
+            if (!st.art.empty() || st.installIso.empty() || st.installIso == st.artIso)
+                return;
+            st.artIso = st.installIso;
+            const fs::path iso = FromUtf8(st.installIso);
+            std::error_code ec;
+            if (!fs::is_regular_file(iso, ec))
+                return;
+            st.isoArt = std::async(std::launch::async, [iso] {
+                const fs::path out = SetupArtRoot() / kArtArchive;
+                std::error_code ec;
+                fs::create_directories(out.parent_path(), ec);
+                std::string error;
+                if (!content::ExtractIsoFile(iso, kArtArchive, out, kMaxArtArchiveSize, error))
+                {
+                    LOGW("Setup: no menu art from {}: {}", Utf8(iso), error);
+                    return false;
+                }
+                return true;
+            });
         }
 
         void StartInstall(State& st)
@@ -1916,6 +1974,7 @@ namespace dao::launcher
         void InstallContents(State& st)
         {
             TakeDialogChoices(st);
+            UpdateIsoArt(st);
             const InstallRunner::State state = st.installer.GetState();
             if (state == InstallRunner::State::Running || state == InstallRunner::State::Done)
             {
@@ -2220,7 +2279,7 @@ namespace dao::launcher
             // at once with `update` when the folder has the game's files.
             bool setup = false;
             bool update = false;
-            fs::path dest;
+            fs::path dest, iso;
         };
     }
 
@@ -2324,10 +2383,17 @@ namespace dao::launcher
         st.modsRoot = mods::ModsRoot(gameRoot);
         st.gameFound = fs::exists(gameRoot / "default.xex");
         st.window = window;
+        st.renderer = renderer;
         st.setupOnly = mode.setup;
         if (mode.setup)
         {
+            std::error_code ec;
+            if (!fs::is_regular_file(gameRoot / kArtArchive, ec) && fs::is_regular_file(SetupArtRoot() / kArtArchive, ec))
+                st.gameRoot = SetupArtRoot();
             st.installDest = Utf8(mode.dest);
+            st.installIso = Utf8(mode.iso);
+            // An update keeps the shortcuts there are (or the player removed).
+            st.installShortcuts = !HasGameFiles(st);
             SetView(st, View::Install);
             // The launcher's Update: straight on, as there's nothing to choose.
             if (mode.update && HasGameFiles(st))
@@ -2353,7 +2419,9 @@ namespace dao::launcher
                 AddDroppedMods(st);
             }
         }
-        LoadArt(st, renderer);
+        // (Setup may have no art until a disc image is chosen.)
+        if (std::error_code ec; !st.setupOnly || fs::is_regular_file(st.gameRoot / kArtArchive, ec))
+            LoadArt(st, renderer);
         st.updater = std::make_unique<Updater>();
         if (st.settings.checkForUpdates && !mode.setup)
             st.updater->Check();
@@ -2418,7 +2486,8 @@ namespace dao::launcher
             // The mods page waits for mods being added, the update's page for the check.
             const bool updateShot = shot == kUpdateShot;
             const bool shotWaits = (shot == kModsShot && (ReadingMods(st) || AddingMods(st))) ||
-                (updateShot && st.updater->GetState() == Updater::State::Checking);
+                (updateShot && st.updater->GetState() == Updater::State::Checking) ||
+                (st.setupOnly && (st.isoArt.valid() || st.installer.GetState() == InstallRunner::State::Running));
             // (The update's page only when there's an update.)
             if (st.setupOnly)
             {
@@ -2541,10 +2610,11 @@ namespace dao::launcher
         return RunWindow(gameRoot, userRoot, { .showMods = showMods }, nullptr);
     }
 
-    fs::path RunSetup(const fs::path& dest, bool update)
+    fs::path RunSetup(const fs::path& dest, const fs::path& iso, bool update)
     {
         fs::path installed;
-        RunWindow(dest / "game", dest / "userdata", { .setup = true, .update = update, .dest = dest }, &installed);
+        RunWindow(dest / "game", dest / "userdata", { .setup = true, .update = update, .dest = dest, .iso = iso },
+            &installed);
         return installed;
     }
 }

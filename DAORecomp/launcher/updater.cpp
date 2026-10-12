@@ -25,7 +25,10 @@ namespace dao::launcher
         constexpr const char* kReleasesUrl = "https://api.github.com/repos/96dot/DAORecomp/releases?per_page=20";
         constexpr std::string_view kPagePrefix = "https://github.com/96dot/DAORecomp/releases/";
         constexpr std::string_view kDownloadPrefix = "https://github.com/96dot/DAORecomp/releases/download/";
-        constexpr std::string_view kInstallerName = "DAORecomp-Installer.exe";
+        // The exe players download (setup, scripts/build_setup_exe.py): it updates
+        // the install it's given. Releases also carry it as DAORecomp-Installer.exe,
+        // the name launchers before v0.6 look for.
+        constexpr std::string_view kInstallerName = "DAORecomp.exe";
         constexpr std::string_view kDigestPrefix = "sha256:";
         // Sanity bounds on what's downloaded: the list is ~100 KB, the installer
         // ~15 MB (v0.2.0).
@@ -489,9 +492,7 @@ namespace dao::launcher
         if (shared_->state != State::Ready)
             return false;
         const fs::path installer = shared_->installer;
-        // No console for it (it's a console program that opens a window).
-        if (!StartProgram(installer, L"--gui --update --dest " + QuoteArgument(installRoot_), CREATE_NO_WINDOW,
-                installer.parent_path()))
+        if (!StartProgram(installer, L"--update --dest " + QuoteArgument(installRoot_), 0, installer.parent_path()))
         {
             const DWORD code = GetLastError();
             LOGW("Launcher: can't start the installer (error {})", code);

@@ -2,6 +2,7 @@
 // It has no game code; its Install view runs the installer, which recompiles the
 // player's game into the full DAORecomp.exe, and that one is started in its place.
 #include "stdafx.h"
+#include "launcher/install_runner.h"
 #include "launcher/launcher.h"
 #include "program.h"
 #include "text.h"
@@ -29,14 +30,6 @@ namespace
         const fs::path home = EnvPath(L"USERPROFILE");
         return home.empty() ? fs::path() : home / "Games" / "DAORecomp";
     }
-
-    // The installer's work folder, as installer/util.py has it (the log goes there,
-    // as the install folder may not exist yet).
-    fs::path WorkFolder()
-    {
-        const fs::path local = EnvPath(L"LOCALAPPDATA");
-        return local.empty() ? fs::temp_directory_path() : local / "DAORecomp-build";
-    }
 }
 
 int main(int, char**)
@@ -44,9 +37,10 @@ int main(int, char**)
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     // --dest <folder> and --update, as the launcher's updater passes them (it also
-    // passes the old installer's --gui, which needs nothing here). The wide command
-    // line, as argv is in the ANSI code page.
-    fs::path dest;
+    // passes the old installer's --gui, which needs nothing here); --iso <image>, or
+    // an .iso file dropped on the exe. The wide command line, as argv is in the ANSI
+    // code page.
+    fs::path dest, iso;
     bool update = false;
     int count = 0;
     if (LPWSTR* args = CommandLineToArgvW(GetCommandLineW(), &count))
@@ -55,21 +49,26 @@ int main(int, char**)
         {
             if (wcscmp(args[i], L"--dest") == 0 && i + 1 < count)
                 dest = args[++i];
+            else if (wcscmp(args[i], L"--iso") == 0 && i + 1 < count)
+                iso = args[++i];
             else if (wcscmp(args[i], L"--update") == 0)
                 update = true;
+            else if (dao::Lower(dao::Utf8(fs::path(args[i]).extension())) == ".iso")
+                iso = args[i];
         }
         LocalFree(args);
     }
     if (dest.empty())
         dest = DefaultDest();
 
+    // The log goes to the installer's work folder: the install folder may not exist yet.
     std::error_code ec;
-    const fs::path work = WorkFolder();
+    const fs::path work = dao::launcher::InstallerWorkFolder();
     fs::create_directories(work, ec);
     dao::log::Init(work / "setup.log");
     LOGI("Dragon Age: Origins recomp setup - install folder {}", dao::Utf8(dest));
 
-    const fs::path installed = dao::launcher::RunSetup(dest, update);
+    const fs::path installed = dao::launcher::RunSetup(dest, iso, update);
     if (installed.empty())
         return 0;
     // The new game's launcher, shown even if the install's settings skip it.

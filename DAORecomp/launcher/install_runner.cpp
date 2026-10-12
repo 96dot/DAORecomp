@@ -1,8 +1,13 @@
 #include "stdafx.h"
 #include "launcher/install_runner.h"
 
+#include <bcrypt.h>
+
+#include <fstream>
+
 #include <rapidjson/document.h>
 
+#include "hash.h"
 #include "program.h"
 #include "text.h"
 
@@ -18,6 +23,88 @@ namespace dao::launcher
                 CloseHandle(handle);
             handle = nullptr;
         }
+
+        // The footer after the appended installer (installer/pipeline.py ENGINE_MAGIC).
+        constexpr std::string_view kEngineMagic = "DAORecompEngine1";
+        struct EngineFooter
+        {
+            char magic[16];
+            uint64_t offset, size;
+            uint8_t sha256[32];
+        };
+        static_assert(sizeof(EngineFooter) == 64);
+
+        bool Sha256(const fs::path& path, std::array<uint8_t, 32>& digest)
+        {
+            const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file == INVALID_HANDLE_VALUE)
+                return false;
+            uint64_t size = 0;
+            const bool hashed = HashFile(file, BCRYPT_SHA256_ALGORITHM, digest, size);
+            CloseHandle(file);
+            return hashed;
+        }
+
+        // The installer appended to this program, extracted (once) next to the build
+        // tools; checked by its SHA-256 every time, as the folder is the player's.
+        fs::path EmbeddedInstaller(std::string& error)
+        {
+            const fs::path self = ProgramPath();
+            std::ifstream in(self, std::ios::binary);
+            EngineFooter footer = {};
+            std::error_code ec;
+            const uintmax_t selfSize = fs::file_size(self, ec);
+            if (!in || ec || selfSize < sizeof(footer) ||
+                !in.seekg(std::streamoff(selfSize - sizeof(footer))) ||
+                !in.read(reinterpret_cast<char*>(&footer), sizeof(footer)) ||
+                std::string_view(footer.magic, sizeof(footer.magic)) != kEngineMagic ||
+                footer.offset > selfSize || footer.size > selfSize - sizeof(footer) - footer.offset)
+            {
+                error = "this build has no installer in it (DAO_INSTALL_ENGINE names one)";
+                return {};
+            }
+            std::array<uint8_t, 32> wanted;
+            std::copy(std::begin(footer.sha256), std::end(footer.sha256), wanted.begin());
+            const fs::path folder = InstallerWorkFolder() / "installer";
+            const fs::path engine = folder / fmt::format("DAORecomp-Installer-{:02x}{:02x}{:02x}{:02x}.exe",
+                wanted[0], wanted[1], wanted[2], wanted[3]);
+            std::array<uint8_t, 32> digest;
+            if (Sha256(engine, digest) && digest == wanted)
+                return engine;
+
+            fs::create_directories(folder, ec);
+            const fs::path part = fs::path(engine).concat(L".part");
+            {
+                std::ofstream out(part, std::ios::binary | std::ios::trunc);
+                in.clear();
+                in.seekg(std::streamoff(footer.offset));
+                std::vector<char> chunk(1 << 20);
+                for (uint64_t left = footer.size; left && out && in;)
+                {
+                    const size_t n = size_t(std::min<uint64_t>(left, chunk.size()));
+                    in.read(chunk.data(), std::streamsize(n));
+                    out.write(chunk.data(), std::streamsize(in.gcount()));
+                    left -= uint64_t(in.gcount());
+                    if (in.gcount() == 0)
+                        break;
+                }
+            }
+            if (!Sha256(part, digest) || digest != wanted || (fs::rename(part, engine, ec), ec))
+            {
+                fs::remove(part, ec);
+                error = fmt::format("can't unpack the installer into {}", Utf8(folder));
+                return {};
+            }
+            LOGI("Install: unpacked the installer to {}", Utf8(engine));
+            return engine;
+        }
+    }
+
+    fs::path InstallerWorkFolder()
+    {
+        const wchar_t* local = _wgetenv(L"LOCALAPPDATA");
+        return local && *local ? fs::path(local) / "DAORecomp-build" : fs::temp_directory_path() / "DAORecomp-build";
     }
 
     std::wstring InstallerCommand(std::string& error)
@@ -30,8 +117,8 @@ namespace dao::launcher
                 return L"python " + QuoteArgument(path);
             return QuoteArgument(path);
         }
-        error = "this build has no installer in it (DAO_INSTALL_ENGINE names one)";
-        return {};
+        const fs::path engine = EmbeddedInstaller(error);
+        return engine.empty() ? std::wstring() : QuoteArgument(engine);
     }
 
     InstallRunner::~InstallRunner()
