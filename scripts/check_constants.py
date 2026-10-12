@@ -53,11 +53,12 @@ NAMES = [
 def main():
     failed = 0
     for path, name, expected in CHECKS:
-        found = re.search(rf"\b{name}\s*=\s*([^;]+);", read(path))
-        value = found.group(1).strip() if found else None
-        if value is None or value.upper() != expected.upper():
-            print(f"{path}: {name} is {value}, installer/deps.py has {expected}")
-            failed += 1
+        # Every `name = ...;` in the file, so a second copy can't drift unseen.
+        values = [v.strip() for v in re.findall(rf"\b{name}\s*=\s*([^;]+);", read(path))]
+        for value in values or [None]:
+            if value is None or value.upper() != expected.upper():
+                print(f"{path}: {name} is {value}, installer/deps.py has {expected}")
+                failed += 1
     for path, name in NAMES:
         if f'"{name}"' not in read(path):
             print(f'{path}: no "{name}" (the name the other side uses)')
