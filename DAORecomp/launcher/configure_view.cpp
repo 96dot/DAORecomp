@@ -151,9 +151,12 @@ namespace dao::launcher
             ImGui::BeginDisabled(!s.hdr);
             SliderRow("Paper white", &s.hdrPaperWhite, kHdrMinNits, 400.0f, "%.0f nits");
             SliderRow("Peak brightness", &s.hdrPeak, s.hdrPaperWhite, 4000.0f, "%.0f nits");
+            ImGui::Checkbox("HDR quality: High (16-bit scRGB)", &s.hdrHighQuality);
             ImGui::EndDisabled();
             HelpText("On an HDR display, 3D scenes are rendered in HDR, their highlights up to the "
-                     "peak brightness; menus are shown at paper white.");
+                     "peak brightness; menus are shown at paper white. HDR quality High keeps that HDR "
+                     "in 16 bits from the temporal upscaler to the display: smoother gradients, with "
+                     "more GPU memory traffic (no frame rate change measured). Takes effect on restart.");
         }
 
         void PatchesTab(State& st)
@@ -257,6 +260,7 @@ namespace dao::launcher
             s.hdr = defaults.hdr;
             s.hdrPaperWhite = defaults.hdrPaperWhite;
             s.hdrPeak = defaults.hdrPeak;
+            s.hdrHighQuality = defaults.hdrHighQuality;
         }
 
         struct Tab

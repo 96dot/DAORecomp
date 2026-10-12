@@ -31,11 +31,13 @@ class D3D12UIDrawContext final : public UIDrawContext {
                      uint32_t render_target_height,
                      ID3D12GraphicsCommandList* command_list,
                      uint64_t submission_index_current,
-                     uint64_t submission_index_completed)
+                     uint64_t submission_index_completed,
+                     DXGI_FORMAT render_target_format)
       : UIDrawContext(presenter, render_target_width, render_target_height),
         command_list_(command_list),
         submission_index_current_(submission_index_current),
-        submission_index_completed_(submission_index_completed) {}
+        submission_index_completed_(submission_index_completed),
+        render_target_format_(render_target_format) {}
 
   ID3D12GraphicsCommandList* command_list() const {
     return command_list_.Get();
@@ -46,11 +48,14 @@ class D3D12UIDrawContext final : public UIDrawContext {
   uint64_t submission_index_completed() const {
     return submission_index_completed_;
   }
+  // DAO: the swap chain's, or with HDR output the HDR source's.
+  DXGI_FORMAT render_target_format() const { return render_target_format_; }
 
  private:
   Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> command_list_;
   uint64_t submission_index_current_;
   uint64_t submission_index_completed_;
+  DXGI_FORMAT render_target_format_;
 };
 
 class D3D12Presenter final : public Presenter {
@@ -69,21 +74,33 @@ class D3D12Presenter final : public Presenter {
       DXGI_FORMAT_R16G16B16A16_FLOAT;
   static constexpr DXGI_FORMAT kHdrSourceFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
 
+  // DAO: the guest output's format. With HDR quality High (IsHdrScrgb), the
+  // guest output, the intermediate images and the HDR source all have the HDR
+  // swap chain's.
+  DXGI_FORMAT GuestOutputFormat() const {
+    return hdr_scrgb_ ? kSwapChainHdrFormat : kGuestOutputFormat;
+  }
+
   // The callback must use the main direct queue of the provider.
   class D3D12GuestOutputRefreshContext final
       : public GuestOutputRefreshContext {
    public:
     D3D12GuestOutputRefreshContext(bool& is_8bpc_out_ref,
-                                   ID3D12Resource* resource)
-        : GuestOutputRefreshContext(is_8bpc_out_ref), resource_(resource) {}
+                                   ID3D12Resource* resource, DXGI_FORMAT format)
+        : GuestOutputRefreshContext(is_8bpc_out_ref),
+          resource_(resource),
+          format_(format) {}
 
-    // kGuestOutputFormat, supports UAV. The initial state in the callback is
+    // format(), supports UAV. The initial state in the callback is
     // kGuestOutputInternalState, and the callback must also transition it back
     // to kGuestOutputInternalState before finishing.
     ID3D12Resource* resource_uav_capable() const { return resource_.Get(); }
+    // DAO: GuestOutputFormat.
+    DXGI_FORMAT format() const { return format_; }
 
    private:
     Microsoft::WRL::ComPtr<ID3D12Resource> resource_;
+    DXGI_FORMAT format_;
   };
 
   static std::unique_ptr<D3D12Presenter> Create(
@@ -302,6 +319,14 @@ class D3D12Presenter final : public Presenter {
   explicit D3D12Presenter(HostGpuLossCallback host_gpu_loss_callback,
                           const D3D12Provider& provider)
       : Presenter(host_gpu_loss_callback), provider_(provider) {}
+
+  // DAO: see GuestOutputFormat.
+  DXGI_FORMAT GuestOutputIntermediateFormat() const {
+    return hdr_scrgb_ ? kSwapChainHdrFormat : kGuestOutputIntermediateFormat;
+  }
+  DXGI_FORMAT HdrSourceFormat() const {
+    return hdr_scrgb_ ? kSwapChainHdrFormat : kHdrSourceFormat;
+  }
 
   bool dxgi_supports_tearing() const { return dxgi_supports_tearing_; }
 

@@ -117,6 +117,11 @@ namespace dao
         s.windowHeight = std::clamp(s.windowHeight, 180, 16384);
     }
 
+    std::string_view HdrQualityName(bool high)
+    {
+        return high ? "high" : "standard";
+    }
+
     std::string FrameRateName(int frameRate)
     {
         return frameRate ? fmt::format("{} fps", frameRate) : std::string("unlimited");
@@ -170,6 +175,8 @@ namespace dao
         s.hdr = video["hdr"].value_or(s.hdr);
         s.hdrPaperWhite = video["hdr_paper_white"].value_or(s.hdrPaperWhite);
         s.hdrPeak = video["hdr_peak"].value_or(s.hdrPeak);
+        // (Anything but "high" is Standard.)
+        s.hdrHighQuality = video["hdr_quality"].value_or(std::string()) == HdrQualityName(true);
         s.windowWidth = video["window_width"].value_or(s.windowWidth);
         s.windowHeight = video["window_height"].value_or(s.windowHeight);
 
@@ -243,6 +250,9 @@ frame_rate = {}
 hdr = {}
 hdr_paper_white = {}
 hdr_peak = {}
+# "standard": the 3D scenes' HDR passed on in 10 bits (PQ); "high": 16-bit scRGB from the
+# temporal upscaler to the display (smoother gradients, more memory traffic).
+hdr_quality = "{}"
 # Anisotropic texture filtering: 0 (game default), 2, 4, 8 or 16.
 anisotropic_filtering = {}
 # The engine's dynamic character shadows and post-processing (frame buffer effects);
@@ -258,7 +268,7 @@ window_height = {}
 )",
             s.showLauncher, s.checkForUpdates, s.modsWarningSeen, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
             TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.vsync, s.frameRate,
-            s.hdr, s.hdrPaperWhite, s.hdrPeak, s.anisotropicFiltering, s.shadows, s.postProcessing, s.fullscreen,
+            s.hdr, s.hdrPaperWhite, s.hdrPeak, HdrQualityName(s.hdrHighQuality), s.anisotropicFiltering, s.shadows, s.postProcessing, s.fullscreen,
             s.windowWidth, s.windowHeight);
         for (const auto& [id, enabled] : s.patches)
         {
@@ -322,6 +332,7 @@ window_height = {}
         SetXeniaCvar("present_hdr", toml::value<bool>(s.hdr));
         SetXeniaCvar("present_hdr_paper_white", toml::value<double>(s.hdrPaperWhite));
         SetXeniaCvar("present_hdr_peak", toml::value<double>(s.hdrPeak));
+        SetXeniaCvar("dao_hdr_scrgb", toml::value<bool>(s.hdrHighQuality));
         if (s.anisotropicFiltering)
             SetXeniaCvar("anisotropic_override", toml::value<int64_t>(XeniaAnisotropicLevel(s.anisotropicFiltering)));
         try
@@ -343,7 +354,8 @@ window_height = {}
             s.windowWidth, s.windowHeight, s.fullscreen ? " fullscreen" : "", FrameRateName(s.frameRate),
             s.vsync ? ", vsync" : "");
         if (s.hdr)
-            LOGI("Settings: HDR output, paper white {} nits, peak {} nits", s.hdrPaperWhite, s.hdrPeak);
+            LOGI("Settings: HDR output, paper white {} nits, peak {} nits, quality {}", s.hdrPaperWhite, s.hdrPeak,
+                HdrQualityName(s.hdrHighQuality));
         return s;
     }
 

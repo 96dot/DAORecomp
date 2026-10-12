@@ -44,10 +44,48 @@ DEFINE_double(present_hdr_peak, 1000.0,
               "Display");
 DEFINE_double(present_hdr_gamma, 2.2,
               "HDR: gamma the guest output is decoded with.", "Display");
+DEFINE_bool(dao_hdr_scrgb, false,
+            "HDR quality High: the game's HDR frames stay scRGB (16-bit float) "
+            "from the upscaler to the display, not PQ in 10 bits (smoother "
+            "gradients, more memory traffic). Read at startup.",
+            "Display");
 
 namespace xe {
 namespace ui {
 namespace d3d12 {
+
+namespace {
+// DAO: 8-bit values for the non-negative half floats (bits 0 to 0x7FFF) of an
+// scRGB guest output (HDR quality High), as its 10-bit counterpart would give:
+// SDR clamped to 1, the game's linear HDR (1 = 80 nits) PQ-encoded as in
+// dao_upscale_composite.cs. Captures (screenshots, tests) only.
+const std::array<uint8_t, 0x8000>& HalfTo8bpc(bool game_hdr) {
+  static const auto make = [](bool pq) {
+    std::array<uint8_t, 0x8000> table;
+    for (uint32_t half = 0; half < table.size(); ++half) {
+      // IEEE half: exponent 31 is infinity or NaN, 0 subnormal.
+      const uint32_t exponent = half >> 10, mantissa = half & 0x3FF;
+      const float value =
+          exponent == 31 ? 65504.0f
+          : exponent
+              ? std::ldexp(float(mantissa | 0x400), int(exponent) - 25)
+              : std::ldexp(float(mantissa), -24);
+      float encoded = std::min(value, 1.0f);
+      if (pq) {
+        const float y = std::pow(std::min(value * 80.0f / 10000.0f, 1.0f),
+                                 0.1593017578125f);
+        encoded = std::pow(
+            (0.8359375f + 18.8515625f * y) / (1.0f + 18.6875f * y), 78.84375f);
+      }
+      table[half] = uint8_t(encoded * 255.0f + 0.5f);
+    }
+    return table;
+  };
+  static const std::array<uint8_t, 0x8000> sdr = make(false);
+  static const std::array<uint8_t, 0x8000> hdr = make(true);
+  return game_hdr ? hdr : sdr;
+}
+}  // namespace
 
 // Generated with `xb buildshaders`.
 namespace shaders {
@@ -89,10 +127,11 @@ Surface::TypeFlags D3D12Presenter::GetSupportedSurfaceTypes() const {
 
 bool D3D12Presenter::CaptureGuestOutput(RawImage& image_out) {
   Microsoft::WRL::ComPtr<ID3D12Resource> guest_output_resource;
+  GuestOutputProperties properties;
   {
     uint32_t guest_output_mailbox_index;
     std::unique_lock<std::mutex> guest_output_consumer_lock(
-        ConsumeGuestOutput(guest_output_mailbox_index, nullptr, nullptr));
+        ConsumeGuestOutput(guest_output_mailbox_index, &properties, nullptr));
     if (guest_output_mailbox_index != UINT32_MAX) {
       guest_output_resource =
           guest_output_resources_[guest_output_mailbox_index].second;
@@ -220,6 +259,27 @@ bool D3D12Presenter::CaptureGuestOutput(RawImage& image_out) {
   image_out.data.resize(image_out.stride * image_out.height);
   uint32_t* image_out_pixels =
       reinterpret_cast<uint32_t*>(image_out.data.data());
+  // DAO: a 16-bit scRGB guest output (HDR quality High) to 8 bits; negative
+  // values are 0.
+  if (texture_desc.Format == kSwapChainHdrFormat) {
+    const std::array<uint8_t, 0x8000>& to_8bpc =
+        HalfTo8bpc(properties.game_hdr);
+    for (uint32_t y = 0; y < image_out.height; ++y) {
+      uint8_t* dest_row = image_out.data.data() + size_t(image_out.stride) * y;
+      const uint16_t* source_row = reinterpret_cast<const uint16_t*>(
+          reinterpret_cast<const uint8_t*>(mapping) +
+          copy_dest.PlacedFootprint.Offset +
+          size_t(copy_dest.PlacedFootprint.Footprint.RowPitch) * y);
+      for (uint32_t x = 0; x < image_out.width; ++x) {
+        for (uint32_t c = 0; c < 3; ++c) {
+          const uint16_t half = source_row[x * 4 + c];
+          dest_row[x * 4 + c] = (half & 0x8000) ? 0 : to_8bpc[half];
+        }
+        dest_row[x * 4 + 3] = 0xFF;
+      }
+    }
+    return true;
+  }
   for (uint32_t y = 0; y < image_out.height; ++y) {
     uint32_t* dest_row = &image_out_pixels[size_t(image_out.width) * y];
     const uint32_t* source_row = reinterpret_cast<const uint32_t*>(
@@ -398,8 +458,9 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
       paint_context_.display_hdr =
           output_desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
     }
-    XELOGI("D3D12Presenter: scRGB output on an {} display",
-           paint_context_.display_hdr ? "HDR" : "SDR");
+    XELOGI("D3D12Presenter: scRGB output on an {} display{}",
+           paint_context_.display_hdr ? "HDR" : "SDR",
+           hdr_scrgb_ ? ", HDR quality High (scRGB throughout)" : "");
     display_hdr_.store(paint_context_.display_hdr, std::memory_order_relaxed);
     D3D12_RESOURCE_DESC hdr_source_desc = {};
     hdr_source_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -407,7 +468,7 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
     hdr_source_desc.Height = paint_context_.swap_chain_height;
     hdr_source_desc.DepthOrArraySize = 1;
     hdr_source_desc.MipLevels = 1;
-    hdr_source_desc.Format = kHdrSourceFormat;
+    hdr_source_desc.Format = HdrSourceFormat();
     hdr_source_desc.SampleDesc.Count = 1;
     hdr_source_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
     if (FAILED(device->CreateCommittedResource(
@@ -419,7 +480,7 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
       return SurfacePaintConnectResult::kFailure;
     }
     D3D12_RENDER_TARGET_VIEW_DESC hdr_source_rtv_desc = {};
-    hdr_source_rtv_desc.Format = kHdrSourceFormat;
+    hdr_source_rtv_desc.Format = HdrSourceFormat();
     hdr_source_rtv_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
     device->CreateRenderTargetView(
         paint_context_.hdr_source.Get(), &hdr_source_rtv_desc,
@@ -427,7 +488,7 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
             paint_context_.rtv_heap->GetCPUDescriptorHandleForHeapStart(),
             PaintContext::kRTVIndexHdrSource));
     D3D12_SHADER_RESOURCE_VIEW_DESC hdr_source_srv_desc = {};
-    hdr_source_srv_desc.Format = kHdrSourceFormat;
+    hdr_source_srv_desc.Format = HdrSourceFormat();
     hdr_source_srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     hdr_source_srv_desc.Shader4ComponentMapping =
         D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -496,7 +557,7 @@ bool D3D12Presenter::RefreshGuestOutputImpl(
     guest_output_resource_new_desc.Height = frontbuffer_height;
     guest_output_resource_new_desc.DepthOrArraySize = 1;
     guest_output_resource_new_desc.MipLevels = 1;
-    guest_output_resource_new_desc.Format = kGuestOutputFormat;
+    guest_output_resource_new_desc.Format = GuestOutputFormat();
     guest_output_resource_new_desc.SampleDesc.Count = 1;
     guest_output_resource_new_desc.SampleDesc.Quality = 0;
     guest_output_resource_new_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -512,8 +573,9 @@ bool D3D12Presenter::RefreshGuestOutputImpl(
       return false;
     }
   }
-  D3D12GuestOutputRefreshContext context(
-      is_8bpc_out_ref, guest_output_resource_ref.second.Get());
+  D3D12GuestOutputRefreshContext context(is_8bpc_out_ref,
+                                         guest_output_resource_ref.second.Get(),
+                                         GuestOutputFormat());
   bool refresher_succeeded = refresher(context);
   // Even if the refresher has returned false, it still might have submitted
   // some commands referencing the resource. It's better to put an excessive
@@ -605,14 +667,8 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
       PaintContext::kRTVIndexSwapChainBuffer0 + back_buffer_index);
   ID3D12Resource* back_buffer =
       paint_context_.swap_chain_buffers[back_buffer_index].Get();
-  // DAO: with HDR output, everything is painted to the HDR source first.
   ID3D12Resource* const swap_chain_back_buffer = back_buffer;
   const D3D12_CPU_DESCRIPTOR_HANDLE swap_chain_back_buffer_rtv = back_buffer_rtv;
-  if (paint_context_.swap_chain_hdr) {
-    back_buffer = paint_context_.hdr_source.Get();
-    back_buffer_rtv = provider_.OffsetRTVDescriptor(
-        rtv_heap_start, PaintContext::kRTVIndexHdrSource);
-  }
   bool back_buffer_acquired = false;
   bool back_buffer_bound = false;
   bool back_buffer_clear_needed = true;
@@ -636,6 +692,19 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
     // leave the consumer critical section now as everything here either will be
     // using the new reference or is exclusively owned by main target painting
     // (and multiple threads can't paint the main target at the same time).
+  }
+
+  // DAO: with HDR output, everything is painted to the HDR source first, then
+  // encoded into the back buffer; but the game's HDR in scRGB (HDR quality
+  // High) with no UI over it is painted to the back buffer as it is.
+  const bool hdr_direct = paint_context_.swap_chain_hdr && hdr_scrgb_ &&
+                          guest_output_resource &&
+                          guest_output_properties.game_hdr &&
+                          !execute_ui_drawers;
+  if (paint_context_.swap_chain_hdr && !hdr_direct) {
+    back_buffer = paint_context_.hdr_source.Get();
+    back_buffer_rtv = provider_.OffsetRTVDescriptor(
+        rtv_heap_start, PaintContext::kRTVIndexHdrSource);
   }
 
   if (guest_output_resource) {
@@ -721,7 +790,7 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
             std::make_pair(uint64_t(0), guest_output_resource);
         // Create the SRV descriptor of the new texture.
         D3D12_SHADER_RESOURCE_VIEW_DESC guest_output_resource_srv_desc;
-        guest_output_resource_srv_desc.Format = kGuestOutputFormat;
+        guest_output_resource_srv_desc.Format = GuestOutputFormat();
         guest_output_resource_srv_desc.ViewDimension =
             D3D12_SRV_DIMENSION_TEXTURE2D;
         guest_output_resource_srv_desc.Shader4ComponentMapping =
@@ -775,7 +844,7 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
             intermediate_desc.Height = intermediate_needed_size.second;
             intermediate_desc.DepthOrArraySize = 1;
             intermediate_desc.MipLevels = 1;
-            intermediate_desc.Format = kGuestOutputIntermediateFormat;
+            intermediate_desc.Format = GuestOutputIntermediateFormat();
             intermediate_desc.SampleDesc.Count = 1;
             intermediate_desc.SampleDesc.Quality = 0;
             intermediate_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -797,7 +866,7 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
                 intermediate_texture_ptr_ref.Get();
             // SRV.
             D3D12_SHADER_RESOURCE_VIEW_DESC intermediate_srv_desc;
-            intermediate_srv_desc.Format = kGuestOutputIntermediateFormat;
+            intermediate_srv_desc.Format = GuestOutputIntermediateFormat();
             intermediate_srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             intermediate_srv_desc.Shader4ComponentMapping =
                 D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -814,7 +883,7 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
                         i)));
             // RTV.
             D3D12_RENDER_TARGET_VIEW_DESC intermediate_rtv_desc;
-            intermediate_rtv_desc.Format = kGuestOutputIntermediateFormat;
+            intermediate_rtv_desc.Format = GuestOutputIntermediateFormat();
             intermediate_rtv_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
             intermediate_rtv_desc.Texture2D.MipSlice = 0;
             intermediate_rtv_desc.Texture2D.PlaneSlice = 0;
@@ -1167,16 +1236,18 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
       command_list->OMSetRenderTargets(1, &back_buffer_rtv, true, nullptr);
       back_buffer_bound = true;
     }
+    // (Never painted directly with UI: with HDR output, it's the HDR source.)
     D3D12UIDrawContext ui_draw_context(
         *this, paint_context_.swap_chain_width,
         paint_context_.swap_chain_height, command_list,
         ui_completion_timeline_->GetUpcomingSubmission(),
-        ui_completion_timeline_->UpdateAndGetCompletedSubmission());
+        ui_completion_timeline_->UpdateAndGetCompletedSubmission(),
+        paint_context_.swap_chain_hdr ? HdrSourceFormat() : kSwapChainFormat);
     ExecuteUIDrawersFromUIThread(ui_draw_context);
   }
 
   // DAO: encode the HDR source into the scRGB back buffer.
-  if (paint_context_.swap_chain_hdr) {
+  if (paint_context_.swap_chain_hdr && !hdr_direct) {
     D3D12_RESOURCE_BARRIER hdr_barriers[2] = {};
     hdr_barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     hdr_barriers[0].Transition.pResource = back_buffer;
@@ -1212,10 +1283,11 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
         float(std::max(cvars::present_hdr_paper_white, 80.0));
     // The scale to scRGB (1 = 80 nits): an SDR image's white is paper_white
     // on HDR displays and 1 on SDR ones; a PQ image is in nits, scaled by
-    // 1/80 (HDR) or 1/paper_white (SDR).
-    const bool pq = guest_output_properties.pq;
+    // 1/80 (HDR) or 1/paper_white (SDR); an scRGB one is copied.
+    const bool game_hdr = guest_output_properties.game_hdr;
+    const bool pq_encoded = game_hdr && !hdr_scrgb_;
     float scale = display_hdr ? paper_white / 80.0f : 1.0f;
-    if (pq) {
+    if (pq_encoded) {
       scale = 1.0f / (display_hdr ? 80.0f : paper_white);
     }
     const float hdr_constants[4] = {
@@ -1225,7 +1297,7 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
             : 1.0f,
         // DAO: a gamma from the config the shader can use.
         float(std::clamp(cvars::present_hdr_gamma, 1.0, 3.0)),
-        pq ? 1.0f : 0.0f};
+        game_hdr ? (hdr_scrgb_ ? 2.0f : 1.0f) : 0.0f};
     command_list->SetGraphicsRoot32BitConstants(1, 4, hdr_constants, 0);
     command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     command_list->DrawInstanced(3, 1, 0, 0);
@@ -1296,6 +1368,9 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
 }
 
 bool D3D12Presenter::InitializeSurfaceIndependent() {
+  // DAO: fixed for the presenter's life (its images' formats follow it).
+  hdr_scrgb_ = cvars::present_hdr && cvars::dao_hdr_scrgb;
+
   // Check if DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING is supported.
   {
     Microsoft::WRL::ComPtr<IDXGIFactory5> dxgi_factory_5;
@@ -1567,7 +1642,7 @@ bool D3D12Presenter::InitializeSurfaceIndependent() {
                 .Get();
     if (CanGuestOutputPaintEffectBeIntermediate(guest_output_paint_effect)) {
       guest_output_paint_pipeline_desc.RTVFormats[0] =
-          kGuestOutputIntermediateFormat;
+          GuestOutputIntermediateFormat();
       if (FAILED(device->CreateGraphicsPipelineState(
               &guest_output_paint_pipeline_desc,
               IID_PPV_ARGS(&guest_output_paint_intermediate_pipelines_[i])))) {
@@ -1580,7 +1655,7 @@ bool D3D12Presenter::InitializeSurfaceIndependent() {
     }
     if (CanGuestOutputPaintEffectBeFinal(guest_output_paint_effect)) {
       guest_output_paint_pipeline_desc.RTVFormats[0] =
-          cvars::present_hdr ? kHdrSourceFormat : kSwapChainFormat;
+          cvars::present_hdr ? HdrSourceFormat() : kSwapChainFormat;
       if (FAILED(device->CreateGraphicsPipelineState(
               &guest_output_paint_pipeline_desc,
               IID_PPV_ARGS(&guest_output_paint_final_pipelines_[i])))) {

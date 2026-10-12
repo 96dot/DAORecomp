@@ -44,6 +44,7 @@ namespace dao::ui
             Hdr,
             HdrPaperWhite,
             HdrPeak,
+            HdrQuality,
             Count
         };
 
@@ -68,6 +69,7 @@ namespace dao::ui
             { "Hdr", true },
             { "HdrPaperWhite", false },
             { "HdrPeak", false },
+            { "HdrQuality", true },
         };
         static_assert(std::size(kKeys) == size_t(Key::Count));
 
@@ -167,6 +169,7 @@ namespace dao::ui
             case Key::Hdr: return s.hdr;
             case Key::HdrPaperWhite: return s.hdrPaperWhite;
             case Key::HdrPeak: return s.hdrPeak;
+            case Key::HdrQuality: return s.hdrHighQuality;
             case Key::Count: break;
             }
             return 0.0;
@@ -203,6 +206,7 @@ namespace dao::ui
             case Key::Hdr: s.hdr = whole != 0; break;
             case Key::HdrPaperWhite: s.hdrPaperWhite = float(value); break;
             case Key::HdrPeak: s.hdrPeak = float(value); break;
+            case Key::HdrQuality: s.hdrHighQuality = whole != 0; break;
             case Key::Count: break;
             }
             ClampSettings(s);
@@ -239,6 +243,7 @@ namespace dao::ui
             case Key::Hdr: to.hdr = from.hdr; break;
             case Key::HdrPaperWhite: to.hdrPaperWhite = from.hdrPaperWhite; break;
             case Key::HdrPeak: to.hdrPeak = from.hdrPeak; break;
+            case Key::HdrQuality: to.hdrHighQuality = from.hdrHighQuality; break;
             case Key::Count: break;
             }
         }

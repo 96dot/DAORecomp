@@ -106,6 +106,8 @@ var ROWS = [
     { key: "Hdr", label: "HDR output", restart: true, toggle: true },
     { key: "HdrPaperWhite", label: "Paper white", values: HDR_PAPER_WHITE, labels: Nits(HDR_PAPER_WHITE) },
     { key: "HdrPeak", label: "Peak brightness", values: HDR_PEAK, labels: Nits(HDR_PEAK) },
+    { key: "HdrQuality", label: "HDR quality", restart: true, values: [0, 1],
+      labels: ["Standard", "High (16-bit scRGB)"] },
     { header: "Mods" },
     { button: "Manage mods", action: OpenMods }
 ];

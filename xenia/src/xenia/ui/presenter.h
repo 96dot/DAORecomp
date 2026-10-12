@@ -319,7 +319,7 @@ class Presenter {
       uint32_t frontbuffer_width, uint32_t frontbuffer_height,
       uint32_t display_aspect_ratio_x, uint32_t display_aspect_ratio_y,
       std::function<bool(GuestOutputRefreshContext& context)> refresher,
-      bool sharpened = false, bool pq = false);
+      bool sharpened = false, bool game_hdr = false);
   // The implementation must be callable from any thread, including from
   // multiple at the same time, and it should acquire the latest guest output
   // image via ConsumeGuestOutput.
@@ -352,6 +352,10 @@ class Presenter {
   bool IsDisplayHdr() const {
     return display_hdr_.load(std::memory_order_relaxed);
   }
+  // DAO: HDR quality High (present_hdr and dao_hdr_scrgb): the game's HDR
+  // frames stay scRGB, in 16-bit float images, from the upscaler to the swap
+  // chain, not PQ in 10-bit ones. Fixed when the presenter is initialized.
+  bool IsHdrScrgb() const { return hdr_scrgb_; }
 
   // Requests (re)painting with the UI if there's UI to draw.
   void RequestUIPaintFromUIThread();
@@ -360,6 +364,9 @@ class Presenter {
   // DAO: see IsDisplayHdr. Set when the surface connects (a display's HDR
   // turned on or off later isn't followed until it reconnects).
   std::atomic<bool> display_hdr_{false};
+  // DAO: see IsHdrScrgb. Set by the implementation while it initializes,
+  // before the threads that read it run (so not atomic).
+  bool hdr_scrgb_ = false;
 
   enum class PaintResult {
     kPresented,
@@ -396,8 +403,9 @@ class Presenter {
     // DAO: already anti-aliased and sharpened at the output size (temporal
     // upscaling that didn't scale), so a 1:1 sharpening pass is redundant.
     bool sharpened;
-    // DAO: the image is the game's HDR, PQ-encoded (see dao_hdr_output.ps).
-    bool pq;
+    // DAO: the image is the game's HDR: PQ-encoded, or scRGB (linear, 1 = 80
+    // nits) with HDR quality High (IsHdrScrgb; see dao_hdr_output.ps).
+    bool game_hdr;
 
     GuestOutputProperties() { SetToInactive(); }
 
@@ -413,7 +421,7 @@ class Presenter {
       display_aspect_ratio_y = 0;
       is_8bpc = false;
       sharpened = false;
-      pq = false;
+      game_hdr = false;
     }
   };
 

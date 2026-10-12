@@ -1,8 +1,10 @@
 // DAO: encodes the SDR (gamma-encoded) presentation image into an scRGB (linear,
 // 1.0 = 80 nits) back buffer. On HDR displays, scales SDR white to the paper white
 // and expands highlights towards the display peak; on SDR displays it only
-// linearizes (scale 1, peak ratio 1). A PQ-encoded image (the game's own HDR) is
-// decoded instead.
+// linearizes (scale 1, peak ratio 1). The game's own HDR is decoded from PQ
+// instead, or passed through when it's already scRGB (HDR quality High, with
+// presenter UI drawn over it; otherwise the presenter paints it to the back
+// buffer itself).
 Texture2D<float4> xe_hdr_source : register(t0);
 
 cbuffer XeHdrConstants : register(b0) {
@@ -12,10 +14,11 @@ cbuffer XeHdrConstants : register(b0) {
   float xe_hdr_peak_ratio;
   // Gamma the game's output is mastered for (2.2 for TVs).
   float xe_hdr_gamma;
-  // 1: the image is PQ-encoded (the game's own HDR, its highlights already
-  // up to the peak); xe_hdr_scale is then per nit, and the peak ratio and
-  // gamma are unused.
-  float xe_hdr_pq;
+  // The image: 0 gamma-encoded (SDR); 1 PQ-encoded (the game's own HDR, its
+  // highlights already up to the peak), xe_hdr_scale then per nit; 2 scRGB
+  // (the game's own HDR, HDR quality High), copied. The peak ratio and gamma
+  // are only for SDR.
+  float xe_hdr_encoding;
 };
 
 float3 PqToNits(float3 pq) {
@@ -25,8 +28,12 @@ float3 PqToNits(float3 pq) {
 }
 
 float4 main(float4 position : SV_Position) : SV_Target {
-  float3 color = saturate(xe_hdr_source.Load(int3(int2(position.xy), 0)).rgb);
-  if (xe_hdr_pq > 0.0f) {
+  float3 color = xe_hdr_source.Load(int3(int2(position.xy), 0)).rgb;
+  if (xe_hdr_encoding > 1.5f) {
+    return float4(max(color, 0.0f), 1.0f);
+  }
+  color = saturate(color);
+  if (xe_hdr_encoding > 0.5f) {
     return float4(PqToNits(color) * xe_hdr_scale, 1.0f);
   }
   float3 linear_color = pow(color, xe_hdr_gamma);

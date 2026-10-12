@@ -55,7 +55,7 @@ namespace shaders {
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/apply_gamma_pwl_fxaa_luma_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/apply_gamma_table_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/apply_gamma_table_fxaa_luma_cs.h"
-#include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_pq_copy_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_hdr_copy_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/fxaa_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/fxaa_extreme_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/resolve_downscale_cs.h"
@@ -1328,12 +1328,12 @@ bool D3D12CommandProcessor::SetupContext() {
   }
   // The same layout with more constants (the descriptor above is done with).
   apply_gamma_root_parameters[UINT(ApplyGammaRootParameter::kConstants)]
-      .Constants.Num32BitValues = sizeof(DaoPqCopyConstants) / sizeof(uint32_t);
-  *(dao_pq_copy_root_signature_.ReleaseAndGetAddressOf()) =
+      .Constants.Num32BitValues = sizeof(DaoHdrCopyConstants) / sizeof(uint32_t);
+  *(dao_hdr_copy_root_signature_.ReleaseAndGetAddressOf()) =
       ui::d3d12::util::CreateRootSignature(provider,
                                            apply_gamma_root_signature_desc);
-  if (!dao_pq_copy_root_signature_) {
-    XELOGE("Failed to create the PQ copy root signature");
+  if (!dao_hdr_copy_root_signature_) {
+    XELOGE("Failed to create the HDR copy root signature");
     return false;
   }
   *(apply_gamma_table_pipeline_.ReleaseAndGetAddressOf()) =
@@ -1378,12 +1378,12 @@ bool D3D12CommandProcessor::SetupContext() {
         "perceptual luma output");
     return false;
   }
-  *(dao_pq_copy_pipeline_.ReleaseAndGetAddressOf()) =
+  *(dao_hdr_copy_pipeline_.ReleaseAndGetAddressOf()) =
       ui::d3d12::util::CreateComputePipeline(
-          device, shaders::dao_pq_copy_cs, sizeof(shaders::dao_pq_copy_cs),
-          dao_pq_copy_root_signature_.Get());
-  if (!dao_pq_copy_pipeline_) {
-    XELOGE("Failed to create the PQ copy compute pipeline");
+          device, shaders::dao_hdr_copy_cs, sizeof(shaders::dao_hdr_copy_cs),
+          dao_hdr_copy_root_signature_.Get());
+  if (!dao_hdr_copy_pipeline_) {
+    XELOGE("Failed to create the HDR copy compute pipeline");
     return false;
   }
 
@@ -1746,8 +1746,8 @@ void D3D12CommandProcessor::ShutdownContext() {
   fxaa_pipeline_.Reset();
   fxaa_root_signature_.Reset();
 
-  dao_pq_copy_pipeline_.Reset();
-  dao_pq_copy_root_signature_.Reset();
+  dao_hdr_copy_pipeline_.Reset();
+  dao_hdr_copy_root_signature_.Reset();
   apply_gamma_pwl_fxaa_luma_pipeline_.Reset();
   apply_gamma_pwl_pipeline_.Reset();
   apply_gamma_table_fxaa_luma_pipeline_.Reset();
@@ -2312,14 +2312,15 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   // so the presenter's 1:1 sharpening would only add to it. Frames the
   // upscaler only encoded aren't sharpened.
   bool dao_sharpened = false;
-  // The image is the game's HDR, PQ-encoded: not for the gamma ramp.
-  bool dao_pq = false;
+  // The image is the game's HDR (PQ, or scRGB with HDR quality High): not for
+  // the gamma ramp.
+  bool dao_hdr = false;
   bool dao_upscaled_by_fsr = false;
   if (ID3D12Resource* dao_upscaled = DaoUpscaler::OnSwap(
           swap_texture_resource, swap_texture_srv_desc,
           uint32_t(swap_texture_desc.Width),
           uint32_t(swap_texture_desc.Height), dao_upscaled_srv_desc,
-          dao_pq, dao_upscaled_by_fsr)) {
+          dao_hdr, dao_upscaled_by_fsr)) {
     swap_texture_resource = dao_upscaled;
     swap_texture_srv_desc = dao_upscaled_srv_desc;
     const D3D12_RESOURCE_DESC dao_upscaled_desc = dao_upscaled->GetDesc();
@@ -2338,13 +2339,14 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
       uint32_t(swap_texture_desc.Width), uint32_t(swap_texture_desc.Height),
       aspect.first, aspect.second,
       [this, &swap_texture_srv_desc, frontbuffer_format, swap_texture_resource,
-       &swap_texture_desc, dao_timed, dao_pq](
+       &swap_texture_desc, dao_timed, dao_hdr,
+       dao_scrgb = presenter->IsHdrScrgb()](
           ui::Presenter::GuestOutputRefreshContext& context) -> bool {
         const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
         ID3D12Device* device = provider.GetDevice();
 
         SwapPostEffect swap_post_effect = GetActualSwapPostEffect();
-        bool use_fxaa = !dao_pq && (swap_post_effect == SwapPostEffect::kFxaa ||
+        bool use_fxaa = !dao_hdr && (swap_post_effect == SwapPostEffect::kFxaa ||
                                     swap_post_effect ==
                                         SwapPostEffect::kFxaaExtreme);
         if (use_fxaa) {
@@ -2496,6 +2498,11 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                 ui::d3d12::D3D12Presenter::D3D12GuestOutputRefreshContext&>(
                 context)
                 .resource_uav_capable();
+        const DXGI_FORMAT guest_output_format =
+            static_cast<
+                ui::d3d12::D3D12Presenter::D3D12GuestOutputRefreshContext&>(
+                context)
+                .format();
 
         if (use_fxaa) {
           fxaa_source_texture_submission_ = GetCurrentSubmission();
@@ -2513,10 +2520,13 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         // From now on, even in case of failure, apply_gamma_dest must be
         // transitioned back to apply_gamma_dest_initial_state!
+        // (With HDR quality High the guest output is 16-bit float: the gamma
+        // ramp and FXAA shaders, which declare unorm, store through a float
+        // view, values in 0-1 as before, as the HDR copy's float stores went to
+        // a unorm one.)
         D3D12_UNORDERED_ACCESS_VIEW_DESC apply_gamma_dest_uav_desc;
         apply_gamma_dest_uav_desc.Format =
-            use_fxaa ? kFxaaSourceTextureFormat
-                     : ui::d3d12::D3D12Presenter::kGuestOutputFormat;
+            use_fxaa ? kFxaaSourceTextureFormat : guest_output_format;
         apply_gamma_dest_uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         apply_gamma_dest_uav_desc.Texture2D.MipSlice = 0;
         apply_gamma_dest_uav_desc.Texture2D.PlaneSlice = 0;
@@ -2534,21 +2544,22 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         gamma_ramp_buffer_state_ =
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
-        if (dao_pq) {
+        if (dao_hdr) {
           deferred_command_list_.D3DSetComputeRootSignature(
-              dao_pq_copy_root_signature_.Get());
-          DaoPqCopyConstants dao_pq_constants;
-          dao_pq_constants.size[0] = uint32_t(swap_texture_desc.Width);
-          dao_pq_constants.size[1] = uint32_t(swap_texture_desc.Height);
-          dao_pq_constants.paper_white =
+              dao_hdr_copy_root_signature_.Get());
+          DaoHdrCopyConstants dao_hdr_copy_constants;
+          dao_hdr_copy_constants.size[0] = uint32_t(swap_texture_desc.Width);
+          dao_hdr_copy_constants.size[1] = uint32_t(swap_texture_desc.Height);
+          dao_hdr_copy_constants.paper_white =
               float(std::max(cvars::present_hdr_paper_white, 80.0));
-          dao_pq_constants.gamma =
+          dao_hdr_copy_constants.gamma =
               float(std::clamp(cvars::present_hdr_gamma, 1.0, 3.0));
-          dao_pq_constants.use_ramp =
+          dao_hdr_copy_constants.use_ramp =
               !use_pwl_gamma_ramp && !dao_gamma_ramp_identity_;
+          dao_hdr_copy_constants.scrgb = dao_scrgb ? 1 : 0;
           deferred_command_list_.D3DSetComputeRoot32BitConstants(
               UINT(ApplyGammaRootParameter::kConstants),
-              sizeof(dao_pq_constants) / sizeof(uint32_t), &dao_pq_constants,
+              sizeof(dao_hdr_copy_constants) / sizeof(uint32_t), &dao_hdr_copy_constants,
               0);
         } else {
           deferred_command_list_.D3DSetComputeRootSignature(
@@ -2571,8 +2582,8 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
             UINT(ApplyGammaRootParameter::kRamp),
             apply_gamma_descriptor_gamma_ramp.second);
         ID3D12PipelineState* apply_gamma_pipeline;
-        if (dao_pq) {
-          apply_gamma_pipeline = dao_pq_copy_pipeline_.Get();
+        if (dao_hdr) {
+          apply_gamma_pipeline = dao_hdr_copy_pipeline_.Get();
         } else if (use_pwl_gamma_ramp) {
           apply_gamma_pipeline = use_fxaa
                                      ? apply_gamma_pwl_fxaa_luma_pipeline_.Get()
@@ -2636,8 +2647,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                 UINT(FxaaRootParameter::kConstants),
                 sizeof(fxaa_constants) / sizeof(uint32_t), &fxaa_constants, 0);
             D3D12_UNORDERED_ACCESS_VIEW_DESC fxaa_dest_uav_desc;
-            fxaa_dest_uav_desc.Format =
-                ui::d3d12::D3D12Presenter::kGuestOutputFormat;
+            fxaa_dest_uav_desc.Format = guest_output_format;
             fxaa_dest_uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
             fxaa_dest_uav_desc.Texture2D.MipSlice = 0;
             fxaa_dest_uav_desc.Texture2D.PlaneSlice = 0;
@@ -2688,7 +2698,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         EndSubmission(true);
         return true;
       },
-      dao_sharpened, dao_pq);
+      dao_sharpened, dao_hdr);
 
   // End the frame even if did not present for any reason (the image refresher
   // was not called), to prevent leaking per-frame resources.

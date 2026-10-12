@@ -39,7 +39,7 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
 - D3D12: `gpu/d3d12/d3d12_command_processor.*`, `d3d12_graphics_system.*`,
   `d3d12_render_target_cache.*`, `d3d12_texture_cache.*`,
   `deferred_command_list.*`, `pipeline_cache.*`.
-- UI: `ui/presenter.*`, `ui/d3d12/d3d12_presenter.*` (HDR output, vsync),
+- UI: `ui/presenter.*`, `ui/d3d12/d3d12_presenter.*` (HDR output and its quality High, scRGB throughout; vsync),
   `ui/d3d12/d3d12_provider.*`, `ui/imgui_drawer.*`, `ui/window_win.*`,
   `ui/windowed_app_context_win.h`.
 

@@ -353,7 +353,7 @@ bool Presenter::RefreshGuestOutput(
     uint32_t frontbuffer_width, uint32_t frontbuffer_height,
     uint32_t display_aspect_ratio_x, uint32_t display_aspect_ratio_y,
     std::function<bool(GuestOutputRefreshContext& context)> refresher,
-    bool sharpened, bool pq) {
+    bool sharpened, bool game_hdr) {
   GuestOutputProperties& writable_properties =
       guest_output_properties_[guest_output_mailbox_writable_];
   writable_properties.frontbuffer_width = frontbuffer_width;
@@ -362,7 +362,7 @@ bool Presenter::RefreshGuestOutput(
   writable_properties.display_aspect_ratio_y = display_aspect_ratio_y;
   writable_properties.is_8bpc = false;
   writable_properties.sharpened = sharpened;
-  writable_properties.pq = pq;
+  writable_properties.game_hdr = game_hdr;
   bool is_active = writable_properties.IsActive();
   if (is_active) {
     if (!RefreshGuestOutputImpl(guest_output_mailbox_writable_,
@@ -846,9 +846,14 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
       properties.frontbuffer_width <= output_width + 1 &&
       properties.frontbuffer_height + 1 >= output_height &&
       properties.frontbuffer_height <= output_height + 1;
+  // DAO: the game's HDR in scRGB (HDR quality High). FidelityFX CAS and FSR 1
+  // take values up to 1, not linear HDR, so such frames are only stretched;
+  // and they aren't dithered (dithering hides 8-bit steps, which 16-bit floats
+  // don't have).
+  const bool linear_hdr = properties.game_hdr && hdr_scrgb_;
   if ((config.GetEffect() == GuestOutputPaintConfig::Effect::kCas ||
        config.GetEffect() == GuestOutputPaintConfig::Effect::kFsr) &&
-      !sharpened_1to1) {
+      !sharpened_1to1 && !linear_hdr) {
     // FidelityFX Super Resolution and Contrast Adaptive Sharpening only work
     // good for up to 2x2 upscaling due to the way they fetch texels.
     // CAS is primarily a sharpening filter, not an upscaling one (its upscaling
@@ -943,7 +948,7 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
 
   assert_not_zero(flow.effect_count);
 
-  if (config.GetDither()) {
+  if (config.GetDither() && !linear_hdr) {
     // Dithering must be applied only to the final effect since resampling and
     // sharpening filters may considering the dithering noise features and
     // amplify it.

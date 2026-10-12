@@ -119,8 +119,15 @@ class D3D12ImmediateDrawer final : public ImmediateDrawer {
     kCount
   };
 
-  Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_triangle_;
-  Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_line_;
+  // DAO: per render target format (kTargetFormats in the .cc: the swap
+  // chain's, and the HDR source's in both HDR qualities), for triangles and
+  // lines; Begin picks the target's.
+  static constexpr size_t kTargetFormatCount = 3;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState>
+      pipelines_triangle_[kTargetFormatCount];
+  Microsoft::WRL::ComPtr<ID3D12PipelineState>
+      pipelines_line_[kTargetFormatCount];
+  size_t target_format_index_ = 0;
 
   Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sampler_heap_;
   D3D12_CPU_DESCRIPTOR_HANDLE sampler_heap_cpu_start_;

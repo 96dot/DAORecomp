@@ -753,12 +753,13 @@ class D3D12CommandProcessor final : public CommandProcessor {
   struct ApplyGammaConstants {
     uint32_t size[2];
   };
-  // DAO: dao_pq_copy.cs.
-  struct DaoPqCopyConstants {
+  // DAO: dao_hdr_copy.cs.
+  struct DaoHdrCopyConstants {
     uint32_t size[2];
     float paper_white;
     float gamma;
     uint32_t use_ramp;
+    uint32_t scrgb;
   };
   enum class ApplyGammaRootParameter : UINT {
     kConstants,
@@ -775,12 +776,13 @@ class D3D12CommandProcessor final : public CommandProcessor {
   Microsoft::WRL::ComPtr<ID3D12PipelineState> apply_gamma_pwl_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState>
       apply_gamma_pwl_fxaa_luma_pipeline_;
-  // DAO: copies a PQ (HDR) frame in place of the gamma ramp pass (the
-  // apply_gamma root signature's layout, with DaoPqCopyConstants).
-  Microsoft::WRL::ComPtr<ID3D12RootSignature> dao_pq_copy_root_signature_;
-  // The 256-entry table ramp is the identity (the PQ copy skips it).
+  // DAO: copies a true HDR frame (PQ, or scRGB with HDR quality High) in place
+  // of the gamma ramp pass (the apply_gamma root signature's layout, with
+  // DaoHdrCopyConstants).
+  Microsoft::WRL::ComPtr<ID3D12RootSignature> dao_hdr_copy_root_signature_;
+  // The 256-entry table ramp is the identity (the HDR copy skips it).
   bool dao_gamma_ramp_identity_ = true;
-  Microsoft::WRL::ComPtr<ID3D12PipelineState> dao_pq_copy_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> dao_hdr_copy_pipeline_;
 
   struct FxaaConstants {
     uint32_t size[2];

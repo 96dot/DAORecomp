@@ -21,6 +21,14 @@ namespace xe {
 namespace ui {
 namespace d3d12 {
 
+namespace {
+// DAO: the formats UI is drawn to: the SDR swap chain, the HDR source (HDR
+// output), and the HDR source with HDR quality High.
+constexpr DXGI_FORMAT kTargetFormats[] = {
+    D3D12Presenter::kSwapChainFormat, D3D12Presenter::kHdrSourceFormat,
+    D3D12Presenter::kSwapChainHdrFormat};
+}  // namespace
+
 // Generated with `xb buildshaders`.
 namespace shaders {
 #include "xenia/ui/shaders/bytecode/d3d12_5_1/immediate_ps.h"
@@ -158,20 +166,24 @@ bool D3D12ImmediateDrawer::Initialize() {
   pipeline_desc.InputLayout.pInputElementDescs = pipeline_input_elements;
   pipeline_desc.InputLayout.NumElements =
       UINT(xe::countof(pipeline_input_elements));
-  pipeline_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
   pipeline_desc.NumRenderTargets = 1;
-  pipeline_desc.RTVFormats[0] = D3D12Presenter::kSwapChainFormat;
   pipeline_desc.SampleDesc.Count = 1;
-  if (FAILED(device->CreateGraphicsPipelineState(
-          &pipeline_desc, IID_PPV_ARGS(&pipeline_triangle_)))) {
-    XELOGE("D3D12ImmediateDrawer: Failed to create the triangle pipeline");
-    return false;
-  }
-  pipeline_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
-  if (FAILED(device->CreateGraphicsPipelineState(
-          &pipeline_desc, IID_PPV_ARGS(&pipeline_line_)))) {
-    XELOGE("D3D12ImmediateDrawer: Failed to create the line pipeline");
-    return false;
+  static_assert(xe::countof(kTargetFormats) == kTargetFormatCount);
+  for (size_t i = 0; i < kTargetFormatCount; ++i) {
+    pipeline_desc.RTVFormats[0] = kTargetFormats[i];
+    pipeline_desc.PrimitiveTopologyType =
+        D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    if (FAILED(device->CreateGraphicsPipelineState(
+            &pipeline_desc, IID_PPV_ARGS(&pipelines_triangle_[i])))) {
+      XELOGE("D3D12ImmediateDrawer: Failed to create the triangle pipeline");
+      return false;
+    }
+    pipeline_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+    if (FAILED(device->CreateGraphicsPipelineState(
+            &pipeline_desc, IID_PPV_ARGS(&pipelines_line_[i])))) {
+      XELOGE("D3D12ImmediateDrawer: Failed to create the line pipeline");
+      return false;
+    }
   }
 
   // Create the samplers.
@@ -344,6 +356,16 @@ void D3D12ImmediateDrawer::Begin(UIDrawContext& ui_draw_context,
 
   const D3D12UIDrawContext& d3d12_ui_draw_context =
       static_cast<const D3D12UIDrawContext&>(ui_draw_context);
+
+  // DAO: the pipelines for the target (the first, the swap chain's, for an
+  // unknown one).
+  target_format_index_ = 0;
+  for (size_t i = 0; i < kTargetFormatCount; ++i) {
+    if (kTargetFormats[i] == d3d12_ui_draw_context.render_target_format()) {
+      target_format_index_ = i;
+      break;
+    }
+  }
 
   // Update the submission index to be used throughout the current immediate
   // drawer paint.
@@ -575,11 +597,11 @@ void D3D12ImmediateDrawer::Draw(const ImmediateDraw& draw) {
   switch (draw.primitive_type) {
     case ImmediatePrimitiveType::kLines:
       primitive_topology = D3D_PRIMITIVE_TOPOLOGY_LINELIST;
-      pipeline = pipeline_line_.Get();
+      pipeline = pipelines_line_[target_format_index_].Get();
       break;
     case ImmediatePrimitiveType::kTriangles:
       primitive_topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-      pipeline = pipeline_triangle_.Get();
+      pipeline = pipelines_triangle_[target_format_index_].Get();
       break;
     default:
       assert_unhandled_case(draw.primitive_type);

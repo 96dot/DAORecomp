@@ -1,18 +1,21 @@
-// DAO: in place of the gamma ramp pass for a PQ-encoded (HDR) frame: copies it
-// to the presenter's guest output, with the game's 256-entry gamma ramp (its
-// brightness) applied per channel up to SDR white, as on the SDR output, and
-// above it the ramp's gain at white (continuous at white). The bindings of
-// apply_gamma_table.cs, with more constants.
+// DAO: in place of the gamma ramp pass for a true HDR frame, PQ-encoded or (HDR
+// quality High) scRGB: copies it to the presenter's guest output, with the
+// game's 256-entry gamma ramp (its brightness) applied per channel up to SDR
+// white, as on the SDR output, and above it the ramp's gain at white
+// (continuous at white). The bindings of apply_gamma_table.cs, with more
+// constants.
 Buffer<float4> dao_ramp : register(t0);  // BGR in RGB.
 Texture2D<float4> dao_source : register(t1);
 RWTexture2D<float4> dao_dest : register(u0);
 
-cbuffer DaoPqCopyConstants : register(b0) {
+cbuffer DaoHdrCopyConstants : register(b0) {
   uint2 dao_size;
   float dao_paper_white;  // Nits.
   float dao_gamma;        // Of the game's output.
   // 0: the ramp is the identity, or not a 256-entry table: copied unchanged.
   uint dao_use_ramp;
+  // The frame is scRGB (linear, 1 = 80 nits), not PQ.
+  uint dao_scrgb;
 };
 
 float3 PqToNits(float3 pq) {
@@ -44,11 +47,13 @@ void main(uint3 id : SV_DispatchThreadID) {
   }
   float3 color = dao_source[id.xy].rgb;
   if (dao_use_ramp) {
-    float3 relative = PqToNits(color) / dao_paper_white;
+    float3 nits = dao_scrgb ? max(color, 0.0) * 80.0 : PqToNits(color);
+    float3 relative = nits / dao_paper_white;
     float3 ramped = pow(Ramp(pow(relative, 1.0 / dao_gamma)), dao_gamma);
     float3 white_gain = pow(Ramp(1.0), dao_gamma);
-    color = NitsToPq(lerp(ramped, relative * white_gain, step(1.0, relative)) *
-                     dao_paper_white);
+    nits = lerp(ramped, relative * white_gain, step(1.0, relative)) *
+           dao_paper_white;
+    color = dao_scrgb ? nits / 80.0 : NitsToPq(nits);
   }
   dao_dest[id.xy] = float4(color, 1.0);
 }

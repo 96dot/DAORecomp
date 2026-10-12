@@ -60,6 +60,12 @@ namespace dao
         bool hdr = false;
         float hdrPaperWhite = 200.0f; // nits
         float hdrPeak = 1000.0f;      // nits
+        // HDR quality High: the 3D scenes' HDR stays scRGB (16-bit float) from the
+        // upscaler to the display, instead of PQ in 10 bits: smoother gradients, more
+        // memory traffic (Standard, false, is the default). Meant for temporal
+        // upscaling: without it, HDR scenes at another size than the window's are
+        // stretched without the output upscaler's FSR 1 or CAS.
+        bool hdrHighQuality = false;
         // Anisotropic texture filtering, one of kAnisotropicLevels.
         int anisotropicFiltering = 0;
         // The engine's dynamic character shadows and its post-processing (frame
@@ -83,6 +89,9 @@ namespace dao
 
     // Brings every value within its limits (the HDR peak at least the paper white).
     void ClampSettings(Settings& settings);
+
+    // The HDR quality as config.toml writes it: "high", "standard".
+    std::string_view HdrQualityName(bool high);
 
     // A frame rate for the log: "60 fps", "unlimited".
     std::string FrameRateName(int frameRate);
