@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "files.h"
 
+#include <fstream>
+
 #include "text.h"
 
 namespace dao
@@ -31,5 +33,24 @@ namespace dao
         if (name.empty() || name.back() == '.' || name.back() == ' ' || IsDeviceName(name))
             return false;
         return std::ranges::none_of(name, IsBadNameChar);
+    }
+
+    bool WriteFileAtomically(const std::filesystem::path& path, std::string_view data)
+    {
+        const std::filesystem::path part = std::filesystem::path(path).concat(L".part");
+        bool written = false;
+        {
+            std::ofstream out(part, std::ios::binary | std::ios::trunc);
+            written = out && out.write(data.data(), std::streamsize(data.size())) && out.flush();
+        }
+        std::error_code ec;
+        if (written)
+            std::filesystem::rename(part, path, ec);
+        if (!written || ec)
+        {
+            std::filesystem::remove(part, ec);
+            return false;
+        }
+        return true;
     }
 }

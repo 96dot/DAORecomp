@@ -12,6 +12,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "third_party/stb/stb_image_write.h"
 
+#include "files.h"
 #include "program.h"
 #include "text.h"
 
@@ -175,21 +176,6 @@ namespace dao::launcher::steam
                     crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1)));
             }
             return ~crc;
-        }
-
-        bool WriteFileAtomically(const fs::path& path, std::string_view data)
-        {
-            const fs::path part = fs::path(path).concat(L".part");
-            {
-                std::ofstream out(part, std::ios::binary | std::ios::trunc);
-                if (!out || !out.write(data.data(), std::streamsize(data.size())) || !out.flush())
-                    return false;
-            }
-            std::error_code ec;
-            fs::rename(part, path, ec);
-            if (ec)
-                fs::remove(part, ec);
-            return !ec;
         }
 
         bool WritePng(const fs::path& path, const Artwork& art)
