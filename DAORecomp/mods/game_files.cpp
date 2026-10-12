@@ -18,6 +18,7 @@ namespace dao::mods
             constexpr uint32_t kMaxEntries = 1 << 20;
             const auto erf = ui::PcErfArchive::Open(path, kMaxEntries);
             const auto* opened = std::get_if<ui::PcErfArchive>(&erf);
+            // (V2.2 is the PC's DLC format, which the game's own files aren't in.)
             if (!opened || opened->IsV22())
                 return;
             for (const ui::PcErfArchive::Entry& entry : opened->Entries())
