@@ -6,6 +6,7 @@
 #include <unordered_set>
 
 #include "files.h"
+#include "handle.h"
 #include "mods/mod_files.h"
 #include "text.h"
 
@@ -50,16 +51,6 @@ namespace dao::mods
         // The archives mods come in that tar.exe reads (.dazip: the PC version's
         // own, a zip).
         constexpr std::string_view kArchiveExtensions[] = { ".zip", ".7z", ".rar", ".dazip" };
-
-        struct HandleCloser
-        {
-            void operator()(HANDLE handle) const
-            {
-                if (handle != INVALID_HANDLE_VALUE)
-                    CloseHandle(handle);
-            }
-        };
-        using Handle = std::unique_ptr<void, HandleCloser>;
 
         bool HasExtension(const fs::path& path, std::span<const std::string_view> extensions)
         {

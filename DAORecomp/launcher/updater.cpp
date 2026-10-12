@@ -9,6 +9,7 @@
 
 #include <rapidjson/document.h>
 
+#include "handle.h"
 #include "hash.h"
 #include "program.h"
 #include "version.h"
@@ -71,17 +72,11 @@ namespace dao::launcher
         };
         using Internet = std::unique_ptr<void, CloseInternet>;
 
-        struct CloseFile
-        {
-            void operator()(HANDLE handle) const { CloseHandle(handle); }
-        };
-        using File = std::unique_ptr<void, CloseFile>;
-
-        File OpenFile(const fs::path& path, DWORD access, DWORD share, DWORD creation)
+        Handle OpenFile(const fs::path& path, DWORD access, DWORD share, DWORD creation)
         {
             const HANDLE handle =
                 CreateFileW(path.c_str(), access, share, nullptr, creation, FILE_ATTRIBUTE_NORMAL, nullptr);
-            return File(handle == INVALID_HANDLE_VALUE ? nullptr : handle);
+            return Handle(handle == INVALID_HANDLE_VALUE ? nullptr : handle);
         }
 
         // GETs an https URL (following redirects to https only), giving the body to
@@ -327,7 +322,7 @@ namespace dao::launcher
         fs::path installer;
         // The verified installer, open so it can't be changed or replaced before
         // it runs.
-        File installerLock;
+        Handle installerLock;
     };
 
     Updater::Updater() : shared_(std::make_shared<Shared>()), installRoot_(ProgramPath().parent_path())
@@ -419,7 +414,7 @@ namespace dao::launcher
             bool ok;
             {
                 // Nobody else may write to it meanwhile.
-                File file = OpenFile(part, GENERIC_WRITE, FILE_SHARE_READ, CREATE_NEW);
+                Handle file = OpenFile(part, GENERIC_WRITE, FILE_SHARE_READ, CREATE_NEW);
                 uint64_t done = 0;
                 const auto save = [&](std::span<const uint8_t> data) {
                     done += data.size();
@@ -439,7 +434,7 @@ namespace dao::launcher
             }
             // Checked as it is on disk, and kept open (others may only read it)
             // until it runs.
-            File installer;
+            Handle installer;
             if (ok)
             {
                 installer = OpenFile(path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING);
