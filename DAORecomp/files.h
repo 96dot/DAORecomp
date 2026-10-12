@@ -17,6 +17,6 @@ namespace dao
 
     // Writes `data` to <path>.part and renames that over `path`, so `path` is never
     // a partial file (if either fails, the old one stays). False if it fails, and
-    // then no .part is left.
+    // then the .part is removed.
     bool WriteFileAtomically(const std::filesystem::path& path, std::string_view data);
 }

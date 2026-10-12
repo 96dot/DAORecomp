@@ -173,15 +173,15 @@ namespace dao::mods
             return mods::ReadHead(path, kFormatHeadBytes);
         }
 
-        // A PC archive (ui::PcErfArchive) whose files can be unpacked: plain names,
-        // in the file, not sharing data.
+        // A PC archive (ui::PcErfArchive) whose files can be unpacked safely: their
+        // names plain, their data inside the archive and not shared.
         class PcArchive
         {
         public:
             struct Entry
             {
                 std::string name;   // UTF-8
-                ui::PcErfArchive::Entry erf;
+                ui::PcErfArchive::Entry raw;
             };
 
             static std::variant<PcArchive, std::string> Open(const fs::path& path)
@@ -191,20 +191,20 @@ namespace dao::mods
                 if (auto* error = std::get_if<std::string>(&opened))
                     return std::move(*error);
                 PcArchive archive(std::move(std::get<ui::PcErfArchive>(opened)));
-                for (const ui::PcErfArchive::Entry& erf : archive.erf_.Entries())
+                for (const ui::PcErfArchive::Entry& raw : archive.erf_.Entries())
                 {
-                    Entry entry{ WideToUtf8(erf.name), erf };
+                    Entry entry{ WideToUtf8(raw.name), raw };
                     if (!IsPlainName(entry.name))
                         return fmt::format("a file in it has a name a file can't have ({})", entry.name);
-                    if (uint64_t(erf.offset) + erf.packedSize > archive.erf_.FileSize())
+                    if (uint64_t(raw.offset) + raw.packedSize > archive.erf_.FileSize())
                         return std::string("it's damaged");
                     archive.entries_.push_back(std::move(entry));
                 }
                 // Files don't share data (else a small archive could unpack to a lot).
                 std::vector<std::pair<uint64_t, uint64_t>> spans;   // (offset, end)
                 for (const Entry& entry : archive.entries_)
-                    if (entry.erf.packedSize)
-                        spans.emplace_back(entry.erf.offset, uint64_t(entry.erf.offset) + entry.erf.packedSize);
+                    if (entry.raw.packedSize)
+                        spans.emplace_back(entry.raw.offset, uint64_t(entry.raw.offset) + entry.raw.packedSize);
                 std::ranges::sort(spans);
                 for (size_t i = 1; i < spans.size(); ++i)
                     if (spans[i].first < spans[i - 1].second)
@@ -217,7 +217,7 @@ namespace dao::mods
             // An entry's data (unpacked); nothing if it's damaged or too big.
             std::optional<std::vector<uint8_t>> Read(const Entry& entry) const
             {
-                return erf_.Read(entry.erf, kMaxFileBytes);
+                return erf_.Read(entry.raw, kMaxFileBytes);
             }
 
         private:

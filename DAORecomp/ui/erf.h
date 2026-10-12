@@ -1,7 +1,7 @@
 #pragma once
-// Reading the game's files: its ERF V2.1 archives (packages/*/data/*.erf) and the
-// zlib data in them; and the PC version's archives (ERF V2.0, as the game's scripts'
-// archives are too, and V2.2).
+// Reading ERF archives: the game's (V2.1, packages/*/data/*.erf) and the zlib data
+// in them, and the PC version's (V2.0 and V2.2), which mods come in and the game's
+// scripts' archives are in too (V2.0).
 
 #include <variant>
 
@@ -71,8 +71,8 @@ namespace dao::ui
             uint32_t offset, packedSize, size;
         };
 
-        // Why not, if it isn't an archive this can read or has more than
-        // `maxEntries` entries.
+        // Or why it can't be read (to tell the player): not one of these archives,
+        // more than `maxEntries` entries, damaged.
         static std::variant<PcErfArchive, std::string> Open(const std::filesystem::path& path,
             uint32_t maxEntries);
 
@@ -80,8 +80,8 @@ namespace dao::ui
         uint64_t FileSize() const { return fileSize_; }
         const std::vector<Entry>& Entries() const { return entries_; }
 
-        // An entry's data (unpacked); nothing if it's damaged or more than `maxSize`
-        // bytes.
+        // An entry's data (unpacked); nothing if it's damaged, outside the file or more
+        // than `maxSize` bytes.
         std::optional<std::vector<uint8_t>> Read(const Entry& entry, uint32_t maxSize) const;
 
     private:

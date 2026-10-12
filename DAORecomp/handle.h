@@ -13,5 +13,7 @@ namespace dao
     };
 
     // Owns a handle (move-only), closed unless it's null or INVALID_HANDLE_VALUE.
+    // (One holding INVALID_HANDLE_VALUE, as CreateFileW fails with, isn't empty:
+    // turn that into null first where it's tested.)
     using Handle = std::unique_ptr<void, HandleCloser>;
 }

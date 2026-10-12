@@ -136,9 +136,12 @@ namespace dao::ui
             archive.compressed_ = (flags >> 29) != 0;
         }
         const size_t entriesAt = v22 ? 56 : 32, entrySize = v22 ? 76 : 72;
-        if (count > maxEntries)
+        // (The table is in the file: a count it hasn't room for isn't read, and can't
+        // overflow.)
+        const uint64_t tableSize = uint64_t(count) * entrySize;
+        if (count > maxEntries || entriesAt + tableSize > fileSize)
             return std::string("it's damaged");
-        const auto table = ReadFileBytes(path, entriesAt, uint32_t(count * entrySize));
+        const auto table = ReadFileBytes(path, entriesAt, uint32_t(tableSize));
         if (!table)
             return std::string("it's damaged");
         for (uint32_t i = 0; i < count; ++i)
@@ -156,7 +159,9 @@ namespace dao::ui
 
     std::optional<std::vector<uint8_t>> PcErfArchive::Read(const Entry& entry, uint32_t maxSize) const
     {
-        if (entry.size > maxSize || entry.packedSize > maxSize)
+        // (Sizes fit an int, as stb's decoder takes them.)
+        if (entry.size > maxSize || entry.packedSize > maxSize || entry.size > INT_MAX ||
+            entry.packedSize > INT_MAX || uint64_t(entry.offset) + entry.packedSize > fileSize_)
             return std::nullopt;
         auto data = ReadFileBytes(path_, entry.offset, entry.packedSize);
         if (!data || !compressed_ || entry.size == 0)
