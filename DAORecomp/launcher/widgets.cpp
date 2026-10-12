@@ -1,0 +1,255 @@
+#include "stdafx.h"
+#include "launcher/launcher_internal.h"
+
+#include <shellapi.h>
+
+#include <imgui_internal.h>
+
+namespace dao::launcher
+{
+    // The state, for the settings tabs' helpers.
+    const State* g_state = nullptr;
+
+    const Texture* Art(const State& st, const char* name)
+    {
+        const auto it = st.art.find(name);
+        return it != st.art.end() ? &it->second : nullptr;
+    }
+
+    // A sprite with its top left at `at`, `scale` window pixels per sprite pixel;
+    // mirrored, it extends left of `at` instead.
+    void DrawTinted(ImDrawList* draw, const Texture& art, ImVec2 at, float scale, ImU32 tint, bool mirrored)
+    {
+        const float w = art.width * scale, h = art.height * scale;
+        const ImVec2 min(mirrored ? at.x - w : at.x, at.y), max(min.x + w, min.y + h);
+        draw->AddImage(ImTextureID(uintptr_t(art.texture)), min, max, ImVec2(mirrored ? 1.0f : 0.0f, 0),
+            ImVec2(mirrored ? 0.0f : 1.0f, 1), tint);
+    }
+
+    void DrawSprite(ImDrawList* draw, const Texture& art, ImVec2 at, float scale, float alpha,
+        bool mirrored)
+    {
+        DrawTinted(draw, art, at, scale, WithAlpha(IM_COL32_WHITE, alpha), mirrored);
+    }
+
+    // A sprite stretched over a rectangle.
+    void DrawStretched(ImDrawList* draw, const Texture& art, ImVec2 min, ImVec2 max, float alpha)
+    {
+        draw->AddImage(ImTextureID(uintptr_t(art.texture)), min, max, ImVec2(0, 0), ImVec2(1, 1),
+            WithAlpha(IM_COL32_WHITE, alpha));
+    }
+
+    // Text with the game's drop shadow, faded with the view.
+    void ShadowText(ImDrawList* draw, const State& st, ImFont* font, float size, ImVec2 at, ImU32 color,
+        const char* text)
+    {
+        const float offset = std::max(1.0f, size / 16.0f);
+        const float alpha = float(color >> IM_COL32_A_SHIFT & 0xFF) / 255.0f * st.fade;
+        draw->AddText(font, size, ImVec2(at.x + offset, at.y + offset), WithAlpha(kShadow, alpha), text);
+        draw->AddText(font, size, at, WithAlpha(color, st.fade), text);
+    }
+
+    // An animated 0..1 for an item: towards 1 while `on`.
+    float Ease(ImGuiID id, bool on, float seconds)
+    {
+        float* value = ImGui::GetStateStorage()->GetFloatRef(id, 0.0f);
+        const float step = ImGui::GetIO().DeltaTime / seconds;
+        *value = std::clamp(*value + (on ? step : -step), 0.0f, 1.0f);
+        return *value;
+    }
+
+    // A button of the game's own menus, which draw their highlight instead of
+    // ImGui's navigation cursor. Hot while hovered or focused by keys or gamepad.
+    bool MenuButton(const char* id, ImVec2 min, ImVec2 size, bool enabled, bool& hot)
+    {
+        ImGui::SetCursorScreenPos(min);
+        ImGui::BeginDisabled(!enabled);
+        ImGui::PushStyleColor(ImGuiCol_NavCursor, IM_COL32_BLACK_TRANS);
+        const bool pressed = ImGui::InvisibleButton(id, size, ImGuiButtonFlags_EnableNav);
+        ImGui::PopStyleColor();
+        ImGui::EndDisabled();
+        hot = enabled && (ImGui::IsItemHovered() || (ImGui::IsItemFocused() && GImGui->NavCursorVisible));
+        return pressed && enabled;
+    }
+
+    namespace
+    {
+        // The width of a button hint, in stage pixels.
+        float HintWidth(const State& st, const char* label)
+        {
+            return kHintIcon + kHintGap + st.headingFont->CalcTextSizeA(kHintTextSize, FLT_MAX, 0, label).x;
+        }
+    }
+
+    // A button hint of the game's footers at `at` (its top left; its top right when
+    // the label comes first): the button's icon and the label. Clickable when
+    // `clickable`; returns whether it was clicked.
+    bool Hint(const State& st, const Layout& layout, const char* button, const char* label, ImVec2 at,
+        bool labelFirst, bool clickable)
+    {
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const float icon = kHintIcon * layout.fit, gap = kHintGap * layout.fit, size = kHintTextSize * layout.fit;
+        ImFont* font = st.headingFont;
+        const ImVec2 text = font->CalcTextSizeA(size, FLT_MAX, 0, label);
+        const float width = icon + gap + text.x;
+        const ImVec2 min(labelFirst ? at.x - width : at.x, at.y);
+        bool pressed = false, hot = false;
+        if (clickable)
+        {
+            ImGui::SetCursorScreenPos(min);
+            ImGui::PushID(label);
+            pressed = ImGui::InvisibleButton("##hint", ImVec2(width, icon));
+            hot = ImGui::IsItemHovered();
+            ImGui::PopID();
+        }
+        const float iconX = labelFirst ? min.x + text.x + gap : min.x;
+        const float textX = labelFirst ? min.x : min.x + icon + gap;
+        if (const Texture* art = Art(st, button))
+            DrawSprite(draw, *art, ImVec2(iconX, min.y), icon / art->height, st.fade);
+        else
+            draw->AddCircleFilled(ImVec2(iconX + icon * 0.5f, min.y + icon * 0.5f), icon * 0.45f,
+                WithAlpha(kGold, st.fade));
+        ShadowText(draw, st, font, size, ImVec2(textX, min.y + (icon - text.y) * 0.5f), hot ? kGoldBright : kText,
+            label);
+        return pressed;
+    }
+
+    void OpenFolder(const fs::path& path)
+    {
+        std::error_code ec;
+        fs::create_directories(path, ec);
+        ShellExecuteW(nullptr, L"open", path.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+
+    void OpenFile(const fs::path& path)
+    {
+        ShellExecuteW(nullptr, L"open", path.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+
+    void HelpText(const char* text)
+    {
+        ImGui::PushFont(g_state->helpFont);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", text);
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+    }
+
+    // A bulleted paragraph, wrapped to the window (ImGui's BulletText doesn't wrap).
+    void WrappedBullet(const char* text)
+    {
+        ImGui::Bullet();
+        ImGui::TextWrapped("%s", text);
+    }
+
+    // A section heading: the Options screen's gold bar with the title on it.
+    void Section(const char* title)
+    {
+        const State& st = *g_state;
+        // Space above; the bar's height (in lines) and its text's inset; without the
+        // bar's art, the width of its gold fade.
+        constexpr float kSpaceAbove = 6.0f, kBarLines = 1.6f, kInset = 10.0f, kFallbackWidth = 360.0f;
+        ImGui::Dummy(ImVec2(0, kSpaceAbove * st.scale));
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        ImFont* font = st.headingFont;
+        const float height = font->FontSize * kBarLines, inset = kInset * st.scale;
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        if (const Texture* bar = Art(st, kSectionBar))
+            DrawStretched(draw, *bar, ImVec2(at.x - inset, at.y),
+                ImVec2(at.x - inset + bar->width * height / bar->height, at.y + height), st.fade);
+        else
+            draw->AddRectFilledMultiColor(at, ImVec2(at.x + kFallbackWidth * st.scale, at.y + height),
+                WithAlpha(kGold, 0.6f * st.fade), IM_COL32_BLACK_TRANS, IM_COL32_BLACK_TRANS,
+                WithAlpha(kGold, 0.6f * st.fade));
+        ShadowText(draw, st, font, font->FontSize, ImVec2(at.x + inset, at.y + (height - font->FontSize) * 0.5f),
+            kText, title);
+        ImGui::Dummy(ImVec2(0, height));
+    }
+
+    // The width of the pickers and sliders.
+    float RowWidth()
+    {
+        return std::min(ImGui::GetContentRegionAvail().x - 4 * g_state->scale, 460.0f * g_state->scale);
+    }
+
+    void Label(const char* text)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(kTextDim));
+        ImGui::TextUnformatted(text);
+        ImGui::PopStyleColor();
+    }
+
+    void SetView(State& st, View view)
+    {
+        st.view = view;
+        st.viewChanged = true;
+        st.viewStart = ImGui::GetTime();
+    }
+
+    // The Options screen's frame: its background, the header bar with the view's
+    // title and the footer's button hints. Back also with Escape or the gamepad's
+    // B, `restore` (Restore Defaults, if given) with its Y.
+    void PanelFrame(State& st, const Layout& layout, const char* title, Restore restore)
+    {
+        if (const Texture* panel = Art(st, kPanelBackground))
+            DrawStretched(ImGui::GetBackgroundDrawList(), *panel, layout.Center(0, 0),
+                layout.Center(kStageWidth, kStageHeight), kPanelBackgroundAlpha);
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        if (const Texture* bar = Art(st, kHeaderBar.sprite))
+            DrawSprite(draw, *bar, layout.Right(kHeaderBar.x, kHeaderBar.y), layout.fit, st.fade);
+        if (const Texture* flourish = Art(st, kHeaderFlourish.sprite))
+            DrawSprite(draw, *flourish, layout.Right(kHeaderFlourish.x, kHeaderFlourish.y), layout.fit,
+                kHeaderFlourish.alpha * st.fade);
+        ImFont* font = st.titleFont;
+        const float size = kHeaderTitleSize * layout.fit;
+        const ImVec2 extent = font->CalcTextSizeA(size, FLT_MAX, 0, title);
+        const ImVec2 at = layout.Right(kHeaderTitleX, kHeaderTitleY);
+        ShadowText(draw, st, font, size, ImVec2(at.x - extent.x * 0.5f, at.y - extent.y * 0.5f), kText, title);
+
+        const ImVec2 left = layout.Center(kFooterLeft, kFooterTop), right = layout.Center(kFooterRight, kFooterTop);
+        if (const Texture* bar = Art(st, kFooterBar))
+            DrawStretched(draw, *bar, left, ImVec2(right.x, left.y + bar->height * layout.fit), st.fade);
+        Hint(st, layout, kButtonA, "Select", layout.Center(kFooterLeft + 1.0f, kFooterHintY), false, false);
+        if (restore)
+        {
+            const char* label = "Restore Defaults";
+            const ImVec2 hint = layout.Center(kStageWidth * 0.5f - HintWidth(st, label) * 0.5f, kFooterHintY);
+            // ImGui's navigation also takes the gamepad's Y (to type into the focused
+            // slider); owning it keeps Y to this.
+            const ImGuiID owner = ImGui::GetID("restore defaults");
+            ImGui::SetKeyOwner(ImGuiKey_GamepadFaceUp, owner);
+            if (Hint(st, layout, kButtonY, label, hint, false, true) ||
+                (st.backKeysFree && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, ImGuiInputFlags_None, owner)))
+                restore(st.settings);
+        }
+        if (st.installer.GetState() == InstallRunner::State::Running)
+            return;
+        if (Hint(st, layout, kButtonB, st.setupOnly ? "Close" : "Back",
+                layout.Center(kFooterRight, kFooterHintY), true, true) ||
+            (st.backKeysFree && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+                                    ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))))
+        {
+            if (st.setupOnly)
+                st.quit = true;
+            else
+                SetView(st, View::Main);
+        }
+    }
+
+    // A view's contents, scrolling between the header and the footer, from `left`
+    // (stage pixels from the left) to the right side; scrolled to the top when the
+    // view is new or `resetScroll`.
+    void ShowContents(State& st, const Layout& layout, float left, Contents contents, bool resetScroll)
+    {
+        const ImVec2 min = layout.Left(left, kContentsTop), max = layout.Right(kContentsRight, kContentsBottom);
+        ImGui::SetCursorScreenPos(min);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, st.fade);
+        if (resetScroll || st.viewChanged)
+            ImGui::SetNextWindowScroll(ImVec2(0, 0));
+        ImGui::BeginChild("contents", ImVec2(max.x - min.x, max.y - min.y), ImGuiChildFlags_NavFlattened,
+            ImGuiWindowFlags_NoBackground);
+        contents(st);
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+    }
+}
