@@ -53,5 +53,13 @@ add_subdirectory(thirdparty/SDL EXCLUDE_FROM_ALL)
 # XenonUtils (XEX structures, byteswap helpers).
 add_subdirectory(${XENON_ROOT} ${CMAKE_BINARY_DIR}/XenonRecomp EXCLUDE_FROM_ALL)
 
+# What players download: DAORecomp.exe with the launcher and installer only. It has no
+# game code (no ppc/): installing recompiles the player's game into the full one.
+option(DAO_LAUNCHER_ONLY "Build the launcher and installer without the game" OFF)
+if (DAO_LAUNCHER_ONLY)
+    add_subdirectory(DAORecomp)
+    return()
+endif()
+
 add_subdirectory(DAORecompLib)
 add_subdirectory(DAORecomp)

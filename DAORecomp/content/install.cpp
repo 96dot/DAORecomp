@@ -2,7 +2,7 @@
 #include "content/install.h"
 #include "content/content.h"
 #include "content/stfs.h"
-#include "kernel/game_build.h"
+#include "kernel/title_update.h"
 #include "text.h"
 
 #include <charconv>

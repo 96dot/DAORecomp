@@ -13,8 +13,10 @@
 #include <imgui_internal.h>
 #include <backends/imgui_impl_sdl3.h>
 #include <backends/imgui_impl_sdlrenderer3.h>
+#include <imgui_stdlib.h>
 
 #include "content/install.h"
+#include "launcher/install_runner.h"
 #include "mods/convert/convert.h"
 #include "mods/mod_install.h"
 #include "mods/mods.h"
@@ -211,7 +213,7 @@ namespace dao::launcher
         constexpr std::string_view kAtlases[] = { "atl_startmenu2_dxt5", "atl_startmenu2_dxt1",
             "atl_optionsmen_dxt5", "atl_shared_dxt5" };
 
-        enum class View { Main, Configure, Mods, Update };
+        enum class View { Main, Configure, Mods, Update, Install };
         // Graphics, Display, Patches, Advanced.
         constexpr int kConfigureTabs = 4;
         constexpr float kFadeSeconds = 0.2f;
@@ -249,6 +251,30 @@ namespace dao::launcher
         {
             mods::ConvertResult result;
             mods::ModInfo mod;
+        };
+
+        // The Install view's paths.
+        enum class InstallField
+        {
+            DiscImage,
+            TitleUpdate,
+            Folder,
+        };
+
+        // What file and folder dialogs chose, from SDL's dialog thread; shared with
+        // the dialogs still open, which can outlive the window.
+        struct DialogChoices
+        {
+            std::mutex mutex;
+            std::vector<std::pair<InstallField, std::string>> chosen;
+            int open = 0;
+        };
+
+        struct DialogRequest
+        {
+            std::shared_ptr<DialogChoices> results;
+            InstallField field;
+            std::string start;
         };
 
         struct State
@@ -297,6 +323,20 @@ namespace dao::launcher
             float fade = 1.0f;
             bool play = false;
             bool quit = false;
+            // Setup: the launcher-only build players download, which only installs
+            // (from the Install view).
+            bool setupOnly = false;
+            SDL_Window* window = nullptr;
+            // The Install view's choices (UTF-8 paths), and the installer.
+            std::string installIso, installUpdate, installDest;
+            bool installAccept = false;
+            bool installShortcuts = true;
+            std::string installStartError;
+            InstallRunner installer;
+            std::shared_ptr<DialogChoices> dialogs = std::make_shared<DialogChoices>();
+            // Whether installDest has the game's files, as of checkedDest.
+            std::string checkedDest;
+            bool destHasGame = false;
             // DAO_LAUNCHER_SCREENSHOTS=<dir>: show each view, save it as BMP, quit.
             fs::path screenshotDir;
             int screenshotFrame = 0;
@@ -1628,10 +1668,18 @@ namespace dao::launcher
                     (st.backKeysFree && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, ImGuiInputFlags_None, owner)))
                     restore(st.settings);
             }
-            if (Hint(st, layout, kButtonB, "Back", layout.Center(kFooterRight, kFooterHintY), true, true) ||
+            if (st.installer.GetState() == InstallRunner::State::Running)
+                return;
+            if (Hint(st, layout, kButtonB, st.setupOnly ? "Close" : "Back",
+                    layout.Center(kFooterRight, kFooterHintY), true, true) ||
                 (st.backKeysFree && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
                                         ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))))
-                SetView(st, View::Main);
+            {
+                if (st.setupOnly)
+                    st.quit = true;
+                else
+                    SetView(st, View::Main);
+            }
         }
 
         // A view's contents, scrolling between the header and the footer, from `left`
@@ -1710,6 +1758,224 @@ namespace dao::launcher
         {
             PanelFrame(st, layout, "Update", nullptr);
             ShowContents(st, layout, kModsLeft, UpdateContents);
+        }
+
+
+        // ----------------------------------------------------- installing (setup)
+
+        // The licence of the Microsoft build tools (CRT and Windows SDK) that building
+        // the game downloads (installer/deps.py MSVC_LICENSE_URL).
+        constexpr const char* kMsvcLicenseUrl = "https://go.microsoft.com/fwlink/?LinkId=2086102";
+
+        std::string& FieldText(State& st, InstallField field)
+        {
+            return field == InstallField::DiscImage ? st.installIso
+                : field == InstallField::TitleUpdate ? st.installUpdate
+                : st.installDest;
+        }
+
+        // Opens Windows' file or folder dialog for a field. Its choice comes on SDL's
+        // dialog thread, into st.dialogs, which the next frame takes it from.
+        void Browse(State& st, InstallField field)
+        {
+            static const SDL_DialogFileFilter kDiscImage[] = { { "Xbox 360 disc image", "iso" },
+                { "All files", "*" } };
+            static const SDL_DialogFileFilter kAnyFile[] = { { "All files", "*" } };
+            auto* request = new DialogRequest{ st.dialogs, field, FieldText(st, field) };
+            {
+                std::lock_guard lock(st.dialogs->mutex);
+                st.dialogs->open++;
+            }
+            const SDL_DialogFileCallback chosen = [](void* userdata, const char* const* files, int) {
+                const std::unique_ptr<DialogRequest> request(static_cast<DialogRequest*>(userdata));
+                std::lock_guard lock(request->results->mutex);
+                if (files && files[0])
+                    request->results->chosen.emplace_back(request->field, files[0]);
+                request->results->open--;
+            };
+            const char* start = request->start.empty() ? nullptr : request->start.c_str();
+            if (field == InstallField::Folder)
+                SDL_ShowOpenFolderDialog(chosen, request, st.window, start, false);
+            else if (field == InstallField::DiscImage)
+                SDL_ShowOpenFileDialog(chosen, request, st.window, kDiscImage, 2, start, false);
+            else
+                SDL_ShowOpenFileDialog(chosen, request, st.window, kAnyFile, 1, start, false);
+        }
+
+        void TakeDialogChoices(State& st)
+        {
+            std::lock_guard lock(st.dialogs->mutex);
+            for (auto& [field, path] : st.dialogs->chosen)
+                FieldText(st, field) = std::move(path);
+            st.dialogs->chosen.clear();
+        }
+
+        // Files dropped on the Install view: a disc image (.iso), or else the title
+        // update's package.
+        void TakeDroppedInstallFiles(State& st)
+        {
+            for (const fs::path& path : st.dropped)
+            {
+                std::error_code ec;
+                if (!fs::is_regular_file(path, ec))
+                    continue;
+                FieldText(st, Lower(Utf8(path.extension())) == ".iso" ? InstallField::DiscImage
+                                                                       : InstallField::TitleUpdate) = Utf8(path);
+            }
+            st.dropped.clear();
+        }
+
+        // Whether the install folder already has the game's files (an install to
+        // update): then no disc image is needed. Checked when the folder changes.
+        bool HasGameFiles(State& st)
+        {
+            if (st.installDest != st.checkedDest)
+            {
+                st.checkedDest = st.installDest;
+                std::error_code ec;
+                st.destHasGame = !st.installDest.empty() &&
+                    fs::is_regular_file(FromUtf8(st.installDest) / "game" / "default.xex", ec);
+            }
+            return st.destHasGame;
+        }
+
+        void StartInstall(State& st)
+        {
+            InstallRequest request;
+            if (!HasGameFiles(st))
+                request.iso = FromUtf8(st.installIso);
+            request.titleUpdate = FromUtf8(st.installUpdate);
+            request.dest = FromUtf8(st.installDest);
+            request.acceptLicense = st.installAccept;
+            request.shortcuts = st.installShortcuts;
+            st.installStartError.clear();
+            st.installer.Start(request, st.installStartError);
+        }
+
+        // A path: typed, pasted, or chosen with Browse.
+        void PathRow(State& st, const char* label, InstallField field, bool enabled = true)
+        {
+            Label(label);
+            ImGui::PushID(int(field));
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float button = ImGui::CalcTextSize("Browse...").x + style.FramePadding.x * 2.0f;
+            ImGui::BeginDisabled(!enabled);
+            ImGui::SetNextItemWidth(RowWidth() - button - style.ItemSpacing.x);
+            ImGui::InputText("##path", &FieldText(st, field));
+            ImGui::SameLine();
+            bool dialogOpen = false;
+            {
+                std::lock_guard lock(st.dialogs->mutex);
+                dialogOpen = st.dialogs->open > 0;
+            }
+            ImGui::BeginDisabled(dialogOpen);
+            if (ImGui::Button("Browse..."))
+                Browse(st, field);
+            ImGui::EndDisabled();
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+
+        // The installer's output, kept scrolled to the end unless scrolled up.
+        void InstallLog(const InstallRunner& installer, float height)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(kTextDim));
+            ImGui::BeginChild("log", ImVec2(RowWidth(), std::max(height, ImGui::GetTextLineHeight() * 4.0f)),
+                ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+            for (const std::string& line : installer.Log())
+                ImGui::TextUnformatted(line.c_str());
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+                ImGui::SetScrollHereY(1.0f);
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+        }
+
+        void InstallProgress(State& st)
+        {
+            InstallRunner& installer = st.installer;
+            if (installer.GetState() == InstallRunner::State::Done)
+            {
+                Section("Installed");
+                ImGui::TextUnformatted("Opening the launcher...");
+                return;
+            }
+            Section(installer.Status().empty() ? "Starting" : installer.Status().c_str());
+            // Negative and changing: ImGui's moving bar, for a step of unknown length.
+            const float progress = installer.Progress();
+            ImGui::ProgressBar(progress < 0.0f ? -float(ImGui::GetTime()) : progress, ImVec2(RowWidth(), 0),
+                progress < 0.0f ? "" : nullptr);
+            HelpText("The first install takes a while: it downloads the build tools, then recompiles and builds "
+                     "the game. Stopping is safe: installing again resumes where it stopped.");
+            ImGui::Spacing();
+            const float button = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+            InstallLog(installer, ImGui::GetContentRegionAvail().y - button);
+            if (ImGui::Button("Stop"))
+                installer.Cancel();
+        }
+
+        void InstallContents(State& st)
+        {
+            TakeDialogChoices(st);
+            const InstallRunner::State state = st.installer.GetState();
+            if (state == InstallRunner::State::Running || state == InstallRunner::State::Done)
+            {
+                InstallProgress(st);
+                return;
+            }
+            const bool update = HasGameFiles(st);
+            Section("Your copy of the game");
+            PathRow(st, "Disc image", InstallField::DiscImage, !update);
+            HelpText(update ? "Not needed: this folder already has the game's files. Installing again updates it, "
+                              "keeping your saves, settings and mods."
+                            : "Your Xbox 360 disc image (.iso) of Dragon Age: Origins. Its game files are copied out "
+                              "and its code is recompiled for this PC: nothing of the game is downloaded. You can "
+                              "also drop it on this window.");
+            ImGui::Spacing();
+            PathRow(st, "Title Update 6 (optional)", InstallField::TitleUpdate);
+            HelpText("Needed by Awakening and the DLC campaigns: its package (tu00000001_00000000). It can also be "
+                     "added later, by dropping it on the launcher.");
+
+            Section("Install");
+            PathRow(st, "Folder", InstallField::Folder);
+            HelpText("Gets the game's files, your saves, settings and mods. The build tools and the build go to "
+                     "%LOCALAPPDATA%\\DAORecomp-build (about 12 GB).");
+            ImGui::Checkbox("Start menu and desktop shortcuts", &st.installShortcuts);
+            ImGui::Spacing();
+            ImGui::Checkbox("I accept the license of the Microsoft C++ build tools and Windows SDK",
+                &st.installAccept);
+            ImGui::SameLine();
+            if (ImGui::Button("Read it"))
+                SDL_OpenURL(kMsvcLicenseUrl);
+            HelpText("Building the game needs them; they're downloaded from Microsoft. (Once they're set up, an "
+                     "update doesn't need this.)");
+            ImGui::Spacing();
+
+            const std::string& error = !st.installStartError.empty() ? st.installStartError
+                : state == InstallRunner::State::Failed               ? st.installer.Error()
+                                                                      : st.installStartError;
+            if (!error.empty())
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, kError);
+                ImGui::TextWrapped("%s", error.c_str());
+                ImGui::PopStyleColor();
+            }
+            const bool ready = (update || !st.installIso.empty()) && !st.installDest.empty() &&
+                (st.installAccept || update);
+            ImGui::BeginDisabled(!ready);
+            if (ImGui::Button(state == InstallRunner::State::Failed ? "Try again" : update ? "Update" : "Install"))
+                StartInstall(st);
+            ImGui::EndDisabled();
+            if (state == InstallRunner::State::Failed && !st.installer.Log().empty())
+            {
+                ImGui::Spacing();
+                InstallLog(st.installer, ImGui::GetTextLineHeightWithSpacing() * 12.0f);
+            }
+        }
+
+        void InstallView(State& st, const Layout& layout)
+        {
+            PanelFrame(st, layout, "Install", nullptr);
+            ShowContents(st, layout, kModsLeft, InstallContents);
         }
 
         void ApplyStyle(float scale)
@@ -1944,7 +2210,24 @@ namespace dao::launcher
             [](const char* arg) { return strcmp(arg, "--mods") == 0; });
     }
 
-    bool Run(const fs::path& gameRoot, const fs::path& userRoot, bool showMods)
+    namespace
+    {
+        struct RunMode
+        {
+            // Open on the Mods page.
+            bool showMods = false;
+            // Setup (the launcher-only build): the Install view for `dest`, started
+            // at once with `update` when the folder has the game's files.
+            bool setup = false;
+            bool update = false;
+            fs::path dest;
+        };
+    }
+
+    // The window, until Play (true) or Close; `installed` gets the game setup
+    // installed.
+    static bool RunWindow(const fs::path& gameRoot, const fs::path& userRoot, const RunMode& mode,
+        fs::path* installed)
     {
         if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
         {
@@ -1956,8 +2239,20 @@ namespace dao::launcher
         // down to a size the menus still fit.
         constexpr float kWindowWidth = 1120.0f, kWindowHeight = 630.0f, kMinWidth = 800.0f, kMinHeight = 450.0f;
         const float scale = std::max(1.0f, SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay()));
-        SDL_Window* window = SDL_CreateWindow("Dragon Age: Origins - Launcher", int(kWindowWidth * scale),
-            int(kWindowHeight * scale), SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        SDL_Window* window = SDL_CreateWindow(mode.setup ? "Dragon Age: Origins - Setup" : "Dragon Age: Origins - Launcher",
+            int(kWindowWidth * scale),
+            int(kWindowHeight * scale), SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
+        // DAO_BACKGROUND=1 (automated tests): behind the other windows, unfocused.
+        const char* background = getenv("DAO_BACKGROUND");
+        if (window && background && atoi(background))
+        {
+            SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
+            if (const auto hwnd = static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(window),
+                    SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr)))
+                SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
+        }
+        if (window)
+            SDL_ShowWindow(window);
         SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
         if (!renderer)
         {
@@ -1975,8 +2270,8 @@ namespace dao::launcher
         // cap is 5% above the refresh rate when that's lower, so a vsynced frame is
         // never held back; with no refresh rate known, 60 Hz.
         constexpr float kMaxMenuFps = 60.0f;
-        const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
-        const float refresh = mode && mode->refresh_rate > 0 ? mode->refresh_rate : kMaxMenuFps;
+        const SDL_DisplayMode* display = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
+        const float refresh = display && display->refresh_rate > 0 ? display->refresh_rate : kMaxMenuFps;
         const float maxFps = std::min(refresh, kMaxMenuFps) * 1.05f;
         const Uint64 minFrameNs = Uint64(1e9 / std::max(maxFps, 20.0f));
 
@@ -2028,12 +2323,25 @@ namespace dao::launcher
         st.userRoot = userRoot;
         st.modsRoot = mods::ModsRoot(gameRoot);
         st.gameFound = fs::exists(gameRoot / "default.xex");
-        st.settings = ReadSettings(userRoot);
-        mods::CleanUpInstalls(st.modsRoot);
-        mods::CleanUpConversions(st.modsRoot);
-        ReadMods(st, st.settings.mods);
-        if (showMods)
-            SetView(st, View::Mods);
+        st.window = window;
+        st.setupOnly = mode.setup;
+        if (mode.setup)
+        {
+            st.installDest = Utf8(mode.dest);
+            SetView(st, View::Install);
+            // The launcher's Update: straight on, as there's nothing to choose.
+            if (mode.update && HasGameFiles(st))
+                StartInstall(st);
+        }
+        else
+        {
+            st.settings = ReadSettings(userRoot);
+            mods::CleanUpInstalls(st.modsRoot);
+            mods::CleanUpConversions(st.modsRoot);
+            ReadMods(st, st.settings.mods);
+            if (mode.showMods)
+                SetView(st, View::Mods);
+        }
         if (const char* dir = getenv("DAO_LAUNCHER_SCREENSHOTS"))
         {
             st.screenshotDir = dir;
@@ -2047,7 +2355,7 @@ namespace dao::launcher
         }
         LoadArt(st, renderer);
         st.updater = std::make_unique<Updater>();
-        if (st.settings.checkForUpdates)
+        if (st.settings.checkForUpdates && !mode.setup)
             st.updater->Check();
 
         // Screenshot mode: kFramesPerShot frames per shot (main, the configure tabs,
@@ -2078,12 +2386,18 @@ namespace dao::launcher
                     st.dropped.clear();
                 else if (event.type == SDL_EVENT_DROP_FILE && event.drop.data)
                     st.dropped.push_back(FromUtf8(event.drop.data));
+                else if (event.type == SDL_EVENT_DROP_COMPLETE && st.view == View::Install)
+                    TakeDroppedInstallFiles(st);
                 else if (event.type == SDL_EVENT_DROP_COMPLETE)
                     AddDroppedMods(st);
             }
             FinishReadingMods(st);
             FinishAddingMods(st);
             FinishConverting(st);
+            // Installed: the new game's launcher takes over.
+            st.installer.Poll();
+            if (st.installer.GetState() == InstallRunner::State::Done)
+                st.quit = true;
             if (flags & SDL_WINDOW_MINIMIZED)
                 continue;
 
@@ -2106,7 +2420,13 @@ namespace dao::launcher
             const bool shotWaits = (shot == kModsShot && (ReadingMods(st) || AddingMods(st))) ||
                 (updateShot && st.updater->GetState() == Updater::State::Checking);
             // (The update's page only when there's an update.)
-            if (shot > kUpdateShot || (updateShot && !shotWaits && !FoundRelease(st)))
+            if (st.setupOnly)
+            {
+                // (Setup has only the Install view.)
+                if (shot > 0)
+                    st.quit = true;
+            }
+            else if (shot > kUpdateShot || (updateShot && !shotWaits && !FoundRelease(st)))
                 st.quit = true;
             else if (shotStart && !shotWaits)
             {
@@ -2146,6 +2466,9 @@ namespace dao::launcher
                 break;
             case View::Update:
                 UpdateView(st, layout);
+                break;
+            case View::Install:
+                InstallView(st, layout);
                 break;
             }
             // Focus moves to the new view's first item in the frame it's shown.
@@ -2194,7 +2517,11 @@ namespace dao::launcher
         // (Not if the list couldn't be read: the saved one stays.)
         if (st.modsRead)
             st.settings.mods = mods::ToState(st.mods);
-        SaveSettings(userRoot, st.settings);
+        if (!st.setupOnly)
+            SaveSettings(userRoot, st.settings);
+        // (Closed while installing: the installer is stopped with st.)
+        if (installed && st.installer.GetState() == InstallRunner::State::Done)
+            *installed = st.installer.Installed();
         LOGI("Launcher: {}", st.play ? "play" : "quit");
 
         ImGui_ImplSDLRenderer3_Shutdown();
@@ -2207,5 +2534,17 @@ namespace dao::launcher
         SDL_DestroyWindow(window);
         SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
         return st.play;
+    }
+
+    bool Run(const fs::path& gameRoot, const fs::path& userRoot, bool showMods)
+    {
+        return RunWindow(gameRoot, userRoot, { .showMods = showMods }, nullptr);
+    }
+
+    fs::path RunSetup(const fs::path& dest, bool update)
+    {
+        fs::path installed;
+        RunWindow(dest / "game", dest / "userdata", { .setup = true, .update = update, .dest = dest }, &installed);
+        return installed;
     }
 }

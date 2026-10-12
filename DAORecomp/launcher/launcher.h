@@ -18,4 +18,9 @@ namespace dao::launcher
     // Runs the launcher, on the Mods page with `showMods`; false if the player closed
     // it instead of pressing Play.
     bool Run(const std::filesystem::path& gameRoot, const std::filesystem::path& userRoot, bool showMods = false);
+
+    // Setup, the launcher-only build players download: the Install view for `dest`
+    // (started at once with `update` when the folder has the game's files). Returns
+    // the DAORecomp.exe it installed, or nothing if it was closed first.
+    std::filesystem::path RunSetup(const std::filesystem::path& dest, bool update);
 }

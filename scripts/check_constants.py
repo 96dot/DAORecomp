@@ -15,7 +15,7 @@ from installer import deps  # noqa: E402
 CHECKS = [
     ("DAORecomp/content/install.cpp", "kTitleId", f"0x{deps.GAME_TITLE_ID:08X}"),
     ("DAORecomp/content/install.cpp", "kMediaId", f"0x{deps.GAME_MEDIA_ID:08X}"),
-    ("DAORecomp/kernel/game_build.cpp", "kTu6XexpSha1", f'"{deps.TU6_XEXP_SHA1.upper()}"'),
+    ("DAORecomp/kernel/title_update.cpp", "kTu6XexpSha1", f'"{deps.TU6_XEXP_SHA1.upper()}"'),
 ]
 
 

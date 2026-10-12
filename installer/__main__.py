@@ -1,6 +1,7 @@
 """python install.py [--iso X] [--dest Y]: the window without arguments, the command line with them
 (the disc image is needed only until its game files are extracted to Y/game, so not to update)."""
 import argparse
+import json
 import os
 import sys
 
@@ -52,10 +53,14 @@ def main():
     parser.add_argument("--update", action="store_true",
                         help="with --gui: update the install in --dest, starting at once if nothing's missing "
                              "(the launcher's Update)")
+    parser.add_argument("--progress-json", action="store_true",
+                        help="for the launcher: no questions, and one JSON object per output line")
     parser.add_argument("--version", action="version", version=VERSION)
     args = parser.parse_args()
     if args.update and not args.gui:
         parser.error("--update goes with --gui (on the command line, --dest alone updates)")
+    if args.progress_json:
+        return run_for_launcher(args)
 
     if args.gui or not (args.iso or args.dest or args.prepare_only):
         try:
@@ -91,6 +96,34 @@ def main():
     except InstallError as e:
         print(f"\nError: {e}\nRunning the installer again resumes where it stopped.", file=sys.stderr)
         return 1
+    return 0
+
+
+def run_for_launcher(args):
+    """The launcher runs the installer hidden and shows its output: one JSON object per
+    line, {"status"|"log"|"error": text}, {"progress": 0..1 or null}, {"done": path}."""
+    def emit(**item):
+        # ASCII only, so the pipe's code page doesn't matter.
+        sys.stdout.write(json.dumps(item) + "\n")
+        sys.stdout.flush()
+
+    if not args.dest:
+        emit(error="No install folder given.")
+        return 2
+    options = pipeline.Options(iso=args.iso, dest=args.dest, title_update=args.title_update,
+                               accept_license=args.accept_msvc_license or toolchain.winsysroot_ready(),
+                               llvm=args.llvm, jobs=args.jobs, shortcuts=args.shortcuts)
+    reporter = Reporter(log=lambda text: emit(log=text), status=lambda text: emit(status=text),
+                        progress=lambda fraction: emit(progress=fraction))
+    try:
+        launch = pipeline.run_all(reporter, options)
+    except InstallError as e:
+        emit(error=str(e))
+        return 1
+    except Exception as e:  # shown to the player rather than lost with the hidden console
+        emit(error=f"The installer failed: {type(e).__name__}: {e}")
+        return 1
+    emit(done=str(launch))
     return 0
 
 

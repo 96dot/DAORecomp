@@ -1,5 +1,7 @@
 #include "stdafx.h"
+#ifndef DAO_LAUNCHER_ONLY
 #include "kernel/thread.h"
+#endif
 
 namespace dao::log
 {
@@ -22,9 +24,13 @@ namespace dao::log
     {
         static constexpr const char* prefixes[] = { "T", "I", "W", "E" };
         const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - s_start).count();
+#ifdef DAO_LAUNCHER_ONLY
+        const uint32_t threadId = 0;
+#else
         auto* thread = kernel::GuestThread::Current();
-        const auto line = fmt::format("[{:9.3f}] {} {:>3} | {}\n", t, prefixes[int(level)],
-            thread ? thread->threadId : 0, message);
+        const uint32_t threadId = thread ? thread->threadId : 0;
+#endif
+        const auto line = fmt::format("[{:9.3f}] {} {:>3} | {}\n", t, prefixes[int(level)], threadId, message);
 
         std::lock_guard lock(s_mutex);
         fputs(line.c_str(), stdout);

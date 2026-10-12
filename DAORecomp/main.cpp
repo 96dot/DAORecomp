@@ -193,6 +193,20 @@ int main(int argc, char** argv)
     dao::log::Init(userRoot / "dao.log");
 
     LOGI("Dragon Age: Origins recomp - game {}, user data {}", dao::Utf8(gameRoot), dao::Utf8(userRoot));
+
+    // An install replaced this exe while the one before ran: the installer renamed
+    // that one to DAORecomp.old.exe (installer/pipeline.py). Deleted once it has
+    // exited (it may be the setup that started this one).
+    std::thread([] {
+        const fs::path old = dao::ProgramPath().parent_path() / "DAORecomp.old.exe";
+        std::error_code ec;
+        for (int attempt = 0; attempt < 20 && fs::exists(old, ec); attempt++)
+        {
+            if (fs::remove(old, ec))
+                break;
+            Sleep(500);
+        }
+    }).detach();
     if (!fs::exists(gameRoot / "default.xex"))
     {
         LOGE("default.xex not found under {}", dao::Utf8(gameRoot));

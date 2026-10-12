@@ -8,6 +8,8 @@
 // (DAO_HAS_TU6); the player's files pick one at startup.
 #include <build_info.h>
 
+#include "kernel/title_update.h"
+
 namespace dao::kernel
 {
     enum class GameVersion
@@ -24,15 +26,6 @@ namespace dao::kernel
 
     // Set once by SelectBuild, before the guest starts.
     inline GameBuild g_build;
-
-    // Where Title Update 6 is installed (by the installer or the launcher):
-    // default.xexp and its data files (packages/core/patch/...), next to the game
-    // folder.
-    std::filesystem::path UpdateRoot(const std::filesystem::path& gameRoot);
-
-    // Whether a default.xexp is Title Update 6's (by its SHA-1): the only one the
-    // recompiled code matches, and the patcher trusts what it reads.
-    bool IsTu6Patch(const std::filesystem::path& xexp);
 
     // Chooses Title Update 6 when it's compiled in and installed (or DAO_BUILD=disc
     // forces the disc's). Call before g_memory.Init.

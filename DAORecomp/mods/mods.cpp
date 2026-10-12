@@ -3,7 +3,9 @@
 
 #include <shellapi.h>
 
+#ifndef DAO_LAUNCHER_ONLY
 #include "kernel/vfs.h"
+#endif
 #include "mods/mod_files.h"
 #include "text.h"
 
@@ -455,6 +457,8 @@ namespace dao::mods
         return true;
     }
 
+#ifndef DAO_LAUNCHER_ONLY
+    // (The game's: the launcher-only build has no file system to give the mods to.)
     void Apply(const fs::path& modsRoot, const std::vector<ModInfo>& mods)
     {
         // Highest priority first: the last mod in the load order wins.
@@ -469,4 +473,5 @@ namespace dao::mods
         LOGI("Mods: {} enabled", overlays.size());
         kernel::VfsSetOverlays("\\Device\\Cdrom0", std::move(overlays));
     }
+#endif
 }

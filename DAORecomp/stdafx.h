@@ -26,6 +26,8 @@
 
 #include <fmt/core.h>
 
+// The launcher-only build (the installer players download) has no game code.
+#ifndef DAO_LAUNCHER_ONLY
 #include <ppc_config.h>
 #include <ppc_context.h>
 // The disc build's values; the runtime reads the running build's from
@@ -34,6 +36,7 @@
 #undef PPC_IMAGE_SIZE
 #undef PPC_CODE_BASE
 #undef PPC_CODE_SIZE
+#endif
 
 #include <byteswap.h>
 #include <xbox.h>

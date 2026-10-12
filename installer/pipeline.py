@@ -330,9 +330,24 @@ def _copy_when_free(reporter, src, dst, wait=30.0, interval=0.5):
     raise InstallError(f"{dst} is in use. Close the game and run the installer again.")
 
 
+def _move_running_exe_aside(exe):
+    """The launcher that runs the installer may be this exe: Windows doesn't let a
+    running exe be replaced, but lets it be renamed. The new exe deletes the old one
+    (DAORecomp.old.exe) when it starts."""
+    if not IS_WINDOWS or not exe.exists():
+        return
+    old = exe.with_name("DAORecomp.old.exe")
+    try:
+        old.unlink(missing_ok=True)
+        exe.rename(old)
+    except OSError:
+        pass  # Still running from an earlier update, or not ours to move: copying waits.
+
+
 def install(reporter, built, dest, with_shortcuts=False):
     dest.mkdir(parents=True, exist_ok=True)
     files = ["DAORecomp.exe", "amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll"]
+    _move_running_exe_aside(dest / "DAORecomp.exe")
     for name in files:
         _copy_when_free(reporter, built / name, dest / name)
     ffx = REPO / "tools" / "FidelityFX-SDK" / "Kits" / "FidelityFX" / "docs" / "license.md"
