@@ -23,8 +23,11 @@ set(DAO_PPC_DIR ${CMAKE_SOURCE_DIR}/ppc CACHE PATH "XenonRecomp output directory
 # needed by Awakening and the DLC campaigns).
 set(DAO_PPC_TU6_DIR ${CMAKE_SOURCE_DIR}/ppc_tu6 CACHE PATH "XenonRecomp output directory for Title Update 6")
 
-# Same baseline as UnleashedRecomp: AVX-capable x86-64.
-set(DAO_MARCH "sandybridge" CACHE STRING "Target CPU (-march), e.g. x86-64-v3")
+# The processor the build is for. The installer picks x86-64-v3 or sandybridge for the
+# game from the PC's own (installer/pipeline.py target_cpu); this default (any AVX
+# processor, UnleashedRecomp's baseline) is for direct builds and the downloaded
+# launcher. The exe checks for it when it starts (DAORecomp/cpu_check.cpp).
+set(DAO_MARCH "sandybridge" CACHE STRING "Target CPU (-march): sandybridge or x86-64-v3")
 add_compile_options(-march=${DAO_MARCH})
 # No fused multiply-adds where the code has none (the same float results on
 # every target).

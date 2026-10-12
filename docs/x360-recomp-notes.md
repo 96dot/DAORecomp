@@ -212,6 +212,9 @@ recipes) is in [porting-playbook.md](porting-playbook.md).
   `XamContentCreateEx`, or the game ignores them.
 - Opening existing content must keep its display name. The game passes a fresh one
   (e.g. the time now), and rewriting it made saves show as corrupt.
+- To overwrite a save, the game opens it (`XamContentCreateEx` flags 0x13: open
+  existing), then "creates always" (0x12) the same name, which deletes the old one first. Keep it somewhere the game doesn't enumerate
+  before deleting (DAORecomp keeps one backup per save in `userdata/save_backups/`).
 - DAO's TU6 shows a "don't remove the storage device" notice before it lists DLC, and
   waits for A: scripted test input has to press it.
 - Read packages as untrusted: check every name, folder index, block number and size,

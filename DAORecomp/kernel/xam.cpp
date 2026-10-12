@@ -6,6 +6,7 @@
 #include "thread.h"
 #include "vfs.h"
 #include "content/content.h"
+#include "mods/mod_files.h"
 
 #include "input/input.h"
 #include "ui/keyboard.h"
@@ -710,20 +711,124 @@ namespace dao::imp
     }
 
     // A name Windows holds as one folder: not empty, "." or "..", no separators, drive or
-    // stream colons, wildcards or control characters, no trailing dot or space.
+    // stream colons, wildcards or control characters, no trailing dot or space, not a
+    // device. No "~" either, so it can't be another's short (8.3) name.
     static bool ValidContentName(const std::string& name)
     {
-        if (name.empty() || name == "." || name == ".." || name.back() == '.' || name.back() == ' ')
+        if (name.empty() || name == "." || name == ".." || name.back() == '.' || name.back() == ' ' ||
+            mods::IsDeviceName(name))
             return false;
+        // Nor named as the files kept beside a content folder (<name>.name) or a save's
+        // backup (see BackUpSave): a save "x.new" would be save x's staged backup.
+        const std::string lower = Lower(name);
+        for (std::string_view suffix : { ".name", ".new", ".writing" })
+        {
+            if (lower.ends_with(suffix))
+                return false;
+        }
         return std::ranges::none_of(name, [](char c)
             {
-                return uint8_t(c) < 32 || std::string_view("<>:\"/\\|?*").find(c) != std::string_view::npos;
+                return uint8_t(c) < 32 || std::string_view("<>:\"/\\|?*~").find(c) != std::string_view::npos;
             });
     }
 
     static fs::path ContentPath(uint32_t contentType, const std::string& fileName)
     {
         return content::ContentFolder(VfsUserRoot(), g_module.titleId, contentType) / fileName;
+    }
+
+    // Content creation and closing, one at a time (a save's folder is replaced in steps).
+    static std::mutex s_contentMutex;
+    // Saves being written (root -> save name): each has a <name>.writing file in
+    // save_backups until the game closes it.
+    static std::unordered_map<std::string, std::string> s_savesWriting;
+
+    static fs::path SaveBackups()
+    {
+        return VfsUserRoot() / "save_backups";
+    }
+
+    // The mark of a save being written (see BackUpSave).
+    static fs::path WritingMarker(const std::string& fileName)
+    {
+        return SaveBackups() / (fileName + ".writing");
+    }
+
+    static uint64_t FolderSize(const fs::path& folder)
+    {
+        uint64_t size = 0;
+        std::error_code ec;
+        for (fs::recursive_directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
+        {
+            if (it->is_regular_file(ec))
+                size += it->file_size(ec);
+        }
+        return size;
+    }
+
+    // Overwriting a save deletes the old one before the new one is written, so a crash in
+    // between would lose both: the old one (folder and display name) is kept first in
+    // userdata/save_backups/<name>, outside the saves' folder so the game doesn't list it.
+    // A save the game didn't close (a crash while writing it) doesn't replace a backup.
+    static void BackUpSave(const fs::path& path, const std::string& fileName)
+    {
+        // Room for the new save's own files and the log besides.
+        constexpr uint64_t kSpareBytes = 64ull << 20;
+        std::error_code ec;
+        const fs::path backups = SaveBackups();
+        const fs::path backup = backups / fileName;
+        const fs::path staged = backups / (fileName + ".new");
+        const fs::path nameFile = FromUtf8(fileName + ".name");
+        if (fs::exists(WritingMarker(fileName), ec))
+        {
+            LOGW("XamContentCreateEx: '{}' wasn't closed cleanly; its backup stays as it was", fileName);
+            return;
+        }
+        // The old save's space isn't freed until the new one is written.
+        const fs::space_info space = fs::space(path, ec);
+        if (!ec && space.available < FolderSize(path) + kSpareBytes)
+        {
+            LOGW("XamContentCreateEx: too little disk space to back up '{}'", fileName);
+            return;
+        }
+
+        // Staged first: the old backup goes only once the new one is whole.
+        fs::create_directories(backups, ec);
+        fs::remove_all(staged, ec);
+        fs::rename(path, staged, ec);
+        if (ec)
+        {
+            // A folder with a file still open in it can't be moved: copied instead.
+            ec.clear();
+            fs::copy(path, staged, fs::copy_options::recursive, ec);
+            if (ec)
+            {
+                LOGW("XamContentCreateEx: can't back up '{}' before it's overwritten ({})", fileName,
+                    ec.message());
+                fs::remove_all(staged, ec);
+                return;
+            }
+        }
+        fs::remove_all(backup, ec);
+        if (!ec)
+            fs::rename(staged, backup, ec);
+        if (ec)
+        {
+            // (Kept there: the next backup of this save replaces it.)
+            LOGW("XamContentCreateEx: can't put the backup of '{}' in place ({}); it's in save_backups as "
+                "{}.new", fileName, ec.message(), fileName);
+            return;
+        }
+
+        fs::copy_file(path.parent_path() / nameFile, backups / nameFile, fs::copy_options::overwrite_existing, ec);
+        if (ec)
+        {
+            // Better none than an older save's.
+            fs::remove(backups / nameFile, ec);
+            LOGW("XamContentCreateEx: backed up '{}' without its display name", fileName);
+            return;
+        }
+        LOGI("XamContentCreateEx: backed up '{}' to save_backups", fileName);
     }
 
     static std::string RootName(const char* root)
@@ -749,9 +854,18 @@ namespace dao::imp
             return X_ERROR_INVALID_PARAMETER;
         }
         const fs::path path = ContentPath(data->contentType, fileName);
+        const bool save = data->contentType == content::kContentSave;
 
+        std::unique_lock lock(s_contentMutex);
         std::error_code ec;
         const bool exists = fs::exists(path, ec);
+        // Content replaced by "create always" or "truncate existing".
+        auto removeOld = [&]
+        {
+            if (save)
+                BackUpSave(path, fileName);
+            fs::remove_all(path, ec);
+        };
         const uint32_t mode = flags & 0xF;
         uint32_t result = X_ERROR_SUCCESS;
         uint32_t disposition = 0;
@@ -761,7 +875,8 @@ namespace dao::imp
             if (exists) result = X_ERROR_ALREADY_EXISTS; else disposition = 1;
             break;
         case 2: // create always
-            if (exists) fs::remove_all(path, ec);
+            if (exists)
+                removeOld();
             disposition = 1;
             break;
         case 3: // open existing
@@ -772,7 +887,11 @@ namespace dao::imp
             break;
         case 5: // truncate existing
             if (!exists) result = X_ERROR_FILE_NOT_FOUND;
-            else { fs::remove_all(path, ec); disposition = 1; }
+            else
+            {
+                removeOld();
+                disposition = 1;
+            }
             break;
         default:
             result = X_ERROR_INVALID_PARAMETER;
@@ -789,7 +908,28 @@ namespace dao::imp
             const std::string device = "\\Device\\Content\\" + root.substr(0, root.size() - 1);
             VfsMountDevice(device, path);
             VfsCreateSymlink(root, device);
+            // Content mounted here before without being closed is done with.
+            if (auto it = s_savesWriting.find(root); it != s_savesWriting.end())
+            {
+                fs::remove(WritingMarker(it->second), ec);
+                s_savesWriting.erase(it);
+            }
+            // Being written until the game closes it (see BackUpSave).
+            if (save && disposition == 1)
+            {
+                fs::create_directories(SaveBackups(), ec);
+                if (FILE* f = _wfopen(WritingMarker(fileName).c_str(), L"wb"))
+                {
+                    fclose(f);
+                    s_savesWriting[root] = fileName;
+                }
+                else
+                {
+                    LOGW("XamContentCreateEx: can't mark '{}' as being written", fileName);
+                }
+            }
         }
+        lock.unlock();
 
         LOGI("XamContentCreateEx({}, '{}', type {:08X}, '{}', flags {:#x}) -> {} (disposition {})", user, root,
             uint32_t(data->contentType), fileName, flags, result, disposition);
@@ -806,8 +946,18 @@ namespace dao::imp
     uint32_t XamContentClose(const char* rootName, uint32_t overlapped)
     {
         const std::string root = RootName(rootName);
-        VfsDeleteSymlink(root);
-        VfsUnmountDevice("\\Device\\Content\\" + root.substr(0, root.size() - 1));
+        {
+            // Unmounted under the lock too, so not after the same root was created again.
+            std::lock_guard lock(s_contentMutex);
+            if (auto it = s_savesWriting.find(root); it != s_savesWriting.end())
+            {
+                std::error_code ec;
+                fs::remove(WritingMarker(it->second), ec);
+                s_savesWriting.erase(it);
+            }
+            VfsDeleteSymlink(root);
+            VfsUnmountDevice("\\Device\\Content\\" + root.substr(0, root.size() - 1));
+        }
         return Finish(overlapped, X_ERROR_SUCCESS);
     }
 

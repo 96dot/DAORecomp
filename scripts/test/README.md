@@ -22,7 +22,8 @@ python scripts/test/perf_summary.py out/perf/dao.log 75
 - gives the game a test copy of `userdata/config.toml` (launcher hidden, intro logos
   skipped, plus the `section.key=value` overrides) and puts the user's back afterwards,
   checking it byte for byte, even when interrupted;
-- records the saves in `userdata/content` and afterwards removes saves the run made
+- records the saves in `userdata/content` (and backups in `userdata/save_backups`) and
+  afterwards removes saves the run made
   (`KEEP_SAVES=1` keeps them) and warns if an existing one changed;
 - collects `capture_N.png` (every `CAPTURE` s, default 2), `dao.log` and `xenia.log`
   into the output folder, and prints any abort or device-loss lines.

@@ -16,6 +16,20 @@ set_source_files_properties(${DAO_IMGUI_BACKENDS} PROPERTIES SKIP_PRECOMPILE_HEA
 # The icon (res/daorecomp.rc), in both builds.
 set(DAO_ICON ${CMAKE_CURRENT_SOURCE_DIR}/res/daorecomp.rc)
 
+# The processor check (in both builds): built for any x86-64 processor (the last
+# -march wins), told which instructions DAO_MARCH takes for granted.
+set(DAO_CPU_CHECK ${CMAKE_CURRENT_SOURCE_DIR}/cpu_check.cpp)
+if (DAO_MARCH STREQUAL "x86-64-v3")
+    set(DAO_CPU_LEVEL 3)
+elseif (DAO_MARCH STREQUAL "sandybridge")
+    set(DAO_CPU_LEVEL 1)
+else()
+    set(DAO_CPU_LEVEL 0)
+    message(WARNING "DAO_MARCH=${DAO_MARCH}: the startup processor check knows only sandybridge and x86-64-v3, so this build has none")
+endif()
+set_source_files_properties(${DAO_CPU_CHECK} PROPERTIES SKIP_PRECOMPILE_HEADERS ON
+    COMPILE_OPTIONS -march=x86-64 COMPILE_DEFINITIONS DAO_CPU_LEVEL=${DAO_CPU_LEVEL})
+
 # The launcher-only build's entry point (DAO_LAUNCHER_ONLY, see ../CMakeLists.txt).
 set(DAO_SETUP_MAIN ${CMAKE_CURRENT_SOURCE_DIR}/launcher/setup_main.cpp)
 
@@ -33,7 +47,8 @@ if (DAO_LAUNCHER_ONLY)
         ${CMAKE_CURRENT_SOURCE_DIR}/log.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/hash.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/program.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/version.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/version.cpp
+        ${DAO_CPU_CHECK})
     add_executable(DAORecomp ${DAO_LAUNCHER_SOURCES} ${DAO_IMGUI_BACKENDS} ${DAO_ICON})
     set(DAO_VERSION "dev" CACHE STRING "The release this is built from (e.g. v0.2.0)")
     set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/version.cpp PROPERTIES

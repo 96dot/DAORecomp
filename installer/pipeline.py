@@ -332,12 +332,42 @@ def recompile(reporter, recompiler, game, update=None):
 
 # ------------------------------------------------------------------- building
 
+# What clang defines for x86-64-v3's instructions (AVX2, BMI1/2, FMA, F16C, LZCNT, MOVBE);
+# DAORecomp/cpu_check.cpp checks the same at run time.
+V3_MACROS = ("__AVX2__", "__BMI__", "__BMI2__", "__FMA__", "__F16C__", "__LZCNT__", "__MOVBE__")
+
+
+def target_cpu(reporter, tc):
+    """The -march to build the game for. The game is built on the PC that plays it, so for
+    this PC's processor: x86-64-v3 when it has those instructions (about 2-3% less
+    processor time per frame, measured), else sandybridge (any AVX processor). The exe
+    checks again when it starts (DAORecomp/cpu_check.cpp), for an install copied to another
+    PC. Asks clang-cl, which every toolchain the installer accepts has."""
+    try:
+        out = subprocess.run([str(tc.tool("clang-cl")), "/nologo", "/clang:-march=native", "/clang:-dM", "/E",
+                              "/TC", "-"], input="", capture_output=True, text=True, errors="replace",
+                             check=True, timeout=120, env=clean_env(),
+                             creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        reporter.log(f"Can't read this processor's features ({e}): building for any AVX processor")
+        return "sandybridge"
+    defined = {line.split()[1] for line in out.splitlines() if line.startswith("#define ")}
+    if "__AVX__" not in defined:
+        raise InstallError("This PC's processor has no AVX, which the game needs (most processors from 2011 "
+                           "or later have it).")
+    if all(m in defined for m in V3_MACROS):
+        reporter.log("Building for this processor's instructions (x86-64-v3)")
+        return "x86-64-v3"
+    reporter.log("Building for any AVX processor")
+    return "sandybridge"
+
+
 def build_game(reporter, tc, jobs, with_tu6=False):
     build = BUILD / "release"
     # Without Title Update 6, none of its (possibly old) generated code is built in.
     tu6 = (REPO / "ppc_tu6").as_posix() if with_tu6 else ""
     _configure(reporter, tc, REPO, build, {"DAO_PPC_DIR": (REPO / "ppc").as_posix(), "DAO_PPC_TU6_DIR": tu6,
-                                           "DAO_VERSION": VERSION})
+                                           "DAO_VERSION": VERSION, "DAO_MARCH": target_cpu(reporter, tc)})
     _build(reporter, tc, build, "DAORecomp", jobs)
     return build / "DAORecomp"
 
@@ -451,7 +481,9 @@ def build_setup(reporter, engine, out, jobs=0):
     # (The pinned LLVM, never one the build machine happens to have.)
     tc = toolchain.ensure_toolchain(reporter, True, "download")
     build = BUILD / "setup"
-    _configure(reporter, tc, REPO, build, {"DAO_LAUNCHER_ONLY": "ON", "DAO_VERSION": VERSION})
+    # For any AVX processor: this is the exe players download.
+    _configure(reporter, tc, REPO, build, {"DAO_LAUNCHER_ONLY": "ON", "DAO_VERSION": VERSION,
+                                           "DAO_MARCH": "sandybridge"})
     _build(reporter, tc, build, "DAORecomp", jobs)
     append_engine(build / "DAORecomp" / "DAORecomp.exe", engine, out)
     reporter.log(f"Built {out} ({human_size(Path(out).stat().st_size)})")

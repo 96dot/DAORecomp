@@ -24,7 +24,11 @@ game's code to C++ on your computer, and builds the program.
 
 You need:
 
-- An x86-64 PC running Windows 10/11 or Linux, with a Direct3D 12 capable GPU.
+- An x86-64 PC running Windows 10/11 or Linux, with a Direct3D 12 capable GPU and a
+  processor with AVX (most from 2011 or later). The game is built for your processor:
+  with AVX2 (Intel from 2013, AMD from 2015) it uses those newer instructions. A copy
+  built that way and moved to a PC without them says so when it starts; run the
+  installer on that PC to build it for its processor.
 - The disc image of *Dragon Age: Origins* for Xbox 360 (title ID 454108C0). The
   installer checks that it is the supported release.
 - About 25 GB of disk space: 8 GB for the game, the rest for the tools and the build.
@@ -128,8 +132,15 @@ Everything is pinned to exact versions and checked (`installer/deps.py`):
   are asked to accept. No Visual Studio installation is needed.
 
 The install folder gets the game files (`game/`), the program, `userdata/` (settings,
-saves, installed DLC, logs, the shader cache, and the Options menu it generates),
-`mods/`, and with the title update, `title_update/`.
+saves, save backups, installed DLC, logs, the shader cache, and the Options menu it
+generates), `mods/`, and with the title update, `title_update/`.
+
+When you save over a save, the version it replaces is kept in
+`userdata/save_backups/`: one per save, the one before its latest overwrite (a save
+the game crashed while writing doesn't replace it, and none is kept when the drive is
+nearly full). To get one back, quit the game and copy its folder and `.name` file into
+`userdata/content/454108C0/00000001/`, replacing the ones there. (A `<save>.new`
+folder there is a backup that couldn't be put in place; the log says why.)
 
 ## Playing
 
