@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "settings.h"
+#include "files.h"
 #include "text.h"
 
 #include <fstream>
@@ -300,19 +301,9 @@ window_height = {}
             out += fmt::format("[[mods]]\nfolder = {}\nenabled = {}\n\n", Quote(mod.folder), mod.enabled);
         out += '\n' + std::string(kXeniaComment) + xenia;
 
-        // Write a temporary file and swap it in, so a failed write leaves the old config.
-        const fs::path temp = path.native() + L".tmp";
-        {
-            std::ofstream file(temp, std::ios::binary | std::ios::trunc);
-            file << out;
-            if (!file)
-            {
-                LOGE("config.toml: failed to write {}", Utf8(temp));
-                return;
-            }
-        }
-        if (!MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
-            LOGE("config.toml: failed to replace {} ({})", Utf8(path), GetLastError());
+        // A failed write leaves the old config.
+        if (!WriteFileAtomically(path, out))
+            LOGE("config.toml: failed to write {}", Utf8(path));
     }
 
     const Settings& LoadSettings(const std::filesystem::path& userRoot)

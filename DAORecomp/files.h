@@ -1,5 +1,5 @@
 #pragma once
-// Files: the names Windows can hold.
+// Files: the names Windows can hold, and writing one whole.
 
 namespace dao
 {
@@ -14,4 +14,9 @@ namespace dao
     // A name Windows holds as one file or folder, in its folder: not empty, "." or
     // "..", no IsBadNameChar, no trailing dot or space, not a device.
     bool IsPlainName(std::string_view name);
+
+    // Writes `data` to <path>.part and renames that over `path`, so `path` is never
+    // a partial file (if either fails, the old one stays). False if it fails, and
+    // then no .part is left.
+    bool WriteFileAtomically(const std::filesystem::path& path, std::string_view data);
 }

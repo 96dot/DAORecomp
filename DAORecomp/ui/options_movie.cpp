@@ -6,12 +6,11 @@
 // engine reads loose files in packages/core/override before its archives.
 #include "stdafx.h"
 #include "ui/erf.h"
+#include "files.h"
 #include "text.h"
 #include "ui/graphics_menu.h"
 #include "ui/graphics_tab_as.h"
 #include "kernel/vfs.h"
-
-#include <fstream>
 
 namespace fs = std::filesystem;
 
@@ -229,20 +228,10 @@ namespace dao::ui
         if (!existing || *existing != *patched)
         {
             fs::create_directories(path.parent_path(), ec);
-            fs::path temp = path;
-            temp += L".tmp";
+            if (!WriteFileAtomically(path,
+                    std::string_view(reinterpret_cast<const char*>(patched->data()), patched->size())))
             {
-                std::ofstream file(temp, std::ios::binary | std::ios::trunc);
-                file.write(reinterpret_cast<const char*>(patched->data()), std::streamsize(patched->size()));
-                if (!file)
-                {
-                    LOGW("Options menu: can't write {}; no Graphics tab", Utf8(temp));
-                    return false;
-                }
-            }
-            if (!MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
-            {
-                LOGW("Options menu: can't replace {} ({}); no Graphics tab", Utf8(path), GetLastError());
+                LOGW("Options menu: can't write {}; no Graphics tab", Utf8(path));
                 return false;
             }
         }

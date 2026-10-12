@@ -4,6 +4,7 @@
 #include <fstream>
 #include <ranges>
 
+#include "files.h"
 #include "text.h"
 
 namespace fs = std::filesystem;
@@ -125,18 +126,10 @@ namespace dao::content
             return false;
         }
 
-        // Written aside first, so `out` is never a partial copy.
         std::vector<char> data(entry->size);
-        const fs::path part = fs::path(out).concat(L".part");
-        bool written = ReadAt(in, *base + entry->sector * kSector, data.data(), data.size());
+        if (!ReadAt(in, *base + entry->sector * kSector, data.data(), data.size()) ||
+            !WriteFileAtomically(out, std::string_view(data.data(), data.size())))
         {
-            std::ofstream file(part, std::ios::binary | std::ios::trunc);
-            written = written && file && file.write(data.data(), std::streamsize(data.size())) && file.flush();
-        }
-        std::error_code ec;
-        if (!written || (fs::rename(part, out, ec), ec))
-        {
-            fs::remove(part, ec);
             error = fmt::format("can't copy {} out of the disc image", path);
             return false;
         }
