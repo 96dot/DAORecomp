@@ -23,6 +23,10 @@ uint32_t TitleId();
 // on Windows).
 void ShortSleep(uint32_t microseconds);
 
+// Whether the GPU thread polls the title's register waits rather than sleeping
+// a millisecond or more in them (frame rates above 60, and vsync off, need it).
+bool PollGpuWaits();
+
 }  // namespace xe::dao_host
 
 #endif  // XENIA_DAO_HOST_H_

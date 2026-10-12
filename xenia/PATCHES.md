@@ -34,12 +34,12 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
 - `base/mapped_memory_win.cc`,
   `base/platform_win.h`.
 - GPU: `gpu/command_processor.*`, `gpu/pm4_command_processor_implement.h`,
-  `gpu/graphics_system.*`, `gpu/draw_util.*`, `gpu/shader_storage.h`,
-  `gpu/shared_memory.*`, `gpu/texture_cache.*`.
+  `gpu/graphics_system.*`, `gpu/gpu_flags.cc`, `gpu/draw_util.*`, `gpu/primitive_processor.cc`,
+  `gpu/shader_storage.h`, `gpu/shared_memory.*`, `gpu/texture_cache.*`.
 - D3D12: `gpu/d3d12/d3d12_command_processor.*`, `d3d12_graphics_system.*`,
   `d3d12_render_target_cache.*`, `d3d12_texture_cache.*`,
   `deferred_command_list.*`, `pipeline_cache.*`.
-- UI: `ui/presenter.*`, `ui/d3d12/d3d12_presenter.*` (HDR output),
+- UI: `ui/presenter.*`, `ui/d3d12/d3d12_presenter.*` (HDR output, vsync),
   `ui/d3d12/d3d12_provider.*`, `ui/imgui_drawer.*`, `ui/window_win.*`,
   `ui/windowed_app_context_win.h`.
 

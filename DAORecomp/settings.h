@@ -9,6 +9,11 @@ namespace dao
     enum class TemporalUpscaler { Off, Auto, Fsr4, Fsr3 };
     // Settings::anisotropicFiltering values: 0 = the game default.
     inline constexpr int kAnisotropicLevels[] = { 0, 2, 4, 8, 16 };
+    // The frame rates offered (0: unlimited). 30 is the game's own lock in its 3D
+    // scenes; above 60 is experimental.
+    inline constexpr int kFrameRates[] = { 30, 60, 90, 120, 144, 165, 240, 0 };
+    // Above 60 fps, or unlimited: the game's presents aren't held to vblanks.
+    inline bool FrameRateAbove60(int frameRate) { return frameRate == 0 || frameRate > 60; }
     // Xenia's anisotropic_override for one of kAnisotropicLevels (-1: the game's own).
     inline int XeniaAnisotropicLevel(int level)
     {
@@ -44,10 +49,13 @@ namespace dao
         // is scaled separately); Auto picks FSR 4 where supported, else FSR 3.1.
         TemporalUpscaler temporalUpscaler = TemporalUpscaler::Auto;
         float temporalSharpness = 0.3f; // 0..1
+        // Waits for the display's refresh when presenting: no tearing, and no more
+        // frames shown than the display refreshes.
         bool vsync = true;
-        // Presents every vblank where the game asks for every second one (its 3D
-        // scenes are locked to 30 fps through the D3D presentation interval).
-        bool unlockFrameRate = true;
+        // One of kFrameRates. The game locks its 3D scenes to 30 fps through the D3D
+        // presentation interval: 60 presents them every vblank, and above 60 every
+        // frame at once, paced to the rate unless unlimited (gpu/video.cpp).
+        int frameRate = 60;
         // HDR output (scRGB swap chain; SDR image expanded on HDR displays).
         bool hdr = false;
         float hdrPaperWhite = 200.0f; // nits
@@ -75,6 +83,9 @@ namespace dao
 
     // Brings every value within its limits (the HDR peak at least the paper white).
     void ClampSettings(Settings& settings);
+
+    // A frame rate for the log: "60 fps", "unlimited".
+    std::string FrameRateName(int frameRate);
 
     // Reads config.toml as written (no environment overrides, no side effects):
     // defaults if it's missing, nothing if it can't be parsed.

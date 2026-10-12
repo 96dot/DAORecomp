@@ -743,7 +743,9 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
       // Wait.
       if (wait >= 0x100) {
         PrepareForWait();
-        if (!cvars::vsync) {
+        // DAO: or above 60 fps or without vsync, where a millisecond's sleep
+        // costs frames.
+        if (!cvars::vsync || xe::dao_host::PollGpuWaits()) {
           // User wants it fast and dangerous: polls, but after a short while
           // in brief sleeps, so the core is free for the guest's threads (few
           // cores on handhelds) during waits of most of a frame.

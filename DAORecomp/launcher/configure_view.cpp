@@ -24,6 +24,10 @@ namespace dao::launcher
         // The names of kAnisotropicLevels.
         constexpr const char* kAnisotropicNames[] = { "Game default", "2x", "4x", "8x", "16x" };
         static_assert(std::size(kAnisotropicNames) == std::size(kAnisotropicLevels));
+        // The names of kFrameRates.
+        constexpr const char* kFrameRateNames[] = { "30 fps (original)", "60 fps", "90 fps", "120 fps", "144 fps",
+            "165 fps", "240 fps", "Unlimited" };
+        static_assert(std::size(kFrameRateNames) == std::size(kFrameRates));
 
         // A setting as the game's menus show it: the name above the picker or slider,
         // which `widget` adds as "##value", returning whether it changed.
@@ -133,8 +137,14 @@ namespace dao::launcher
             ImGui::EndDisabled();
 
             Section("Frame rate");
+            // (ClampSettings keeps it one of them.)
+            int frameRate = int(std::ranges::find(kFrameRates, s.frameRate) - std::begin(kFrameRates));
+            if (ComboRow("Frame rate", &frameRate, kFrameRateNames, int(std::size(kFrameRateNames))))
+                s.frameRate = kFrameRates[frameRate];
+            HelpText("The game locks its 3D scenes to 30 fps. Above 60 is experimental.");
             ImGui::Checkbox("VSync", &s.vsync);
-            ImGui::Checkbox("60 fps (unlock the 30 fps cap in 3D scenes)", &s.unlockFrameRate);
+            HelpText("Waits for the display's refresh: no tearing, and no more frames shown than the display "
+                     "refreshes.");
 
             Section("HDR (experimental)");
             ImGui::Checkbox("HDR output", &s.hdr);
@@ -243,7 +253,7 @@ namespace dao::launcher
             s.windowWidth = defaults.windowWidth;
             s.windowHeight = defaults.windowHeight;
             s.vsync = defaults.vsync;
-            s.unlockFrameRate = defaults.unlockFrameRate;
+            s.frameRate = defaults.frameRate;
             s.hdr = defaults.hdr;
             s.hdrPaperWhite = defaults.hdrPaperWhite;
             s.hdrPeak = defaults.hdrPeak;

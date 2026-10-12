@@ -1665,7 +1665,9 @@ std::pair<uint32_t, uint32_t> PrimitiveProcessor::MemoryInvalidationCallback(
           // the specified range.
           if (entry_key.base < physical_address_end) {
             uint32_t entry_end = entry_key.base + entry_key.GetSizeBytes();
-            if (entry_end > physical_address_end) {
+            // DAO: overlapping the range is ending after its start (upstream
+            // compared with its end, keeping entries wholly inside the range).
+            if (entry_end > physical_address_start) {
               // Invalidate the entry.
               any_invalidated = true;
               // Remove the entry from the cache map.

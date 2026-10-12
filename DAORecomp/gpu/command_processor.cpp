@@ -459,4 +459,6 @@ void DaoGpuRegisterWrite(uint32_t address, uint32_t value)
         dao::gpu::XeniaWriteRegister(address, value);
     else
         dao::gpu::OnRegisterWrite((address & 0xFFFF) / 4, value);
+    if ((address & 0xFFFF) / 4 == dao::gpu::reg::CP_RB_WPTR)
+        dao::gpu::FrameKicked();
 }

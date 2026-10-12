@@ -10,24 +10,84 @@
 #include "kernel/objects.h"
 #include "settings.h"
 #include "ui/graphics_menu.h"
+#include "xenia/base/cvar.h"
+
+DECLARE_bool(dao_present_vsync);
 
 namespace dao::gpu
 {
     VideoState g_video;
 
-    // -1: not overridden at runtime, use the setting.
-    static std::atomic<int> s_unlockOverride{ -1 };
+    // -1: not changed at runtime, use the setting.
+    static std::atomic<int> s_frameRateOverride{ -1 };
 
-    bool FrameRateUnlocked()
+    int FrameRate()
     {
-        const int value = s_unlockOverride.load(std::memory_order_relaxed);
-        return value < 0 ? GetSettings().unlockFrameRate : value != 0;
+        const int value = s_frameRateOverride.load(std::memory_order_relaxed);
+        return value < 0 ? GetSettings().frameRate : value;
     }
 
-    void SetFrameRateUnlocked(bool unlocked)
+    void SetFrameRate(int frameRate)
     {
-        s_unlockOverride = unlocked ? 1 : 0;
-        LOGI("Frame rate unlock {}", unlocked ? "on" : "off");
+        s_frameRateOverride = frameRate;
+        LOGI("Frame rate: {}", FrameRateName(frameRate));
+    }
+
+    void ToggleGameFrameRate()
+    {
+        // The rate to go back to: the last one other than 30 (hotkey thread only).
+        static int s_return = 60;
+        const int frameRate = FrameRate();
+        if (frameRate != 30)
+            s_return = frameRate;
+        SetFrameRate(frameRate != 30 ? 30 : s_return);
+    }
+
+    // Above 60 fps the game's presents aren't held to vblanks (SwapInterruptHook),
+    // so the render thread is held to the frame rate here (not at all when
+    // unlimited). A frame late by more than a frame starts the schedule again.
+    // With vsync, 0.5% faster than the rate: a display at about the rate then
+    // paces the frames itself, rather than the two clocks drifting apart and a
+    // refresh going without a new frame every so often.
+    static void PaceFrames()
+    {
+        using Clock = std::chrono::steady_clock;
+        static Clock::time_point s_next;
+        const int frameRate = FrameRate();
+        if (!FrameRateAbove60(frameRate) || frameRate == 0)
+        {
+            s_next = {};
+            return;
+        }
+        const double rate = cvars::dao_present_vsync ? frameRate * 1.005 : frameRate;
+        const auto period = std::chrono::nanoseconds(int64_t(1e9 / rate));
+        const auto now = Clock::now();
+        if (s_next == Clock::time_point{} || now - s_next > period)
+            s_next = now;
+        else if (now < s_next)
+            kernel::ShortSleep(uint32_t(std::chrono::duration_cast<std::chrono::microseconds>(s_next - now).count()));
+        s_next += period;
+    }
+
+    // A frame is paced once its swap is kicked to the GPU: the game's D3D writes the
+    // ring buffer's write pointer just after VdSwap, so sleeping in VdSwap would
+    // hold the finished frame back from the GPU. (Its render thread only.)
+    static thread_local bool t_framePending = false;
+
+    void FrameSwapped()
+    {
+        // (A frame not kicked by the next swap is paced then.)
+        if (t_framePending)
+            PaceFrames();
+        t_framePending = true;
+    }
+
+    void FrameKicked()
+    {
+        if (!t_framePending)
+            return;
+        t_framePending = false;
+        PaceFrames();
     }
 }
 
@@ -218,6 +278,7 @@ namespace dao::imp
         g_video.swapCount++;
         if (g_video.swapCount == 1 || (g_video.swapCount % 600) == 0)
             LOGI("VdSwap #{}", g_video.swapCount.load());
+        dao::gpu::FrameSwapped();
         if (!bufferPtr)
             return;
 
@@ -264,12 +325,18 @@ GAME_HOOK(sub_82CC4338, tu6_sub_82D8E218, FenceWaitStepHook)
 // current one has passed than the threshold (percent): with the threshold at 100
 // (set for interval 1 presents too), late frames are shown right away instead of
 // dropping to the next vblank, so a frame taking a bit longer than a vblank costs
-// that bit rather than a whole vblank. The guest flip only chooses which frame
-// the host presents next; tearing is up to the host's own vsync setting.
+// that bit rather than a whole vblank. Above 60 fps (or unlimited), every
+// present gets interval 0, which the handler flips at once instead of at a
+// vblank; they're paced to the rate unless unlimited (PaceFrames). The
+// guest flip only chooses which frame the host presents next; tearing is up to
+// the host's own vsync setting.
 static void SwapInterruptHook(PPCContext& ctx, uint8_t* base, PPCFunc* original)
 {
+    const int frameRate = dao::gpu::FrameRate();
     const uint32_t interval = (ctx.r3.u32 >> 8) & 0xF;
-    if (interval >= 1 && dao::gpu::FrameRateUnlocked())
+    if (dao::FrameRateAbove60(frameRate))
+        ctx.r3.u64 &= ~uint64_t(0xF00);
+    else if (frameRate == 60 && interval >= 1)
         ctx.r3.u64 = (ctx.r3.u64 & ~uint64_t(0xFFF)) | 0x100 | 100;
     original(ctx, base);
 }

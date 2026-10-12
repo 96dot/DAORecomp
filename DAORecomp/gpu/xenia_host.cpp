@@ -8,6 +8,7 @@
 #include "kernel/module.h"
 #include "kernel/thread.h"
 #include "settings.h"
+#include "gpu/video.h"
 
 #include "xenia/base/byte_order.h"
 #include "xenia/base/cvar.h"
@@ -31,6 +32,7 @@
 
 DECLARE_path(log_file);
 DECLARE_bool(log_to_stdout);
+DECLARE_bool(dao_present_vsync);
 
 using namespace dao::kernel;
 
@@ -441,5 +443,10 @@ namespace xe::dao_host
     void ShortSleep(uint32_t microseconds)
     {
         dao::kernel::ShortSleep(microseconds);
+    }
+
+    bool PollGpuWaits()
+    {
+        return dao::FrameRateAbove60(dao::gpu::FrameRate()) || !cvars::dao_present_vsync;
     }
 }

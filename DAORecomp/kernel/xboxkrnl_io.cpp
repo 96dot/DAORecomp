@@ -221,7 +221,9 @@ namespace dao::imp
             if (auto e = LookupHandle<Event>(eventHandle, ObjectType::Event))
                 e->Set();
         }
-        if ((apcRoutine & ~1u) && apcContext)
+        // (A failed request queues no completion APC, as on NT, where it fails before
+        // any I/O is queued.)
+        if (status == X_STATUS_SUCCESS && (apcRoutine & ~1u) && apcContext)
         {
             if (auto* thread = GuestThread::Current())
                 thread->QueueApc({ 0, apcRoutine & ~1u, apcContext, g_memory.ToGuest(iosb), 0, 0 });
@@ -238,21 +240,61 @@ namespace dao::imp
         if (offset == kUseFilePointer || offset == ~0ull)
             offset = file.position;
 
-        OVERLAPPED ov{};
-        ov.Offset = DWORD(offset);
-        ov.OffsetHigh = DWORD(offset >> 32);
-        DWORD read = 0;
-        // ReadFile can't write into pages the GPU write-protected; drop the watches first.
-        dao::gpu::PrepareGuestWrite(g_memory.ToGuest(buffer), length);
-        if (!ReadFile(file.host, buffer, length, &read, &ov))
-        {
+        // Reads `want` bytes at `at` into host memory; end of file isn't an error.
+        auto readHost = [&](uint8_t* to, uint32_t want, uint64_t at, DWORD& got) {
+            OVERLAPPED ov{};
+            ov.Offset = DWORD(at);
+            ov.OffsetHigh = DWORD(at >> 32);
+            got = 0;
+            if (ReadFile(file.host, to, want, &got, &ov))
+                return DWORD(ERROR_SUCCESS);
             const DWORD error = GetLastError();
-            if (error != ERROR_HANDLE_EOF)
+            return error == ERROR_HANDLE_EOF ? DWORD(ERROR_SUCCESS) : error;
+        };
+        DWORD read = 0;
+        DWORD error = ERROR_SUCCESS;
+        const uint32_t guest = g_memory.ToGuest(buffer);
+        if (IsPhysicalAddress(guest) && length)
+        {
+            // Within the 512 MB of physical memory: the copy below would fault where
+            // ReadFile failed.
+            constexpr uint32_t kPhysicalSize = 0x20000000;
+            const uint32_t physical = PhysicalAddressOf(guest);
+            if (physical >= kPhysicalSize || length > kPhysicalSize - physical)
             {
-                LOGW("ReadFile '{}' failed ({})", file.guestPath, error);
+                LOGW("ReadFile '{}': buffer {:08X}+{:X} outside physical memory", file.guestPath, guest, length);
                 bytesRead = 0;
                 return X_STATUS_UNSUCCESSFUL;
             }
+            // Physical memory, which the GPU write-protects to watch (from its own
+            // thread, at any moment). ReadFile can't write into such a page (it
+            // fails, or under Wine reads short) where a copy here faults into the
+            // watch handler, so read into host memory and copy.
+            constexpr uint32_t kChunk = 256u << 10; // (stays in the cache for the copy)
+            thread_local std::unique_ptr<uint8_t[]> bounce(new uint8_t[kChunk]);
+            while (read < length)
+            {
+                const uint32_t want = std::min<uint32_t>(kChunk, length - read);
+                DWORD got;
+                error = readHost(bounce.get(), want, offset + read, got);
+                if (error != ERROR_SUCCESS)
+                    break;
+                dao::gpu::PrepareGuestWrite(guest + read, got);
+                memcpy(buffer + read, bounce.get(), got);
+                read += got;
+                if (got < want)
+                    break;
+            }
+        }
+        else
+        {
+            error = readHost(buffer, length, offset, read);
+        }
+        if (error != ERROR_SUCCESS)
+        {
+            LOGW("ReadFile '{}' failed ({})", file.guestPath, error);
+            bytesRead = 0;
+            return X_STATUS_UNSUCCESSFUL;
         }
         bytesRead = read;
         file.position = offset + read;

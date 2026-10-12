@@ -103,9 +103,12 @@ X_STATUS GraphicsSystem::Setup(Memory* memory,
             uint64_t normalized_framerate_limit =
                 std::max<uint64_t>(0, cvars::framerate_limit);
 
-            // If VSYNC is enabled, but frames are not limited,
-            // lock framerate at default value of 60
-            if (normalized_framerate_limit == 0 && cvars::vsync) {
+            // DAO: the guest's vblank is the console's 60 Hz whether or not
+            // the host waits for its display (with vsync off Xenia raised one
+            // every millisecond: the game's vblank-counted flips went through
+            // at once, and anything counted in vblanks ran ~16x fast). The
+            // host's own vsync is dao_present_vsync.
+            if (normalized_framerate_limit == 0) {
               normalized_framerate_limit = 60;
             }
 

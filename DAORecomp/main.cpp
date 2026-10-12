@@ -291,6 +291,11 @@ int main(int argc, char** argv)
     signal(SIGABRT, AbortHandler);
     std::set_terminate(TerminateHandler);
     timeBeginPeriod(1);
+    // Windows 11 drops a hidden or minimized window's process back to its coarse
+    // timer (~15.6 ms sleeps) unless the process opts out.
+    PROCESS_POWER_THROTTLING_STATE throttling{ PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION, 0 };
+    SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &throttling, sizeof(throttling));
 
     SelectBuild(gameRoot);
     if (!g_memory.Init())
@@ -403,8 +408,8 @@ int main(int argc, char** argv)
     if (frameHistory)
         dao::gpu::StartFrameHistory(userRoot);
 
-    // Debug hotkeys (game window focused): F10 toggles the frame-rate unlock, F12
-    // saves the frame history. Polled at 20 Hz: each poll is a few window system
+    // Debug hotkeys (game window focused): F10 switches between the game's own 30
+    // fps and the frame rate set, F12 saves the frame history. Polled at 20 Hz: each poll is a few window system
     // calls (round trips to wineserver on Proton), and a key press is longer.
     std::thread([frameHistory] {
         bool wasDown[2] = {};
@@ -421,7 +426,7 @@ int main(int argc, char** argv)
                 if (down && !wasDown[i])
                 {
                     if (keys[i] == VK_F10)
-                        dao::gpu::SetFrameRateUnlocked(!dao::gpu::FrameRateUnlocked());
+                        dao::gpu::ToggleGameFrameRate();
                     else if (frameHistory)
                         dao::gpu::SaveFrameHistory();
                 }

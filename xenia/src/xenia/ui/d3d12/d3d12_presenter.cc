@@ -30,6 +30,9 @@ DEFINE_bool(
     "cases.",
     "D3D12");
 
+DEFINE_bool(dao_present_vsync, true,
+            "Wait for the display's refresh when presenting (no tearing).",
+            "Display");
 DEFINE_bool(present_hdr, false,
             "Present through an scRGB (HDR) swap chain, expanding the SDR image "
             "on HDR displays.",
@@ -264,9 +267,10 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
         SUCCEEDED(paint_context_.swap_chain->ResizeBuffers(
             0, UINT(new_swap_chain_width), UINT(new_swap_chain_height),
             DXGI_FORMAT_UNKNOWN,
-            paint_context_.swap_chain_allows_tearing
-                ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
-                : 0));
+            DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT |
+                (paint_context_.swap_chain_allows_tearing
+                     ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+                     : 0)));
     if (swap_chain_resized) {
       for (uint32_t i = 0; i < PaintContext::kSwapChainBufferCount; ++i) {
         if (FAILED(paint_context_.swap_chain->GetBuffer(
@@ -311,7 +315,8 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
                                   : DXGI_SCALING_STRETCH;
     swap_chain_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swap_chain_desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-    swap_chain_desc.Flags = 0;
+    // DAO: see frame_latency_waitable.
+    swap_chain_desc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
     if (cvars::d3d12_allow_variable_refresh_rate_and_tearing &&
         dxgi_supports_tearing_) {
       // Allow tearing in borderless fullscreen to support variable refresh
@@ -356,6 +361,9 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
     }
     // From now on, in case of any failure, DestroySwapChain must be called
     // before returning.
+    paint_context_.frame_latency_waitable =
+        paint_context_.swap_chain->GetFrameLatencyWaitableObject();
+    paint_context_.frame_latency = 0;
     paint_context_.swap_chain_width = new_swap_chain_width;
     paint_context_.swap_chain_height = new_swap_chain_height;
     paint_context_.swap_chain_allows_tearing =
@@ -529,6 +537,10 @@ void D3D12Presenter::PaintContext::DestroySwapChain() {
     swap_chain_buffer_ref.Reset();
   }
   swap_chain.Reset();
+  if (frame_latency_waitable) {
+    CloseHandle(frame_latency_waitable);
+    frame_latency_waitable = nullptr;
+  }
   hdr_source.Reset();
   swap_chain_hdr = false;
   swap_chain_allows_tearing = false;
@@ -538,6 +550,32 @@ void D3D12Presenter::PaintContext::DestroySwapChain() {
 
 Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
     bool execute_ui_drawers) {
+  // DAO: with vsync, at most two frames wait to be shown: with DXGI's default
+  // three, a 60.00 Hz guest on a 59.94 Hz display queued them up over a
+  // minute, ~50 ms of latency. Two, not one, so a frame finished a little late
+  // against the display's refresh doesn't hold the next one's GPU work back
+  // (frame rate before latency). Waiting for room, not skipping the paint when
+  // there's none: a guest frame landing just before the refresh would be
+  // skipped and that refresh shown nothing new (below 60 fps on a 60 Hz
+  // display). The timeout only guards against a swap chain that stopped
+  // presenting (a display asleep): then nothing is presented, as a present
+  // not waited for would let one more frame queue from then on.
+  const UINT frame_latency = cvars::dao_present_vsync ? 2 : 3;
+  if (paint_context_.frame_latency != frame_latency &&
+      SUCCEEDED(paint_context_.swap_chain->SetMaximumFrameLatency(
+          frame_latency))) {
+    paint_context_.frame_latency = frame_latency;
+  }
+  if (paint_context_.frame_latency_waitable &&
+      WaitForSingleObjectEx(paint_context_.frame_latency_waitable, 100,
+                            FALSE) == WAIT_TIMEOUT) {
+    static bool timeout_logged = false;
+    if (!timeout_logged) {
+      timeout_logged = true;
+      XELOGW("D3D12Presenter: the swap chain had no room for 100 ms");
+    }
+    return PaintResult::kNotPresented;
+  }
   // Begin the command list with the command allocator not currently potentially
   // used on the GPU.
   const uint64_t current_paint_submission =
@@ -1228,10 +1266,15 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
   // fullscreen is ever used in, the allow tearing flag must not be passed in
   // fullscreen, but DXGI fullscreen is largely unneeded with the flip
   // presentation model used in Direct3D 12).
+  // DAO: or, with dao_present_vsync, waiting for the display's refresh (no
+  // tearing; two frames at most wait, see the start of this function).
+  const bool present_vsync = cvars::dao_present_vsync;
   HRESULT present_result = paint_context_.swap_chain->Present(
-      0, DXGI_PRESENT_RESTART | (paint_context_.swap_chain_allows_tearing
-                                     ? DXGI_PRESENT_ALLOW_TEARING
-                                     : 0));
+      present_vsync ? 1 : 0,
+      DXGI_PRESENT_RESTART |
+          (!present_vsync && paint_context_.swap_chain_allows_tearing
+               ? DXGI_PRESENT_ALLOW_TEARING
+               : 0));
   // Even if presentation has failed, work might have been enqueued anyway
   // internally before the failure according to Jesse Natalie from the DirectX
   // Discord server.

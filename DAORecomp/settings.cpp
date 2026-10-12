@@ -109,10 +109,17 @@ namespace dao
         s.temporalSharpness = std::clamp(s.temporalSharpness, 0.0f, 1.0f);
         if (std::ranges::find(kAnisotropicLevels, s.anisotropicFiltering) == std::end(kAnisotropicLevels))
             s.anisotropicFiltering = 0;
+        if (std::ranges::find(kFrameRates, s.frameRate) == std::end(kFrameRates))
+            s.frameRate = defaults.frameRate;
         s.hdrPaperWhite = std::clamp(s.hdrPaperWhite, kHdrMinNits, kHdrMaxPaperWhite);
         s.hdrPeak = std::clamp(s.hdrPeak, s.hdrPaperWhite, kHdrMaxPeak);
         s.windowWidth = std::clamp(s.windowWidth, 320, 16384);
         s.windowHeight = std::clamp(s.windowHeight, 180, 16384);
+    }
+
+    std::string FrameRateName(int frameRate)
+    {
+        return frameRate ? fmt::format("{} fps", frameRate) : std::string("unlimited");
     }
 
     Settings ReadSettings(const std::filesystem::path& userRoot)
@@ -154,7 +161,8 @@ namespace dao
                                                : TemporalUpscaler::Auto;
         s.temporalSharpness = video["temporal_sharpness"].value_or(s.temporalSharpness);
         s.vsync = video["vsync"].value_or(s.vsync);
-        s.unlockFrameRate = video["unlock_frame_rate"].value_or(s.unlockFrameRate);
+        // (Before frame_rate, unlock_frame_rate chose between 60 and 30.)
+        s.frameRate = video["frame_rate"].value_or(video["unlock_frame_rate"].value_or(true) ? 60 : 30);
         s.fullscreen = video["fullscreen"].value_or(s.fullscreen);
         s.anisotropicFiltering = video["anisotropic_filtering"].value_or(s.anisotropicFiltering);
         s.shadows = video["shadows"].value_or(s.shadows);
@@ -222,9 +230,12 @@ sharpness = {}
 # otherwise FSR 3.1), "fsr4", "fsr3". Sharpening 0..1.
 temporal_upscaler = "{}"
 temporal_sharpness = {}
+# Wait for the display's refresh when presenting: no tearing, and no more frames shown
+# than the display refreshes.
 vsync = {}
-# The game locks its 3D scenes to 30 fps; true lets them run at 60.
-unlock_frame_rate = {}
+# Frames per second: 30 (the game's own lock in its 3D scenes), 60, 90, 120, 144, 165, 240,
+# or 0 for unlimited. Above 60 is experimental.
+frame_rate = {}
 # HDR output. On an HDR display, SDR white is shown at hdr_paper_white nits and
 # highlights go up to hdr_peak nits: the 3D scenes are rendered in HDR (the
 # highlights the game compresses), menus are the game's image at paper white.
@@ -246,7 +257,7 @@ window_height = {}
 [patches]
 )",
             s.showLauncher, s.checkForUpdates, s.modsWarningSeen, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
-            TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.vsync, s.unlockFrameRate,
+            TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.vsync, s.frameRate,
             s.hdr, s.hdrPaperWhite, s.hdrPeak, s.anisotropicFiltering, s.shadows, s.postProcessing, s.fullscreen,
             s.windowWidth, s.windowHeight);
         for (const auto& [id, enabled] : s.patches)
@@ -290,14 +301,24 @@ window_height = {}
             s.resolutionScale = std::clamp(atoi(env), 1, kMaxResolutionScale);
         if (const char* env = getenv("DAO_HDR"))
             s.hdr = atoi(env) != 0;
-        if (const char* env = getenv("DAO_UNLOCK_FPS"))
-            s.unlockFrameRate = atoi(env) != 0;
+        // (Only a number: atoi would read anything else as 0, unlimited.)
+        if (const char* env = getenv("DAO_FRAME_RATE"); env && *env)
+        {
+            char* end = nullptr;
+            const long rate = strtol(env, &end, 10);
+            if (!*end && rate >= 0 && rate <= 1000)
+            {
+                s.frameRate = int(rate);
+                ClampSettings(s);
+            }
+        }
 
         SetXeniaCvar("draw_resolution_scale_x", toml::value<int64_t>(s.resolutionScale));
         SetXeniaCvar("draw_resolution_scale_y", toml::value<int64_t>(s.resolutionScale));
         SetXeniaCvar("dao_temporal_upscaler", toml::value<std::string>(std::string(TemporalUpscalerName(s.temporalUpscaler))));
         SetXeniaCvar("dao_temporal_sharpness", toml::value<double>(s.temporalSharpness));
-        SetXeniaCvar("vsync", toml::value<bool>(s.vsync));
+        // (Not Xenia's own vsync cvar: the guest's vblanks stay at the console's 60 Hz.)
+        SetXeniaCvar("dao_present_vsync", toml::value<bool>(s.vsync));
         SetXeniaCvar("present_hdr", toml::value<bool>(s.hdr));
         SetXeniaCvar("present_hdr_paper_white", toml::value<double>(s.hdrPaperWhite));
         SetXeniaCvar("present_hdr_peak", toml::value<double>(s.hdrPeak));
@@ -317,10 +338,10 @@ window_height = {}
             // Already reported by ReadSettings.
         }
 
-        LOGI("Settings: resolution scale {}, upscaler {}, sharpness {}, temporal upscaler {}, {}x{}{}{}",
+        LOGI("Settings: resolution scale {}, upscaler {}, sharpness {}, temporal upscaler {}, {}x{}{}, {}{}",
             s.resolutionScale, UpscalerName(s.upscaler), s.sharpness, TemporalUpscalerName(s.temporalUpscaler),
-            s.windowWidth, s.windowHeight, s.fullscreen ? " fullscreen" : "",
-            s.unlockFrameRate ? ", frame rate unlocked" : "");
+            s.windowWidth, s.windowHeight, s.fullscreen ? " fullscreen" : "", FrameRateName(s.frameRate),
+            s.vsync ? ", vsync" : "");
         if (s.hdr)
             LOGI("Settings: HDR output, paper white {} nits, peak {} nits", s.hdrPaperWhite, s.hdrPeak);
         return s;

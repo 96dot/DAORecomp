@@ -51,6 +51,25 @@ namespace dao::apu
         // If nothing consumes the queue, the oldest frames are dropped beyond this.
         constexpr size_t kQueueDropLimit = 16;
 
+        // When the host last asked for a frame (steady_clock ticks; 0: never). With no
+        // consumer (no output device, DAO_AUDIO=null) the callbacks run regardless, as
+        // on the console: the game's audio engine (voices ending, XMA decoding) runs in
+        // them. A device pulls every few tens of milliseconds; a quarter second without
+        // a pull is no device.
+        std::atomic<int64_t> g_lastPull{ 0 };
+        constexpr auto kConsumerTimeout = std::chrono::milliseconds(250);
+
+        int64_t NowTicks()
+        {
+            return std::chrono::steady_clock::now().time_since_epoch().count();
+        }
+
+        bool HostConsumerLive()
+        {
+            const int64_t last = g_lastPull.load(std::memory_order_relaxed);
+            return last && NowTicks() - last < std::chrono::steady_clock::duration(kConsumerTimeout).count();
+        }
+
         using Frame = std::array<float, kFrameSampleCount>;
 
         std::mutex g_frameMutex;
@@ -93,7 +112,7 @@ namespace dao::apu
         void RunClientCallbacks()
         {
             std::lock_guard lock(g_clientMutex);
-            if (QueuedFrames() >= kWorkerQueueLimit)
+            if (HostConsumerLive() && QueuedFrames() >= kWorkerQueueLimit)
             {
                 LogQueueFullOnce();
                 return;
@@ -633,6 +652,7 @@ namespace dao::apu
     {
         if (!out6x256)
             return false;
+        g_lastPull.store(NowTicks(), std::memory_order_relaxed);
         std::lock_guard lock(g_frameMutex);
         if (g_frames.empty())
             return false;
@@ -798,7 +818,10 @@ namespace dao::imp
             {
                 // The decoders read the guest addresses the game passed, which are always valid host
                 // addresses. The dword values above are physical and are only kept for the guest.
-                // Host decode state (pending frame, loop flags) is kept across a re-Initialize, as Xenia does.
+                // A new sound: the host decoder starts over too (upstream Xenia's
+                // XMAInitializeContext, kernel/xboxkrnl/xboxkrnl_audio_xma.cc, clears the
+                // context through the XMA context-clear register).
+                ResetSlotDecoders(*slot);
                 slot->inputGuest[0] = uint32_t(init->input0Ptr);
                 slot->inputGuest[1] = uint32_t(init->input1Ptr);
                 slot->outputGuest = uint32_t(init->outputPtr);

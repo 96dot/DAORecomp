@@ -21,6 +21,7 @@ DECLARE_double(dao_temporal_sharpness);
 DECLARE_int32(anisotropic_override);
 DECLARE_double(present_hdr_paper_white);
 DECLARE_double(present_hdr_peak);
+DECLARE_bool(dao_present_vsync);
 
 namespace dao::ui
 {
@@ -31,7 +32,7 @@ namespace dao::ui
         {
             Fullscreen,
             ResolutionScale,
-            UnlockFrameRate,
+            FrameRate,
             VSync,
             TemporalUpscaler,
             TemporalSharpness,
@@ -55,8 +56,8 @@ namespace dao::ui
         constexpr KeyInfo kKeys[] = {
             { "Fullscreen", false },
             { "ResolutionScale", true },
-            { "UnlockFrameRate", false },
-            { "VSync", true },
+            { "FrameRate", false },
+            { "VSync", false },
             { "TemporalUpscaler", true },
             { "TemporalSharpness", false },
             { "Upscaler", false },
@@ -121,7 +122,7 @@ namespace dao::ui
             if (!s_menu)
                 s_menu = GetSettings();
             // F10 toggles it too.
-            s_menu->unlockFrameRate = gpu::FrameRateUnlocked();
+            s_menu->frameRate = gpu::FrameRate();
             return *s_menu;
         }
 
@@ -154,7 +155,7 @@ namespace dao::ui
             {
             case Key::Fullscreen: return s.fullscreen;
             case Key::ResolutionScale: return s.resolutionScale;
-            case Key::UnlockFrameRate: return s.unlockFrameRate;
+            case Key::FrameRate: return s.frameRate;
             case Key::VSync: return s.vsync;
             case Key::TemporalUpscaler: return int(s.temporalUpscaler);
             case Key::TemporalSharpness: return std::round(s.temporalSharpness * kSliderSteps);
@@ -179,7 +180,7 @@ namespace dao::ui
             {
             case Key::Fullscreen: s.fullscreen = whole != 0; break;
             case Key::ResolutionScale: s.resolutionScale = whole; break;
-            case Key::UnlockFrameRate: s.unlockFrameRate = whole != 0; break;
+            case Key::FrameRate: s.frameRate = whole; break;
             case Key::VSync: s.vsync = whole != 0; break;
             case Key::TemporalUpscaler:
                 s.temporalUpscaler = TemporalUpscaler(std::clamp(whole, 0, int(TemporalUpscaler::Fsr3)));
@@ -223,7 +224,7 @@ namespace dao::ui
             {
             case Key::Fullscreen: to.fullscreen = from.fullscreen; break;
             case Key::ResolutionScale: to.resolutionScale = from.resolutionScale; break;
-            case Key::UnlockFrameRate: to.unlockFrameRate = from.unlockFrameRate; break;
+            case Key::FrameRate: to.frameRate = from.frameRate; break;
             case Key::VSync: to.vsync = from.vsync; break;
             case Key::TemporalUpscaler: to.temporalUpscaler = from.temporalUpscaler; break;
             case Key::TemporalSharpness: to.temporalSharpness = from.temporalSharpness; break;
@@ -248,7 +249,8 @@ namespace dao::ui
             switch (key)
             {
             case Key::Fullscreen: gpu::XeniaSetFullscreen(s.fullscreen); break;
-            case Key::UnlockFrameRate: gpu::SetFrameRateUnlocked(s.unlockFrameRate); break;
+            case Key::FrameRate: gpu::SetFrameRate(s.frameRate); break;
+            case Key::VSync: cvars::dao_present_vsync = s.vsync; break;
             case Key::TemporalSharpness: cvars::dao_temporal_sharpness = s.temporalSharpness; break;
             case Key::Upscaler:
             case Key::Sharpness: gpu::XeniaSetOutputScaling(s.upscaler, s.sharpness); break;

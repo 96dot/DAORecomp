@@ -287,6 +287,10 @@ class D3D12Presenter final : public Presenter {
     uint32_t swap_chain_height = 0;
     bool swap_chain_allows_tearing = false;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> swap_chain;
+    // DAO: signaled while the swap chain has room for a frame (two at most
+    // with vsync, three without; 0: not set yet).
+    HANDLE frame_latency_waitable = nullptr;
+    UINT frame_latency = 0;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, kSwapChainBufferCount>
         swap_chain_buffers;
     // DAO HDR output.

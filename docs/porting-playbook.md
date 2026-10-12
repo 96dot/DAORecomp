@@ -63,7 +63,8 @@ the next game.
 - **Swap interrupt / present interval** (`sub_82CD4218` / `tu6_sub_82D9E0F8`): the
   function called with `frontbuffer | interval << 8`. Found from the `VdSwap` import's
   callers and the PM4 trace (interval 2 in 3D scenes). Clamp the interval to 1 for
-  60 fps, after checking game logic doesn't count vblanks.
+  60 fps, after checking game logic doesn't count vblanks. Interval 0 flips at once:
+  above 60 fps, pace the frames in `VdSwap` instead (unless unlimited).
 - **Fence wait step** (`sub_82CC4338`): the D3D `BlockOnFence` spin loop. Found with
   `DAO_PROFILE` stack samples of the 100%-CPU render thread. Make it sleep.
 - **Held shot hand-over** (TU6 only: `tu6_sub_82557DE0` ending the hold,
@@ -155,7 +156,7 @@ there.
 | `DAO_FRAME_HISTORY=1` | finds one-frame flickers, saves their draw lists |
 | `DAO_THREAD_STATS=<s>`, `DAO_PROFILE=...` | per-thread CPU %, sampled guest stacks |
 | `DAO_DUMP_AFTER=<s>` | thread dump with host stacks (`scripts/symbolize.py`) |
-| `DAO_RES_SCALE`, `DAO_HDR`, `DAO_UNLOCK_FPS` | override settings for one run |
+| `DAO_RES_SCALE`, `DAO_HDR`, `DAO_FRAME_RATE` | override settings for one run |
 | `DAO_XMA=fake`, `DAO_AUDIO=null`, `DAO_AUDIO_DUMP=x.wav` | audio bring-up and checks |
 | `DAO_TEST_KEYBOARD=<s>` | opens the on-screen keyboard |
 | `DAO_LAUNCHER_SCREENSHOTS=<dir>` | launcher screenshots, then exits |

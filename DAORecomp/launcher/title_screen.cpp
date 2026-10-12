@@ -358,7 +358,7 @@ namespace dao::launcher
                 : std::string("reading mods");
             Label(fmt::format("{}  \xC2\xB7  {}x{}  \xC2\xB7  {}  \xC2\xB7  {}  \xC2\xB7  {}", Version(),
                 1280 * st.settings.resolutionScale, 720 * st.settings.resolutionScale,
-                st.settings.unlockFrameRate ? "60 fps" : "30 fps",
+                st.settings.frameRate ? FrameRateName(st.settings.frameRate) : std::string("unlimited fps"),
                 st.settings.temporalUpscaler != TemporalUpscaler::Off ? "temporal FSR" : "no temporal upscaling",
                 modsOn)
                       .c_str());

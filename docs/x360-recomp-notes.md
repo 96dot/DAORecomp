@@ -104,7 +104,8 @@ recipes) is in [porting-playbook.md](porting-playbook.md).
   - 30 fps locks are usually the present interval. In DAO the swap-interrupt handler
     queued flips for vblank `last + 2` in 3D scenes. Clamping the interval to 1 in a
     `PPC_FUNC` override gave 60 fps at normal game speed, because game logic ran on its
-    own thread and nothing read the vblank counters.
+    own thread and nothing read the vblank counters. Interval 0 flips at once, for
+    rates above 60 paced on the host; the guest's vblanks stay at 60 Hz.
   - Check both of those conditions before unlocking.
 - **Submitting before waiting:** a GPU `WAIT_REG_MEM` on the flip comes after a frame's
   draws but before its swap, so the whole frame sat unsubmitted. Submit before waiting.
@@ -140,7 +141,8 @@ recipes) is in [porting-playbook.md](porting-playbook.md).
     list of each frame;
   - scripted gamepad input (`DAO_INPUT_SCRIPT`) and periodic captures, to repeat a run
     without a person.
-- Turn off driver-level vsync and frame caps before comparing fps.
+- Turn off driver-level vsync and frame caps (and set the game's frame rate to
+  unlimited, vsync off) before comparing fps.
 - Ask for numbers from the weakest target device (here the Steam Deck) before choosing
   between optimizations whose costs depend on the GPU and driver.
 
