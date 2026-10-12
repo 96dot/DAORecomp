@@ -57,14 +57,15 @@ to get the space back.
 Windows may warn about `DAORecomp.exe` because it isn't code-signed (*More info* →
 *Run anyway*).
 
-#### Title Update 6 and downloadable content
+#### Title updates and downloadable content
 
 *Awakening*, *Leliana's Song*, *The Darkspawn Chronicles*, *The Golems of Amgarrak* and
-*Witch Hunt* need the game's Title Update 6 (the other DLC work without it). To use them,
+*Witch Hunt* need the game's Title Update 6 or 7 (the other DLC work without it; 7, the
+last, adds fixes to 6's in its data files). To use them,
 copy the title update's package and the DLC packages from a console (or your backup of
 them) and:
 
-- give the installer the title update's package: *Title Update 6 (optional)* in the
+- give the installer the title update's package: *Title Update 6 or 7 (optional)* in the
   window, or `--title-update <package>`. It is checked (it must be the one for the
   English disc, media ID 186A1115), extracted to `title_update/` in the install folder,
   and the game's code is translated a second time from the updated executable (about as
@@ -72,12 +73,12 @@ them) and:
   `title_update/` is there.
 - drop the DLC packages, or the folder holding them, on the launcher window. They are
   extracted to `userdata/content/454108C0/00000002/`, where the game finds them. A title
-  update dropped there is installed too; if the program was built without it, it takes
-  effect after running the installer again on the same folder.
+  update dropped there is installed too (7 replaces 6); if the program was built without
+  one, it takes effect after running the installer again on the same folder.
 
 Only packages in the read-only format Xbox Live delivers them in (LIVE/PIRS) are read;
 the packages themselves are left as they are. At start, `title_update/default.xexp` is
-checked to be Title Update 6's; anything else is passed over for the disc's version.
+checked to be Title Update 6's or 7's; anything else is passed over for the disc's version.
 
 ### Linux (or from the source on Windows)
 
@@ -206,6 +207,9 @@ start, so this happens once per place.
   `config/DAO_tu6.toml` and `config/DAO_tu6_switch_tables.toml` describe it,
   `scripts/recomp.cmd tu6` translates it into `ppc_tu6/` (built when that folder exists),
   and `scripts/prefix_symbols.py` gives its functions names of their own (`tu6_sub_...`).
+  Title Update 7 runs on the same code: its code differs from 6's only in a version number
+  (set by `DAORecomp/kernel/title_update_version.cpp`) and a global that moved, so
+  either's patch can be translated; the rest of 7 is data files.
   The runtime picks the build at start (`DAORecomp/kernel/game_build.h`); code hooks are
   given both builds' functions with `GAME_HOOK` (one build's with `GAME_HOOK_ONE`), and addresses both builds' with
   `GameAddress`. `scripts/match_build.py` finds a disc function's counterpart in the
@@ -245,7 +249,7 @@ start, so this happens once per place.
     `launcher_6.bmp` when the update check finds a release, then quits.
   - `DAO_LAUNCHER_DROP=<path>|<path>...`: with `DAO_LAUNCHER_SCREENSHOTS`, adds those
     as if dropped on the window (tests adding mods and installing packages).
-  - `DAO_BUILD=disc`: runs the disc's build even when Title Update 6 is installed.
+  - `DAO_BUILD=disc`: runs the disc's build even when a title update is installed.
   - `DAO_EXTRACT_PACKAGE=<package>|<new folder>`: extracts an Xbox 360 package as the
     launcher does, prints the outcome and quits (used by `scripts/test_stfs.py`).
   - `DAO_CONVERT_MOD=<mod folder>`: converts that PC mod as the launcher's Convert does,

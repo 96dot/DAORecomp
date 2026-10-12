@@ -12,4 +12,7 @@ namespace dao
 
     // The SHA-1 of a file as upper-case hex, or "" if it can't be read.
     std::string FileSha1(const std::filesystem::path& path);
+
+    // The SHA-1 of bytes as upper-case hex, or "" if it can't be computed.
+    std::string Sha1(std::span<const uint8_t> data);
 }

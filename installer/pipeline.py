@@ -32,7 +32,7 @@ SKIP_PREFIXES = ("$SystemUpdate/",)
 class Options:
     iso: Path = None
     dest: Path = None
-    # Title Update 6's package (optional; an install keeps it in dest/title_update).
+    # Title Update 6's or 7's package (optional; an install keeps it in dest/title_update).
     title_update: Path = None
     accept_license: bool = False
     llvm: str = "auto"
@@ -177,21 +177,40 @@ UPDATE_FOLDER = "title_update"
 
 
 def title_update_installed(update):
-    """Whether title_update/ holds Title Update 6 (its default.xexp, hashed once per version
-    of the file)."""
+    """Whether title_update/ holds Title Update 6 or 7 (its default.xexp, hashed once per
+    version of the file)."""
     xexp = Path(update) / "default.xexp"
     if not xexp.is_file():
         return False
     stat = xexp.stat()
     key = (str(xexp.resolve()), stat.st_size, stat.st_mtime_ns)
     if key not in _extracted:
-        _extracted[key] = _file_sha1(xexp) == deps.TU6_XEXP_SHA1
+        _extracted[key] = _file_sha1(xexp) in deps.TU_XEXP_SHA1S
     return _extracted[key]
 
 
+def _remove_folder(path):
+    """Removes a folder of ours; a symlink or junction in its place goes, but not what it
+    points to."""
+    if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+        os.rmdir(path)
+    elif path.exists():
+        shutil.rmtree(path)
+
+
 def install_title_update(reporter, package, update):
-    """Extracts Title Update 6's package (the player's file, checked first) into title_update/."""
+    """Extracts Title Update 6's or 7's package (the player's file, checked first) into
+    title_update/. 7 replaces 6 (it holds 6's changes); 7 over 7 and 6 over 7 are
+    refused, and a folder holding anything else is left alone."""
     work = update.with_name(update.name + ".partial")
+    xexp = update / "default.xexp"
+    installed = deps.TU_XEXP_SHA1S.get(_file_sha1(xexp), 0) if xexp.is_file() else 0
+    if installed == 7:
+        reporter.log(f"Title Update {installed} is already installed in {update}.")
+        return
+    if not installed and update.exists() and any(update.iterdir()):
+        raise InstallError(f"{update} holds something other than Title Update 6 or 7; move it away to "
+                           "install this one.")
     try:
         with stfs.Package(package) as pkg:
             if pkg.title_id != deps.GAME_TITLE_ID or pkg.content_type != stfs.CONTENT_INSTALLER:
@@ -199,8 +218,7 @@ def install_title_update(reporter, package, update):
             if pkg.media_id != deps.GAME_MEDIA_ID:
                 raise InstallError(f"{package.name} is the title update for another edition of the game (disc "
                                    f"{pkg.media_id:08X}); yours needs the one for disc {deps.GAME_MEDIA_ID:08X}.")
-            if work.exists():
-                shutil.rmtree(work)
+            _remove_folder(work)
             reporter.log(f"Extracting {pkg.display_name} ({len(pkg.files)} files) to {update}")
 
             def progress(fraction):
@@ -213,17 +231,33 @@ def install_title_update(reporter, package, update):
     except OSError as e:
         raise InstallError(f"Can't extract {package} to {work}: {e}")
     xexp = work / "default.xexp"
-    if not xexp.is_file() or _file_sha1(xexp) != deps.TU6_XEXP_SHA1:
-        shutil.rmtree(work)
-        raise InstallError(f"{package.name} is not Title Update 6, the one this recompilation is made for.")
-    # The old one aside first, so an interruption leaves one of them in place.
+    number = deps.TU_XEXP_SHA1S.get(_file_sha1(xexp), 0) if xexp.is_file() else 0
+    if not number:
+        _remove_folder(work)
+        raise InstallError(f"{package.name} is not Title Update 6 or 7, the ones the game is made for.")
+    if number <= installed:
+        _remove_folder(work)
+        reporter.log(f"Title Update {installed} is already installed in {update}.")
+        return
+    # The old one is kept as title_update.old until the new one is in place, and put back
+    # if it can't be.
     old = update.with_name(update.name + ".old")
-    if old.exists():
-        shutil.rmtree(old)
-    if update.exists():
-        update.rename(old)
-    work.rename(update)
-    shutil.rmtree(old, ignore_errors=True)
+    _remove_folder(old)
+    moved_old = False
+    try:
+        if update.exists():
+            update.rename(old)
+            moved_old = True
+        work.rename(update)
+    except OSError as e:
+        if moved_old and not update.exists():
+            old.rename(update)
+        _remove_folder(work)
+        raise InstallError(f"Can't install the title update: it can't be moved to {update}: {e}")
+    try:
+        _remove_folder(old)
+    except OSError:
+        pass
 
 
 def _existing_parent(path):
@@ -283,8 +317,8 @@ def build_recompiler(reporter, tc, jobs):
 
 
 def recompile(reporter, recompiler, game, update=None):
-    """Translates default.xex to C++ in ppc/; with title_update/ (Title Update 6), the
-    patched executable to ppc_tu6/, its names prefixed so both builds link together."""
+    """Translates default.xex to C++ in ppc/; with title_update/ (Title Update 6 or 7),
+    the patched executable to ppc_tu6/, its names prefixed so both builds link together."""
     name = "ppc_tu6" if update else "ppc"
     config_name = "DAO_tu6" if update else "DAO"
     out = BUILD / f"{name}_gen"
@@ -552,7 +586,7 @@ def run_all(reporter, options):
         install_title_update(reporter, Path(options.title_update).expanduser().absolute(), update)
     with_tu6 = title_update_installed(update)
     if update.exists() and not with_tu6:
-        reporter.log(f"Warning: {update} doesn't hold Title Update 6; the game is built without it.")
+        reporter.log(f"Warning: {update} doesn't hold Title Update 6 or 7; the game is built without it.")
 
     tc, recompiler = _prepare(reporter, options, 3)
     reporter.status(f"[5/{STEPS}] Recompiling the game code (a few minutes)")

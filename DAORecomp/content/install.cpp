@@ -57,6 +57,17 @@ namespace dao::content
             return running;
         }
 
+        // Removes a folder of ours; a symlink or junction in its place goes, but not
+        // what it points to.
+        void RemoveFolder(const fs::path& folder, std::error_code& ec)
+        {
+            const DWORD attributes = GetFileAttributesW(folder.c_str());
+            if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                fs::remove(folder, ec);
+            else
+                fs::remove_all(folder, ec);
+        }
+
         // Removes the work folders (.new<process ID>) of installs that stopped
         // half-way: their process isn't running any more.
         void RemoveStaleWork(const fs::path& parent)
@@ -78,7 +89,7 @@ namespace dao::content
             for (const fs::path& folder : stale)
             {
                 LOGI("Content: removing {}, left by an install that stopped", Utf8(folder));
-                fs::remove_all(folder, ec);
+                RemoveFolder(folder, ec);
             }
         }
 
@@ -185,14 +196,17 @@ namespace dao::content
         {
             const fs::path update = kernel::UpdateRoot(gameRoot);
             std::error_code ec;
-            if (kernel::IsTu6Patch(update / "default.xexp"))
+            // Title Update 7 replaces 6 (it holds 6's changes); 7 over 7 and 6 over 7 are
+            // refused, and a folder holding anything else is left alone.
+            const int installed = kernel::TitleUpdateNumber(update / "default.xexp");
+            if (installed == 7)
             {
-                lines.push_back({ "Title Update 6 is already installed." });
+                lines.push_back({ fmt::format("Title Update {} is already installed.", installed) });
                 return;
             }
-            if (fs::exists(update, ec))
+            if (!installed && fs::exists(update, ec))
             {
-                lines.push_back({ fmt::format("Can't install Title Update 6: {} holds something else. Move it "
+                lines.push_back({ fmt::format("Can't install the title update: {} holds something else. Move it "
                                               "away and drop the update again.", Utf8(update)), true });
                 return;
             }
@@ -200,36 +214,57 @@ namespace dao::content
             const fs::path parent = update.parent_path();
             if (!Fits(parent / "title_update.new00000", package))
             {
-                lines.push_back({ fmt::format("Can't install Title Update 6: {}.", TooLong(parent)), true });
+                lines.push_back({ fmt::format("Can't install the title update: {}.", TooLong(parent)), true });
                 return;
             }
             fs::path work;
             std::string error;
             if (!ExtractToWork(package, parent, stop, work, error))
             {
-                lines.push_back({ fmt::format("Can't install Title Update 6: {}.", error), true });
+                lines.push_back({ fmt::format("Can't install the title update: {}.", error), true });
                 return;
             }
-            if (!kernel::IsTu6Patch(work / "default.xexp"))
+            const int number = kernel::TitleUpdateNumber(work / "default.xexp");
+            if (!number)
             {
-                fs::remove_all(work, ec);
-                lines.push_back({ "This title update isn't Title Update 6, the one the game is made for.", true });
+                RemoveFolder(work, ec);
+                lines.push_back({ "This title update isn't Title Update 6 or 7, the ones the game is made for.", true });
                 return;
             }
-            fs::rename(work, update, ec);
-            if (ec)
+            if (number <= installed)
             {
-                fs::remove_all(work, ec);
-                lines.push_back({ fmt::format("Can't install Title Update 6: it can't be moved to {}.", Utf8(update)),
-                    true });
+                RemoveFolder(work, ec);
+                lines.push_back({ fmt::format("Title Update {} is already installed.", installed) });
                 return;
             }
-            LOGI("Content: installed Title Update 6 to {}", Utf8(update));
+            // The old one is kept as title_update.old until the new one is in place, and
+            // put back if it can't be.
+            const fs::path old = parent / "title_update.old";
+            std::error_code moved;
+            if (installed)
+            {
+                RemoveFolder(old, ec);
+                fs::rename(update, old, moved);
+            }
+            if (!moved)
+                fs::rename(work, update, moved);
+            if (moved)
+            {
+                if (installed && !fs::exists(update, ec))
+                    fs::rename(old, update, ec);
+                RemoveFolder(work, ec);
+                lines.push_back({ fmt::format("Can't install the title update: it can't be moved to {}.",
+                                      Utf8(update)), true });
+                return;
+            }
+            RemoveFolder(old, ec);
+            LOGI("Content: installed Title Update {} to {}", number, Utf8(update));
 #if DAO_HAS_TU6
-            lines.push_back({ "Installed Title Update 6: Awakening and the DLC campaigns can be played." });
+            lines.push_back({ fmt::format("Installed Title Update {}: Awakening and the DLC campaigns can be played.",
+                number) });
 #else
-            lines.push_back({ "Installed Title Update 6. The game needs building again to use it: run the "
-                              "installer and choose this install folder.", true });
+            lines.push_back({ fmt::format("Installed Title Update {}. The game needs building again to use it: run "
+                                          "the installer and choose this install folder.", number), true });
 #endif
         }
     }

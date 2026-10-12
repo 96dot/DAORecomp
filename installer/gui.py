@@ -49,7 +49,7 @@ class App:
         self.dest_button = ttk.Button(frame, text="Browse...", command=self.pick_dest)
         self.dest_button.grid(row=2, column=2)
         self.title_update = tk.StringVar()
-        ttk.Label(frame, text="Title Update 6 (optional):").grid(row=3, column=0, sticky="w")
+        ttk.Label(frame, text="Title Update 6 or 7 (optional):").grid(row=3, column=0, sticky="w")
         ttk.Entry(frame, textvariable=self.title_update).grid(row=3, column=1, sticky="ew", padx=6)
         self.update_button = ttk.Button(frame, text="Browse...", command=self.pick_title_update)
         self.update_button.grid(row=3, column=2)
@@ -116,7 +116,7 @@ class App:
     def pick_title_update(self):
         # Its package from the console (e.g. tu00000001_00000000): needed by Awakening
         # and the DLC campaigns after it; an install keeps it.
-        path = filedialog.askopenfilename(title="Dragon Age: Origins Title Update 6 package",
+        path = filedialog.askopenfilename(title="Dragon Age: Origins Title Update 6 or 7 package",
                                           filetypes=[("All files", "*")])
         if path:
             self.title_update.set(path)

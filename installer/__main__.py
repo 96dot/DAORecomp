@@ -38,7 +38,7 @@ def main():
     parser.add_argument("--iso", help="the Dragon Age: Origins (Xbox 360) disc image (not needed to update an "
                                       "install whose game files are extracted)")
     parser.add_argument("--dest", help="install folder (game files go into its game/ folder)")
-    parser.add_argument("--title-update", help="Title Update 6's package (optional: needed by Awakening and the "
+    parser.add_argument("--title-update", help="Title Update 6's or 7's package (optional: needed by Awakening and the "
                                                "DLC campaigns; kept in the install's title_update/ folder)")
     parser.add_argument("--accept-msvc-license", action="store_true",
                         help=f"accept the license of the Microsoft build tools ({deps.MSVC_LICENSE_URL})")

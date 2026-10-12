@@ -3,8 +3,8 @@
 // or a folder holding them, as copied from a console's drive):
 //   - downloadable content goes to userdata/content/454108C0/00000002/<content ID>/,
 //     where the game finds it (with its name in <content ID>.name);
-//   - Title Update 6 (needed by Awakening and the DLC campaigns after it) goes to
-//     title_update/, next to the game folder.
+//   - Title Update 6 or 7 (needed by Awakening and the DLC campaigns after it) goes
+//     to title_update/, next to the game folder.
 // The packages themselves are only read.
 
 #include <stop_token>

@@ -241,7 +241,7 @@ namespace dao::launcher
                               "and its code is recompiled for this PC: nothing of the game is downloaded. You can "
                               "also drop it on this window.");
             ImGui::Spacing();
-            PathRow(st, "Title Update 6 (optional)", InstallField::TitleUpdate);
+            PathRow(st, "Title Update 6 or 7 (optional)", InstallField::TitleUpdate);
             HelpText("Needed by Awakening and the DLC campaigns: its package (tu00000001_00000000). It can also be "
                      "added later, by dropping it on the launcher.");
 

@@ -34,6 +34,17 @@ namespace dao
         return ok;
     }
 
+    namespace
+    {
+        std::string Hex(std::span<const uint8_t> digest)
+        {
+            std::string hex;
+            for (const uint8_t b : digest)
+                hex += fmt::format("{:02X}", b);
+            return hex;
+        }
+    }
+
     std::string FileSha1(const std::filesystem::path& path)
     {
         const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
@@ -44,11 +55,17 @@ namespace dao
         uint64_t size = 0;
         const bool ok = HashFile(file, BCRYPT_SHA1_ALGORITHM, digest, size);
         CloseHandle(file);
-        if (!ok)
+        return ok ? Hex(digest) : std::string();
+    }
+
+    std::string Sha1(std::span<const uint8_t> data)
+    {
+        std::array<uint8_t, 20> digest;
+        // (BCryptHash takes a ULONG length.)
+        if (data.size() > ULONG_MAX ||
+            BCryptHash(BCRYPT_SHA1_ALG_HANDLE, nullptr, 0, const_cast<uint8_t*>(data.data()), ULONG(data.size()),
+                digest.data(), ULONG(digest.size())) < 0)
             return {};
-        std::string hex;
-        for (const uint8_t b : digest)
-            hex += fmt::format("{:02X}", b);
-        return hex;
+        return Hex(digest);
     }
 }

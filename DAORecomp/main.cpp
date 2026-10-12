@@ -314,14 +314,14 @@ int main(int argc, char** argv)
 
     g_processBlock = KernelAlloc(0x60);
     VfsInit(gameRoot, userRoot);
-    if (IsTu6())
+    if (IsTitleUpdate())
     {
         // The console mounts a title update's package as update:.
         VfsMountDevice("\\Device\\Update", UpdateRoot(gameRoot));
         VfsCreateSymlink("update:", "\\Device\\Update");
     }
 
-    if (!LoadXex(gameRoot / "default.xex", IsTu6() ? UpdateRoot(gameRoot) / "default.xexp" : fs::path()))
+    if (!LoadXex(gameRoot / "default.xex", IsTitleUpdate() ? UpdateRoot(gameRoot) / "default.xexp" : fs::path()))
         return 1;
     StartTimeStampThread();
 

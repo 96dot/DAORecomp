@@ -10,9 +10,13 @@ GAME_TITLE_ID = 0x454108C0
 # That disc's media ID: title updates are made for one disc (other languages'
 # discs have their own).
 GAME_MEDIA_ID = 0x186A1115
-# Title Update 6 (needed by Awakening and the DLC campaigns after it): the
-# default.xexp in its package; config/DAO_tu6.toml belongs to exactly this one.
+# Title Update 6 or 7 (needed by Awakening and the DLC campaigns after it): the
+# default.xexp in its package, and which update it is. config/DAO_tu6.toml
+# describes the code of either (7's is 6's but for a version number, set at run
+# time, and a global that moved; docs/porting-playbook.md, "Later title updates").
 TU6_XEXP_SHA1 = "4141b608e44c4ed35eb4e24ba2c05844a2f57a54"
+TU7_XEXP_SHA1 = "dd5b493f4fe2fb4c99e6ef7ed6923ddddeee8291"
+TU_XEXP_SHA1S = {TU6_XEXP_SHA1: 6, TU7_XEXP_SHA1: 7}
 
 
 @dataclass(frozen=True)

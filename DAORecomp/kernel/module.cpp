@@ -123,6 +123,12 @@ namespace dao::kernel
         if (!patchPath.empty())
         {
             const auto patch = LoadFile(patchPath);
+            // (Checked again on the bytes applied: SelectBuild hashed the file earlier.)
+            if (!patch.empty() && !TitleUpdateNumber(patch))
+            {
+                LOGE("{} isn't Title Update 6's or 7's", Utf8(patchPath));
+                return false;
+            }
             std::vector<uint8_t> patched;
             constexpr bool kSkipData = false; // the data patches too, not only the code
             const auto result = patch.empty() ? XexPatcher::Result::FileOpenFailed
@@ -142,8 +148,16 @@ namespace dao::kernel
             return false;
         }
         // Another executable (another title update) doesn't match the recompiled code.
+        // Title Updates 6 and 7 share it, but not their image size: 7's is 64 KB more,
+        // all of it relocations, which nothing reads (docs/porting-playbook.md, "Later
+        // title updates"). So their build takes either size.
         const DaoBuildInfo& build = g_build.info;
-        if (image.base != build.imageBase || image.size != build.imageSize)
+        constexpr uint32_t kTu6ImageSize = 0x13F0000;
+        constexpr uint32_t kTu7ImageSize = 0x1400000;
+        const auto updateSize = [](uint32_t size) { return size == kTu6ImageSize || size == kTu7ImageSize; };
+        const bool sizeMatches = image.size == build.imageSize ||
+            (IsTitleUpdate() && updateSize(image.size) && updateSize(build.imageSize));
+        if (image.base != build.imageBase || !sizeMatches)
         {
             LOGE("Unexpected image {:08X}+{:#x} (recompiled for {:08X}+{:#x})", image.base, image.size,
                 build.imageBase, build.imageSize);
@@ -161,7 +175,9 @@ namespace dao::kernel
             for (size_t i = 0; i < n; i++)
                 valid += blocks[i].dataSize + blocks[i].zeroSize;
         }
-        valid = std::min<size_t>(valid, image.size);
+        // (Not beyond the recompiled image: its function table follows it, memory.h.)
+        const uint32_t loadedSize = std::min(image.size, build.imageSize);
+        valid = std::min<size_t>(valid, loadedSize);
         memcpy(g_memory.Translate(build.imageBase), image.data.get(), valid);
         LOGI("Loaded image {:08X}+{:#x} ({:#x} bytes of data), entry {:08X}", image.base, image.size, valid, image.entry_point);
 
@@ -187,9 +203,9 @@ namespace dao::kernel
         g_module.ldrEntry = KernelAlloc(0x80);
         W32(g_module.ldrEntry + 0x18, build.imageBase);  // dll_base
         W32(g_module.ldrEntry + 0x1C, build.imageBase);  // image_base
-        W32(g_module.ldrEntry + 0x20, image.size);      // image_size
+        W32(g_module.ldrEntry + 0x20, loadedSize);      // image_size
         W32(g_module.ldrEntry + 0x34, 0x40000000);      // flags
-        W32(g_module.ldrEntry + 0x38, image.size);      // full_image_size
+        W32(g_module.ldrEntry + 0x38, loadedSize);      // full_image_size
         W32(g_module.ldrEntry + 0x3C, g_module.entryPoint);
         W32(g_module.ldrEntry + 0x58, g_module.xexHeader);
         for (uint32_t links = 0; links < 0x18; links += 8)

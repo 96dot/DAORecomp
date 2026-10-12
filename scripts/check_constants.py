@@ -1,4 +1,4 @@
-"""Checks that the game's IDs, Title Update 6's hash and the build tools' license
+"""Checks that the game's IDs, the title updates' hashes and the build tools' license
 link, kept in installer/deps.py for the installer, and the appended installer's
 magic (installer/pipeline.py), have the same values where the program keeps them;
 and that the file and folder names both sides use are spelt the same.
@@ -36,6 +36,7 @@ CHECKS = [
     ("DAORecomp/content/install.cpp", "kTitleId", f"0x{deps.GAME_TITLE_ID:08X}"),
     ("DAORecomp/content/install.cpp", "kMediaId", f"0x{deps.GAME_MEDIA_ID:08X}"),
     ("DAORecomp/kernel/title_update.cpp", "kTu6XexpSha1", f'"{deps.TU6_XEXP_SHA1.upper()}"'),
+    ("DAORecomp/kernel/title_update.cpp", "kTu7XexpSha1", f'"{deps.TU7_XEXP_SHA1.upper()}"'),
 ]
 
 # (file, a name the installer uses, as a string literal there)

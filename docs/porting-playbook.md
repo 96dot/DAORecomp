@@ -55,6 +55,20 @@ one pass when copying, with a script, before changing anything else.
 - **Redo per game:** every hook address below, the Graphics tab ActionScript, the HDR
   tonemapper replacement (the new game's tonemap shader is different).
 
+### Later title updates
+
+Before recompiling another title update as a build of its own, compare its image with
+the one already built: `xexdump <default.xex> <out> <default.xexp>` dumps a patched
+image, and a word-by-word diff of each section shows what changed. DAO's Title Update
+7 has 6's `.text` layout and `.data`, and differs in six instructions: five address a
+`.data` global four bytes lower (0x83299A5C, not 0x83299A60; nothing else uses
+either), and one is a version number (0x304D in 6, 0x32FF in 7) stored by the
+constructor at 0x82620A10. Its image is 64 KB bigger, all of it `.reloc`. Code
+generated from 7's patch with `config/DAO_tu6.toml` differs from 6's in exactly those
+six instructions and `PPC_IMAGE_SIZE`. So 7 runs on 6's build: a hook sets the
+version number, and the loader takes either image size, copying no further than the
+build's (the function table follows the image).
+
 ## DAO's hooks, and how each was found
 
 Each line: what it is, DAO's address (disc / TU6), how it was found, what to look for in

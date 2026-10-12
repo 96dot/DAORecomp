@@ -1,4 +1,4 @@
-// Conversations' held shots (Title Update 6 code only): while a shot is held, a
+// Conversations' held shots (title update code only): while a shot is held, a
 // render job runs every frame, setting a "running" byte at its start and clearing
 // it at its end. To end the hold, the update thread polls that byte with Sleep(0)
 // until it reads clear. But the job queues itself again at once, so the byte is
