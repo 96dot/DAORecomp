@@ -27,7 +27,7 @@ namespace dao::launcher
         constexpr std::string_view kDownloadPrefix = "https://github.com/96dot/DAORecomp/releases/download/";
         // The exe players download (setup, scripts/build_setup_exe.py): it updates
         // the install it's given. Releases also carry it as DAORecomp-Installer.exe,
-        // the name launchers before v0.6 look for.
+        // the name launchers up to v0.5.1 look for.
         constexpr std::string_view kInstallerName = "DAORecomp.exe";
         constexpr std::string_view kDigestPrefix = "sha256:";
         // Sanity bounds on what's downloaded: the list is ~100 KB, the installer
@@ -235,12 +235,6 @@ namespace dao::launcher
                 notes += "...\n";
             }
             return notes;
-        }
-
-        bool IsUnderWine()
-        {
-            const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-            return ntdll && GetProcAddress(ntdll, "wine_get_version");
         }
     }
 

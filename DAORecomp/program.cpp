@@ -30,6 +30,12 @@ namespace dao
         return L"\"" + text + L"\"";
     }
 
+    bool IsUnderWine()
+    {
+        const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        return ntdll && GetProcAddress(ntdll, "wine_get_version");
+    }
+
     bool StartProgram(const fs::path& program, std::wstring_view arguments, DWORD flags, const fs::path& folder)
     {
         std::wstring command = QuoteArgument(program) + L" " + std::wstring(arguments);

@@ -72,13 +72,8 @@ namespace dao::launcher
         DWORD exitCode_ = 0;
     };
 
-    // The installer's work folder, as installer/util.py has it: the build tools, the
-    // build, the installer itself and setup's log.
+    // The installer's work folder, as installer/util.py has it (DAO_WORK_DIR, else
+    // %LOCALAPPDATA%\DAORecomp-build): the build tools, the build, the installer
+    // itself and setup's log.
     std::filesystem::path InstallerWorkFolder();
-
-    // How to run the installer: DAO_INSTALL_ENGINE (an executable, or install.py run
-    // with Python, for development), else the one appended to this program
-    // (scripts/build_setup_exe.py), extracted to the work folder. Empty, with
-    // `error`, if there's none.
-    std::wstring InstallerCommand(std::string& error);
 }

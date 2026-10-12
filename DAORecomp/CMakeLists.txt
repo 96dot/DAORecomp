@@ -47,8 +47,9 @@ if (DAO_LAUNCHER_ONLY)
     # xenia-gpu: the texture layouts, for converting mods' textures.
     target_link_libraries(DAORecomp PRIVATE
         fmt::fmt xenia-gpu SDL3::SDL3-static imgui shell32 winhttp bcrypt)
-    # A window program: no console when it's double-clicked.
-    target_link_options(DAORecomp PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
+    # A window program: no console when it's double-clicked. Its DLLs load from
+    # System32 only, not from the Downloads folder it's run from.
+    target_link_options(DAORecomp PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup /DEPENDENTLOADFLAG:0x800)
     target_precompile_headers(DAORecomp PRIVATE stdafx.h)
     return()
 endif()

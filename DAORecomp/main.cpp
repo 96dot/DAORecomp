@@ -249,7 +249,8 @@ int main(int argc, char** argv)
     }
 
     if (dao::launcher::ShouldShow(argc, argv, userRoot) &&
-        !dao::launcher::Run(gameRoot, userRoot, dao::launcher::ShowsMods(argc, argv)))
+        !dao::launcher::Run(gameRoot, userRoot, dao::launcher::ShowsMods(argc, argv),
+            dao::launcher::AddsToSteam(argc, argv)))
         return 0;
 
     AddVectoredExceptionHandler(0, CrashHandler);

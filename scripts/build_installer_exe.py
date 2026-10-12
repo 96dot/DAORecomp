@@ -1,5 +1,7 @@
 """Builds DAORecomp-Installer.exe: the installer plus the project source in one file
-(PyInstaller), so users need neither Python nor git. Run from a git checkout:
+(PyInstaller), so users need neither Python nor git. It is the installer engine that
+scripts/build_setup_exe.py appends to DAORecomp.exe, what players download (the engine
+alone still runs with --gui). Run from a git checkout:
 
     python scripts/build_installer_exe.py        -> dist/DAORecomp-Installer.exe
 

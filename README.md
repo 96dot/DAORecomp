@@ -32,22 +32,25 @@ You need:
 
 ### Windows
 
-Run **DAORecomp-Installer.exe**. Pick the ISO and an install folder, accept the build
-tools license, and press **Install**. Nothing else needs to be installed first: the
-installer downloads what it needs (including a portable git if you have none). When it
-is done, **Play** starts the game; it can also add Start menu and desktop shortcuts.
+Download **DAORecomp.exe** from the releases and run it: it opens on its Install page,
+drawn like the launcher (with the title screen from your disc once you pick it). Pick the
+ISO and an install folder, accept the build tools license, and press **Install**.
+Nothing else needs to be installed first: it downloads what it needs (including a
+portable git if you have none). It builds the game into the install folder as a new
+`DAORecomp.exe`, which then opens as the launcher: **Play** starts the game. It can also
+add Start menu and desktop shortcuts, and add the game to Steam.
 
-From a terminal instead:
+The disc image and the folder can be given to it (or the ISO dropped on it):
 
 ```
-DAORecomp-Installer.exe --iso "D:\Games\Dragon Age Origins.iso" --dest "D:\Games\DAORecomp" --shortcuts
+DAORecomp.exe --iso "D:\Games\Dragon Age Origins.iso" --dest "D:\Games\DAORecomp"
 ```
 
 The tools and the build go into `%LOCALAPPDATA%\DAORecomp-build` (set `DAO_WORK_DIR` to
 use another folder). Keep it and a newer installer only rebuilds what changed; delete it
 to get the space back.
 
-Windows may warn about the installer because it isn't code-signed (*More info* →
+Windows may warn about `DAORecomp.exe` because it isn't code-signed (*More info* →
 *Run anyway*).
 
 #### Title Update 6 and downloadable content
@@ -93,9 +96,9 @@ Running the installer again resumes an interrupted install.
 ### Updating
 
 The launcher looks for a newer release when it opens and, if there is one, shows an
-**Update** item with the release notes. It downloads the new installer into `update/`
-in the install folder, checks it against the SHA-256 GitHub lists for it, and runs it
-on the same folder; the installer rebuilds only what changed (the disc image isn't
+**Update** item with the release notes. It downloads the new release's `DAORecomp.exe`
+into `update/` in the install folder, checks it against the SHA-256 GitHub lists for it,
+and runs it on the same folder; it rebuilds only what changed (the disc image isn't
 needed again) and keeps your saves, settings and mods. The checksum catches a damaged
 or altered download; like the release itself, it comes from this GitHub repository.
 While the version is 0.x, pre-releases are offered too.
@@ -106,8 +109,8 @@ or with `check_updates = false` in the `[launcher]` section of `userdata/config.
 Builds that aren't releases (`dev`, or a changed checkout of a release) don't check.
 With the launcher hidden there is no check: open it now and then (hold Shift).
 
-To update by hand, run a newer installer and choose the same install folder (or
-`--dest` alone from a terminal). Under Wine or Proton the launcher only links to the
+To update by hand, run a newer release's `DAORecomp.exe` and choose the same install
+folder (or give it `--dest`). Under Wine or Proton the launcher only links to the
 release page: update the checkout (`git pull`, or check out the new tag) and run
 `python3 install.py --dest <install folder>`.
 
@@ -137,6 +140,12 @@ saves, installed DLC, logs, the shader cache, and the Options menu it generates)
   Windows' serif fonts (Palatino Linotype, Georgia or Times New Roman). It works with
   a mouse, the keyboard or a gamepad (Start plays). `--launcher` shows it anyway,
   `--mods` opens it on its Mods page, and `--play` skips it.
+
+  *Configure → Advanced → Add to Steam* adds the game to Steam as a non-Steam game, for
+  each Steam account on the PC, with library artwork drawn from the title screen. Steam
+  starts it with `--play`, straight into the game (for Big Picture). Steam has to be
+  closed for that: the launcher asks first, and starts it again after. The old
+  `shortcuts.vdf` is kept beside it as `shortcuts.vdf.daorecomp-backup`.
 - **Linux:** the program is a Windows executable; run it with Wine or Proton.
   - Steam: *Add a Non-Steam Game* → `DAORecomp.exe`, then in its properties force a
     Proton version (Proton includes vkd3d-proton for Direct3D 12).
@@ -171,8 +180,12 @@ start, so this happens once per place.
 - `CMakeLists.txt` builds the runtime (`DAORecomp/`), Xenia's GPU/UI code
   (`xenia/src`, vendored and patched) and the recompiled game code (`ppc/`, generated).
 - `cmake/clang-cl-xwin.cmake` is the toolchain the installer uses on both systems.
-- `scripts/build_installer_exe.py` builds `dist/DAORecomp-Installer.exe` (PyInstaller; it
-  bundles the files tracked by git). CI builds it too (the *Windows installer* workflow).
+- `scripts/build_setup_exe.py` builds `dist/DAORecomp.exe`, what players download: the
+  launcher alone (`-DDAO_LAUNCHER_ONLY=ON`) with the installer appended to it, which it
+  unpacks to run. The installer is `scripts/build_installer_exe.py`'s PyInstaller exe
+  (it bundles the files tracked by git). CI builds both (the *Windows installer*
+  workflow) and publishes `DAORecomp.exe` also as `DAORecomp-Installer.exe`, the name
+  launchers up to v0.5.1 update with.
 - `config/DAO.toml` and `config/DAO_switch_tables.toml` tell XenonRecomp where the game's
   functions and jump tables are; `scripts/patch_recompiler.py` adds the PowerPC
   instructions XenonRecomp lacked.

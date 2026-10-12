@@ -54,3 +54,5 @@ the result here.
 - `untile.py`: raw Xbox 360 tiled 32bpp texture data (a save's `scrnshot.bin`, a memory
   dump) to PNG, to see what the CPU got from the GPU.
 - `set_config.py`, `saves.py`: the config and save guards `run_game.sh` uses.
+- `DAO_STEAM_ROOT=<folder>`: the launcher's *Add to Steam* uses that folder as Steam's
+  (with `userdata/<account>/config/` inside), to test it without touching the real Steam.

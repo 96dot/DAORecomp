@@ -34,34 +34,58 @@ namespace dao::launcher
         };
         static_assert(sizeof(EngineFooter) == 64);
 
-        bool Sha256(const fs::path& path, std::array<uint8_t, 32>& digest)
+        // This program's file, opened once, at the first install: when it's the
+        // install's DAORecomp.exe, the installer renames it (to DAORecomp.old.exe) and
+        // puts the game's there, before a retry needs the installer again.
+        HANDLE Self()
+        {
+            static const HANDLE self = CreateFileW(ProgramPath().c_str(), GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            return self;
+        }
+
+        bool ReadAt(HANDLE file, uint64_t offset, void* data, DWORD size, DWORD& read)
+        {
+            OVERLAPPED at = {};
+            at.Offset = DWORD(offset);
+            at.OffsetHigh = DWORD(offset >> 32);
+            read = 0;
+            return ReadFile(file, data, size, &read, &at) != 0;
+        }
+
+        // Opened so others may only read it (until it has started), and its SHA-256.
+        HANDLE OpenChecked(const fs::path& path, std::array<uint8_t, 32>& digest)
         {
             const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                 FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (file == INVALID_HANDLE_VALUE)
-                return false;
             uint64_t size = 0;
-            const bool hashed = HashFile(file, BCRYPT_SHA256_ALGORITHM, digest, size);
-            CloseHandle(file);
-            return hashed;
+            if (file != INVALID_HANDLE_VALUE && HashFile(file, BCRYPT_SHA256_ALGORITHM, digest, size))
+                return file;
+            if (file != INVALID_HANDLE_VALUE)
+                CloseHandle(file);
+            return nullptr;
         }
 
         // The installer appended to this program, extracted (once) next to the build
-        // tools; checked by its SHA-256 every time, as the folder is the player's.
-        fs::path EmbeddedInstaller(std::string& error)
+        // tools; checked by its SHA-256 every time, as the folder is the player's, and
+        // `lock`ed from then until it runs.
+        fs::path EmbeddedInstaller(std::string& error, HANDLE& lock)
         {
-            const fs::path self = ProgramPath();
-            std::ifstream in(self, std::ios::binary);
+            const HANDLE self = Self();
+            LARGE_INTEGER selfSize = {};
             EngineFooter footer = {};
-            std::error_code ec;
-            const uintmax_t selfSize = fs::file_size(self, ec);
-            if (!in || ec || selfSize < sizeof(footer) ||
-                !in.seekg(std::streamoff(selfSize - sizeof(footer))) ||
-                !in.read(reinterpret_cast<char*>(&footer), sizeof(footer)) ||
-                std::string_view(footer.magic, sizeof(footer.magic)) != kEngineMagic ||
-                footer.offset > selfSize || footer.size > selfSize - sizeof(footer) - footer.offset)
+            DWORD read = 0;
+            constexpr uint64_t kFooterSize = sizeof(footer);
+            if (self == INVALID_HANDLE_VALUE || !GetFileSizeEx(self, &selfSize) ||
+                uint64_t(selfSize.QuadPart) < kFooterSize ||
+                !ReadAt(self, uint64_t(selfSize.QuadPart) - kFooterSize, &footer, DWORD(kFooterSize), read) ||
+                read != kFooterSize || std::string_view(footer.magic, sizeof(footer.magic)) != kEngineMagic ||
+                footer.offset > uint64_t(selfSize.QuadPart) - kFooterSize ||
+                footer.size > uint64_t(selfSize.QuadPart) - kFooterSize - footer.offset)
             {
-                error = "this build has no installer in it (DAO_INSTALL_ENGINE names one)";
+                LOGE("Install: no installer appended to {} (DAO_INSTALL_ENGINE names one in development)",
+                    Utf8(ProgramPath()));
+                error = "this copy of DAORecomp.exe is incomplete: download it again";
                 return {};
             }
             std::array<uint8_t, 32> wanted;
@@ -70,28 +94,34 @@ namespace dao::launcher
             const fs::path engine = folder / fmt::format("DAORecomp-Installer-{:02x}{:02x}{:02x}{:02x}.exe",
                 wanted[0], wanted[1], wanted[2], wanted[3]);
             std::array<uint8_t, 32> digest;
-            if (Sha256(engine, digest) && digest == wanted)
+            if ((lock = OpenChecked(engine, digest)) && digest == wanted)
                 return engine;
+            Close(lock);
 
+            std::error_code ec;
             fs::create_directories(folder, ec);
             const fs::path part = fs::path(engine).concat(L".part");
             {
                 std::ofstream out(part, std::ios::binary | std::ios::trunc);
-                in.clear();
-                in.seekg(std::streamoff(footer.offset));
                 std::vector<char> chunk(1 << 20);
-                for (uint64_t left = footer.size; left && out && in;)
+                for (uint64_t at = footer.offset, end = footer.offset + footer.size; at < end && out;)
                 {
-                    const size_t n = size_t(std::min<uint64_t>(left, chunk.size()));
-                    in.read(chunk.data(), std::streamsize(n));
-                    out.write(chunk.data(), std::streamsize(in.gcount()));
-                    left -= uint64_t(in.gcount());
-                    if (in.gcount() == 0)
+                    if (!ReadAt(self, at, chunk.data(), DWORD(std::min<uint64_t>(end - at, chunk.size())), read) ||
+                        !read)
                         break;
+                    out.write(chunk.data(), std::streamsize(read));
+                    at += read;
                 }
             }
-            if (!Sha256(part, digest) || digest != wanted || (fs::rename(part, engine, ec), ec))
+            // (Checked again once renamed, through the handle that keeps it so.)
+            if (const HANDLE checked = OpenChecked(part, digest))
+                CloseHandle(checked);
+            else
+                digest = {};
+            if (digest != wanted || (fs::rename(part, engine, ec), ec) || !(lock = OpenChecked(engine, digest)) ||
+                digest != wanted)
             {
+                Close(lock);
                 fs::remove(part, ec);
                 error = fmt::format("can't unpack the installer into {}", Utf8(folder));
                 return {};
@@ -99,26 +129,32 @@ namespace dao::launcher
             LOGI("Install: unpacked the installer to {}", Utf8(engine));
             return engine;
         }
+
+        // How to run the installer: DAO_INSTALL_ENGINE (an executable, or install.py
+        // run with Python, for development), else the one appended to this program
+        // (scripts/build_setup_exe.py), extracted to the work folder and `lock`ed.
+        // Empty, with `error`, if there's none.
+        std::wstring InstallerCommand(std::string& error, HANDLE& lock)
+        {
+            if (const wchar_t* engine = _wgetenv(L"DAO_INSTALL_ENGINE"); engine && *engine)
+            {
+                const fs::path path(engine);
+                // A script: the Python on PATH.
+                if (Lower(Utf8(path.extension())) == ".py")
+                    return L"python " + QuoteArgument(path);
+                return QuoteArgument(path);
+            }
+            const fs::path engine = EmbeddedInstaller(error, lock);
+            return engine.empty() ? std::wstring() : QuoteArgument(engine);
+        }
     }
 
     fs::path InstallerWorkFolder()
     {
+        if (const wchar_t* work = _wgetenv(L"DAO_WORK_DIR"); work && *work)
+            return fs::absolute(fs::path(work));
         const wchar_t* local = _wgetenv(L"LOCALAPPDATA");
         return local && *local ? fs::path(local) / "DAORecomp-build" : fs::temp_directory_path() / "DAORecomp-build";
-    }
-
-    std::wstring InstallerCommand(std::string& error)
-    {
-        if (const wchar_t* engine = _wgetenv(L"DAO_INSTALL_ENGINE"); engine && *engine)
-        {
-            const fs::path path(engine);
-            // A script: the Python on PATH (development only).
-            if (Lower(Utf8(path.extension())) == ".py")
-                return L"python " + QuoteArgument(path);
-            return QuoteArgument(path);
-        }
-        const fs::path engine = EmbeddedInstaller(error);
-        return engine.empty() ? std::wstring() : QuoteArgument(engine);
     }
 
     InstallRunner::~InstallRunner()
@@ -149,7 +185,17 @@ namespace dao::launcher
         pending_.clear();
         ended_ = false;
 
-        std::wstring command = InstallerCommand(error);
+        // A quote in a path would end its argument early (no Windows path has one).
+        for (const fs::path* path : { &request.dest, &request.iso, &request.titleUpdate })
+        {
+            if (path->native().find(L'"') != std::wstring::npos)
+            {
+                error = fmt::format("{} isn't a valid path", Utf8(*path));
+                return false;
+            }
+        }
+        HANDLE lock = nullptr;
+        std::wstring command = InstallerCommand(error, lock);
         if (command.empty())
             return false;
         command += L" --progress-json --dest " + QuoteArgument(request.dest);
@@ -182,12 +228,18 @@ namespace dao::launcher
         startup.hStdOutput = writeEnd;
         startup.hStdError = writeEnd;
         PROCESS_INFORMATION info = {};
+        // In the work folder: not where setup was started from (Downloads), whose
+        // files (a git.exe) the installer's tools would find first.
+        const fs::path work = InstallerWorkFolder();
+        std::error_code ec;
+        fs::create_directories(work, ec);
         const bool started = job_ &&
             SetInformationJobObject(job_, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) &&
             CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
-                nullptr, nullptr, &startup, &info);
+                nullptr, work.c_str(), &startup, &info);
         const DWORD startError = GetLastError();
         CloseHandle(writeEnd);
+        Close(lock);
         if (!started)
         {
             error = fmt::format("can't start the installer (error {})", startError);

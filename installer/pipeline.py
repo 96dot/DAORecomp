@@ -335,26 +335,38 @@ def _copy_when_free(reporter, src, dst, wait=30.0, interval=0.5):
     raise InstallError(f"{dst} is in use. Close the game and run the installer again.")
 
 
-def _move_running_exe_aside(exe):
-    """The launcher that runs the installer may be this exe: Windows doesn't let a
-    running exe be replaced, but lets it be renamed. The new exe deletes the old one
-    (DAORecomp.old.exe) when it starts."""
-    if not IS_WINDOWS or not exe.exists():
+def _replace_exe(reporter, built, exe):
+    """The program that runs the installer may be this exe (setup in the install
+    folder, or the launcher updating it): Windows doesn't let a running exe be
+    replaced, but lets it be renamed. Then the new exe deletes the old one
+    (DAORecomp.old.exe) when it starts; if the copy fails, the old one is put back."""
+    try:
+        shutil.copy2(built, exe)
         return
+    except PermissionError:
+        if not IS_WINDOWS:
+            raise
     old = exe.with_name("DAORecomp.old.exe")
     try:
         old.unlink(missing_ok=True)
         exe.rename(old)
     except OSError:
-        pass  # Still running from an earlier update, or not ours to move: copying waits.
+        old = None  # Still running from an earlier update, or not ours to move: copying waits.
+    try:
+        _copy_when_free(reporter, built, exe)
+    except BaseException:
+        if old is not None:
+            exe.unlink(missing_ok=True)
+            old.rename(exe)
+        raise
 
 
 def install(reporter, built, dest, with_shortcuts=False):
     dest.mkdir(parents=True, exist_ok=True)
-    files = ["DAORecomp.exe", "amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll"]
-    _move_running_exe_aside(dest / "DAORecomp.exe")
-    for name in files:
+    # The DLLs first: while the game runs they can't be replaced, and the exe is left as it was.
+    for name in ("amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll"):
         _copy_when_free(reporter, built / name, dest / name)
+    _replace_exe(reporter, built / "DAORecomp.exe", dest / "DAORecomp.exe")
     ffx = REPO / "tools" / "FidelityFX-SDK" / "Kits" / "FidelityFX" / "docs" / "license.md"
     if ffx.exists():
         shutil.copy2(ffx, dest / "amd_fidelityfx_license.md")

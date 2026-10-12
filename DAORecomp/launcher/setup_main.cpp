@@ -34,10 +34,14 @@ namespace
 
 int main(int, char**)
 {
+    // DLLs from System32 only, not from the folder this was downloaded to (where
+    // anything may have been put); with the /DEPENDENTLOADFLAG it's linked with,
+    // which covers the ones loaded before main.
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
-    // --dest <folder> and --update, as the launcher's updater passes them (it also
-    // passes the old installer's --gui, which needs nothing here); --iso <image>, or
+    // --dest <folder> and --update, as the launcher's updater passes them (launchers
+    // before this also pass the old installer's --gui, which needs nothing here); --iso <image>, or
     // an .iso file dropped on the exe. The wide command line, as argv is in the ANSI
     // code page.
     fs::path dest, iso;
@@ -68,13 +72,15 @@ int main(int, char**)
     dao::log::Init(work / "setup.log");
     LOGI("Dragon Age: Origins recomp setup - install folder {}", dao::Utf8(dest));
 
-    const fs::path installed = dao::launcher::RunSetup(dest, iso, update);
-    if (installed.empty())
+    const dao::launcher::SetupResult setup = dao::launcher::RunSetup(dest, iso, update);
+    if (setup.installed.empty())
         return 0;
-    // The new game's launcher, shown even if the install's settings skip it.
-    if (!dao::StartProgram(installed, L"--launcher", 0, installed.parent_path()))
+    // The new game's launcher, shown even if the install's settings skip it; it adds
+    // the game to Steam if chosen (it has the game's art for that).
+    if (!dao::StartProgram(setup.installed, setup.addToSteam ? L"--launcher --add-to-steam" : L"--launcher", 0,
+            setup.installed.parent_path()))
     {
-        LOGE("Setup: can't start {} (error {})", dao::Utf8(installed), GetLastError());
+        LOGE("Setup: can't start {} (error {})", dao::Utf8(setup.installed), GetLastError());
         return 1;
     }
     return 0;

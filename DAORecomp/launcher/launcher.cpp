@@ -18,11 +18,13 @@
 #include "content/install.h"
 #include "content/xiso.h"
 #include "launcher/install_runner.h"
+#include "launcher/steam.h"
 #include "mods/convert/convert.h"
 #include "mods/mod_install.h"
 #include "mods/mods.h"
 #include "text.h"
 #include "patches/patches.h"
+#include "program.h"
 #include "settings.h"
 #include "version.h"
 
@@ -225,6 +227,26 @@ namespace dao::launcher
             float width = 0, height = 0;
         };
 
+        // Adding the game to Steam (from the Advanced tab, or as setup was asked to).
+        enum class SteamStep
+        {
+            None,
+            // The artwork is drawn before the next frame.
+            Start,
+            // Steam is open: asking to close it.
+            Confirm,
+            // Closing Steam, adding the game, starting Steam again (in the background).
+            Working,
+            Done,
+        };
+
+        struct SteamResult
+        {
+            // The Steam accounts that got the game.
+            int accounts = 0;
+            std::string error;
+        };
+
         // A line of release notes, ready to show.
         struct NoteLine
         {
@@ -343,6 +365,15 @@ namespace dao::launcher
             SDL_Renderer* renderer = nullptr;
             std::string artIso;
             std::future<bool> isoArt;
+            // Add to Steam: Steam's folder (empty if there's no Steam to add to), the
+            // step, the library artwork, the work in the background and how it went.
+            fs::path steamPath;
+            SteamStep steamStep = SteamStep::None;
+            std::vector<steam::Artwork> steamArt;
+            std::future<SteamResult> steamTask;
+            SteamResult steamResult;
+            // Setup: have the installed game's launcher add it to Steam.
+            bool installSteam = false;
             // DAO_LAUNCHER_SCREENSHOTS=<dir>: show each view, save it as BMP, quit.
             fs::path screenshotDir;
             int screenshotFrame = 0;
@@ -377,7 +408,8 @@ namespace dao::launcher
             float cover = 1, coverX = 0, coverY = 0;
             float fit = 1, fitY = 0;
 
-            explicit Layout(const ImGuiViewport* viewport) : pos(viewport->Pos), size(viewport->Size)
+            explicit Layout(const ImGuiViewport* viewport) : Layout(viewport->Pos, viewport->Size) {}
+            Layout(ImVec2 at, ImVec2 extent) : pos(at), size(extent)
             {
                 cover = std::max(size.x / kStageWidth, size.y / kStageHeight);
                 coverX = (size.x - kStageWidth * cover) * 0.5f;
@@ -466,13 +498,12 @@ namespace dao::launcher
 
         // The title screen, animated as the game's: the clouds drifting, haze passing
         // over the landscape, the vignette flickering as by firelight, the embers and
-        // the fire glowing, the mist drifting. `dim` darkens it behind the other views.
-        void DrawScene(const State& st, const Layout& layout, float dim)
+        // the fire glowing, the mist drifting; as it is `t` seconds in (a double: the
+        // scene runs for as long as the launcher is open). `dim` darkens it behind the
+        // other views.
+        void DrawScene(ImDrawList* draw, const State& st, const Layout& layout, float dim, double t)
         {
-            ImDrawList* draw = ImGui::GetBackgroundDrawList();
             draw->AddRectFilled(layout.pos, layout.Max(), kSky);
-            // In double: the scene runs for as long as the launcher is open.
-            const double t = ImGui::GetTime();
             const float scale = kSceneScale * layout.cover;
             // A point of the background.
             auto at = [&](float x, float y) {
@@ -566,6 +597,40 @@ namespace dao::launcher
             const float subtitleSize = size * kSubtitleScale;
             const ImVec2 subtitleExtent = font->CalcTextSizeA(subtitleSize, FLT_MAX, 0, subtitle);
             ShadowText(draw, st, font, subtitleSize, ImVec2(at.x - subtitleExtent.x, at.y + size), kText, subtitle);
+        }
+
+        // The logo's two parts where the title screen has them (stage pixels), and
+        // their bounds.
+        struct LogoArt
+        {
+            const Texture* logo = nullptr;
+            const Texture* origins = nullptr;
+            ImVec2 logoAt, originsAt, min, max;
+        };
+
+        std::optional<LogoArt> FindLogoArt(const State& st)
+        {
+            LogoArt art = { Art(st, kLogo.sprite), Art(st, kOrigins) };
+            if (!art.logo || !art.origins)
+                return std::nullopt;
+            art.logoAt = ImVec2(kLogo.x, kLogo.y);
+            art.originsAt = ImVec2(kOriginsRight - art.origins->width, kOriginsY);
+            art.min = ImVec2(std::min(art.logoAt.x, art.originsAt.x), std::min(art.logoAt.y, art.originsAt.y));
+            art.max = ImVec2(std::max(art.logoAt.x + art.logo->width, kOriginsRight),
+                std::max(art.logoAt.y + art.logo->height, art.originsAt.y + art.origins->height));
+            return art;
+        }
+
+        // The logo alone, `width` wide, centred on `center`.
+        void DrawLogoArt(ImDrawList* draw, const LogoArt& art, ImVec2 center, float width)
+        {
+            const float scale = width / (art.max.x - art.min.x);
+            const ImVec2 origin(center.x - width * 0.5f, center.y - (art.max.y - art.min.y) * scale * 0.5f);
+            auto place = [&](ImVec2 at) {
+                return ImVec2(origin.x + (at.x - art.min.x) * scale, origin.y + (at.y - art.min.y) * scale);
+            };
+            DrawSprite(draw, *art.logo, place(art.logoAt), scale, 1.0f);
+            DrawSprite(draw, *art.origins, place(art.originsAt), scale, 1.0f);
         }
 
         // An animated 0..1 for an item: towards 1 while `on`.
@@ -978,8 +1043,9 @@ namespace dao::launcher
 
         void MainView(State& st, const Layout& layout)
         {
-            // Not while mods are being added or converted (they'd be left out).
-            const bool canPlay = st.gameFound && !ModsBusy(st);
+            // Not while mods are being added or converted (they'd be left out), or the
+            // game added to Steam.
+            const bool canPlay = st.gameFound && !ModsBusy(st) && st.steamStep == SteamStep::None;
             DrawLogo(st, layout);
 
             if (MenuItem(st, layout, "Play", kMenuTop, canPlay) ||
@@ -1143,6 +1209,236 @@ namespace dao::launcher
             }
         }
 
+        // A draw list drawn into an image of `art`'s size, read back into it as RGBA.
+        bool RenderToPixels(SDL_Renderer* renderer, ImDrawList& list, steam::Artwork& art)
+        {
+            SDL_Texture* target =
+                SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, art.width, art.height);
+            if (!target)
+                return false;
+            SDL_Surface* pixels = nullptr;
+            if (SDL_SetRenderTarget(renderer, target))
+            {
+                SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+                SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+                SDL_RenderClear(renderer);
+                ImDrawData data;
+                data.Valid = true;
+                data.DisplaySize = ImVec2(float(art.width), float(art.height));
+                data.FramebufferScale = ImVec2(1.0f, 1.0f);
+                data.AddDrawList(&list);
+                ImGui_ImplSDLRenderer3_RenderDrawData(&data, renderer);
+                pixels = SDL_RenderReadPixels(renderer, nullptr);
+                SDL_SetRenderTarget(renderer, nullptr);
+            }
+            SDL_DestroyTexture(target);
+            SDL_Surface* rgba = pixels ? SDL_ConvertSurface(pixels, SDL_PIXELFORMAT_RGBA32) : nullptr;
+            SDL_DestroySurface(pixels);
+            const bool ok = rgba && rgba->w == art.width && rgba->h == art.height;
+            if (ok)
+            {
+                const size_t row = size_t(art.width) * 4;
+                art.rgba.resize(row * art.height);
+                for (int y = 0; y < art.height; y++)
+                    memcpy(art.rgba.data() + row * y, static_cast<const uint8_t*>(rgba->pixels) + size_t(rgba->pitch) * y,
+                        row);
+            }
+            SDL_DestroySurface(rgba);
+            return ok;
+        }
+
+        // The title screen this far in, for Steam's artwork: the fire up.
+        constexpr double kSteamArtTime = 6.0;
+
+        // Steam's library images, from the title screen: the scene with the logo for
+        // the cover and the wide capsule, without it for the hero image (Steam puts
+        // the logo over that), and the logo alone. None without the game's art.
+        std::vector<steam::Artwork> RenderSteamArt(const State& st)
+        {
+            const std::optional<LogoArt> logo = FindLogoArt(st);
+            if (!logo)
+                return {};
+            constexpr int kLogoImageWidth = 1280;
+            // (Bounded, as the art comes from the player's disc: the game's is 0.25.)
+            const float logoAspect =
+                std::clamp((logo->max.y - logo->min.y) / (logo->max.x - logo->min.x), 0.05f, 1.0f);
+            struct Image
+            {
+                const char* suffix;
+                int width, height;
+                bool scene;
+                // The logo's centre (as a share of the height) and width; none at 0.
+                float logoY, logoWidth;
+            };
+            // Steam's sizes; the logo's placing chosen by eye. The logo image is the
+            // logo with a small margin.
+            const Image images[] = {
+                { "p", 600, 900, true, 0.24f, 540.0f },
+                { "", 920, 430, true, 0.5f, 640.0f },
+                { "_hero", 1920, 620, true, 0.0f, 0.0f },
+                { "_logo", kLogoImageWidth, int(kLogoImageWidth * 0.95f * logoAspect + 0.5f) + 16, false, 0.5f,
+                    kLogoImageWidth * 0.95f },
+            };
+            std::vector<steam::Artwork> out;
+            for (const Image& image : images)
+            {
+                const ImVec2 size(float(image.width), float(image.height));
+                ImDrawList list(ImGui::GetDrawListSharedData());
+                list._ResetForNewFrame();
+                list.PushClipRect(ImVec2(0, 0), size);
+                list.PushTextureID(ImGui::GetIO().Fonts->TexID);
+                if (image.scene)
+                    DrawScene(&list, st, Layout(ImVec2(0, 0), size), 0.0f, kSteamArtTime);
+                if (image.logoWidth > 0.0f)
+                    DrawLogoArt(&list, *logo, ImVec2(size.x * 0.5f, size.y * image.logoY), image.logoWidth);
+                steam::Artwork art = { image.suffix, image.width, image.height };
+                if (!RenderToPixels(st.renderer, list, art))
+                {
+                    LOGW("Launcher: can't draw Steam's artwork: {}", SDL_GetError());
+                    return {};
+                }
+                // The scene is opaque, but its multiplied layers leave the target's alpha
+                // as it was (none); the logo, drawn over nothing, comes back with its
+                // colours multiplied by its alpha.
+                for (size_t i = 0; i < art.rgba.size(); i += 4)
+                {
+                    if (image.scene)
+                        art.rgba[i + 3] = 255;
+                    else if (const int alpha = art.rgba[i + 3]; alpha > 0 && alpha < 255)
+                    {
+                        for (size_t c = i; c < i + 3; c++)
+                            art.rgba[c] = uint8_t(std::min(255, (art.rgba[c] * 255 + alpha / 2) / alpha));
+                    }
+                }
+                out.push_back(std::move(art));
+            }
+            return out;
+        }
+
+        // Steam's close takes a while with games' cloud saves to sync, or an update.
+        constexpr std::chrono::seconds kSteamCloseTimeout{ 180 };
+
+        void StartSteamWork(State& st)
+        {
+            st.steamStep = SteamStep::Working;
+            st.steamTask = std::async(std::launch::async,
+                [steamPath = st.steamPath, artwork = std::move(st.steamArt), exe = ProgramPath()] {
+                    SteamResult result;
+                    try
+                    {
+                        const bool wasRunning = steam::IsRunning(steamPath);
+                        if (wasRunning && !steam::Shutdown(steamPath, kSteamCloseTimeout))
+                        {
+                            result.error = "Steam didn't close in time (start it again if it closes later)";
+                            return result;
+                        }
+                        // Started from Steam (Big Picture, a controller), straight into the game.
+                        const steam::Shortcut shortcut = { "Dragon Age: Origins", exe, "--play" };
+                        result.accounts = steam::AddShortcut(steamPath, shortcut, artwork, result.error);
+                        if (wasRunning && !steam::Start(steamPath))
+                            LOGW("Launcher: can't start Steam again (error {})", GetLastError());
+                    }
+                    catch (const std::exception& e)
+                    {
+                        LOGE("Launcher: adding to Steam failed: {}", e.what());
+                        result.error = "something went wrong (see dao.log)";
+                    }
+                    return result;
+                });
+            st.steamArt.clear();
+        }
+
+        // Between frames: the artwork drawn (with the renderer), the work's result taken.
+        void UpdateSteam(State& st)
+        {
+            if (st.steamStep == SteamStep::Start && ImGui::GetFrameCount() > 0)
+            {
+                st.steamArt = RenderSteamArt(st);
+                st.steamResult = {};
+                if (steam::IsRunning(st.steamPath))
+                    st.steamStep = SteamStep::Confirm;
+                else
+                    StartSteamWork(st);
+            }
+            else if (st.steamStep == SteamStep::Working &&
+                st.steamTask.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            {
+                st.steamResult = st.steamTask.get();
+                st.steamStep = SteamStep::Done;
+            }
+        }
+
+        void SteamPopup(State& st)
+        {
+            constexpr const char* kTitle = "Add to Steam";
+            if (st.steamStep == SteamStep::None)
+                return;
+            if (!ImGui::IsPopupOpen(kTitle))
+                ImGui::OpenPopup(kTitle);
+            const float width = 560.0f * st.scale;
+            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0), ImVec2(width, FLT_MAX));
+            if (!ImGui::BeginPopupModal(kTitle, nullptr,
+                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings))
+                return;
+            const bool cancel =
+                ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
+            bool close = false;
+            ImGui::PushTextWrapPos(0.0f);
+            if (st.steamStep == SteamStep::Confirm)
+            {
+                ImGui::TextUnformatted("Steam is open: it has to close to add the game, and is started again after.");
+                ImGui::Spacing();
+                if (ImGui::Button("Close Steam and add"))
+                    StartSteamWork(st);
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel") || cancel)
+                {
+                    close = true;
+                    st.steamArt.clear();
+                }
+                // Cancel (the last item) is the default.
+                if (ImGui::IsWindowAppearing())
+                    ImGui::SetKeyboardFocusHere(-1);
+            }
+            else if (st.steamStep == SteamStep::Done)
+            {
+                const SteamResult& result = st.steamResult;
+                if (result.accounts > 0)
+                    ImGui::TextUnformatted(result.accounts > 1
+                            ? fmt::format("Added to Steam, for its {} accounts on this PC.", result.accounts).c_str()
+                            : "Added to Steam.");
+                else
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, kError);
+                    ImGui::Text("Can't add the game to Steam: %s.", result.error.c_str());
+                    ImGui::PopStyleColor();
+                }
+                if (result.accounts > 0)
+                    HelpText("It's in the library as Dragon Age: Origins, with artwork from the game's menus. Started "
+                             "from Steam, it goes straight into the game; started from its own shortcut, it shows "
+                             "this launcher as before.");
+                // Added for some accounts, not all.
+                if (result.accounts > 0 && !result.error.empty())
+                    HelpText(fmt::format("Not for every account: {}.", result.error).c_str());
+                ImGui::Spacing();
+                if (ImGui::Button("OK") || cancel)
+                    close = true;
+                // (The only item.)
+                if (ImGui::IsWindowAppearing())
+                    ImGui::SetKeyboardFocusHere(-1);
+            }
+            else
+                ImGui::TextUnformatted("Adding the game to Steam...");
+            ImGui::PopTextWrapPos();
+            if (close)
+            {
+                st.steamStep = SteamStep::None;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
         void AdvancedTab(State& st)
         {
             Section("Files");
@@ -1154,6 +1450,17 @@ namespace dao::launcher
                 OpenFile(st.userRoot / "config.toml");
             HelpText("Extra Xenia GPU options go in the [xenia] section. Settings are saved when you press Play "
                      "or close the launcher.");
+
+            Section("Steam");
+            ImGui::BeginDisabled(st.steamPath.empty() || st.steamStep != SteamStep::None);
+            if (ImGui::Button("Add to Steam"))
+                st.steamStep = SteamStep::Start;
+            ImGui::EndDisabled();
+            HelpText(st.steamPath.empty()
+                    ? "Steam isn't installed. (Under Proton or Wine, add the game from Steam itself.)"
+                    : "Adds the game to your Steam library, with artwork from its menus. Started from Steam (Big "
+                      "Picture too), it goes straight into the game. Steam has to close for it: it asks first, and "
+                      "starts Steam again after.");
 
             Section("Updates");
             Label(fmt::format("Version {}", Version()).c_str());
@@ -1940,8 +2247,15 @@ namespace dao::launcher
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(kTextDim));
             ImGui::BeginChild("log", ImVec2(RowWidth(), std::max(height, ImGui::GetTextLineHeight() * 4.0f)),
                 ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
-            for (const std::string& line : installer.Log())
-                ImGui::TextUnformatted(line.c_str());
+            // Only the lines in view (up to kMaxLogLines in all).
+            const std::deque<std::string>& log = installer.Log();
+            ImGuiListClipper clipper;
+            clipper.Begin(int(log.size()));
+            while (clipper.Step())
+            {
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
+                    ImGui::TextUnformatted(log[size_t(i)].c_str());
+            }
             if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
                 ImGui::SetScrollHereY(1.0f);
             ImGui::EndChild();
@@ -1999,6 +2313,12 @@ namespace dao::launcher
             HelpText("Gets the game's files, your saves, settings and mods. The build tools and the build go to "
                      "%LOCALAPPDATA%\\DAORecomp-build (about 12 GB).");
             ImGui::Checkbox("Start menu and desktop shortcuts", &st.installShortcuts);
+            if (st.setupOnly && !st.steamPath.empty())
+            {
+                ImGui::Checkbox("Add to Steam", &st.installSteam);
+                HelpText("With artwork; started from Steam (Big Picture too), it goes straight into the game. Steam "
+                         "has to close for it: the launcher asks first, once the game is installed.");
+            }
             ImGui::Spacing();
             ImGui::Checkbox("I accept the license of the Microsoft C++ build tools and Windows SDK",
                 &st.installAccept);
@@ -2009,9 +2329,9 @@ namespace dao::launcher
                      "update doesn't need this.)");
             ImGui::Spacing();
 
-            const std::string& error = !st.installStartError.empty() ? st.installStartError
-                : state == InstallRunner::State::Failed               ? st.installer.Error()
-                                                                      : st.installStartError;
+            const std::string& error = st.installStartError.empty() && state == InstallRunner::State::Failed
+                ? st.installer.Error()
+                : st.installStartError;
             if (!error.empty())
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, kError);
@@ -2261,12 +2581,25 @@ namespace dao::launcher
         return ReadSettings(userRoot).showLauncher;
     }
 
+    namespace
+    {
+        bool HasArgument(int argc, char** argv, const char* wanted)
+        {
+            if (argc < 2)
+                return false;
+            return std::ranges::any_of(std::span(argv + 1, argv + argc),
+                [wanted](const char* arg) { return strcmp(arg, wanted) == 0; });
+        }
+    }
+
     bool ShowsMods(int argc, char** argv)
     {
-        if (argc < 2)
-            return false;
-        return std::ranges::any_of(std::span(argv + 1, argv + argc),
-            [](const char* arg) { return strcmp(arg, "--mods") == 0; });
+        return HasArgument(argc, argv, "--mods");
+    }
+
+    bool AddsToSteam(int argc, char** argv)
+    {
+        return HasArgument(argc, argv, "--add-to-steam");
     }
 
     namespace
@@ -2275,6 +2608,8 @@ namespace dao::launcher
         {
             // Open on the Mods page.
             bool showMods = false;
+            // Add the game to Steam once open (as setup was asked to).
+            bool addToSteam = false;
             // Setup (the launcher-only build): the Install view for `dest`, started
             // at once with `update` when the folder has the game's files.
             bool setup = false;
@@ -2283,10 +2618,9 @@ namespace dao::launcher
         };
     }
 
-    // The window, until Play (true) or Close; `installed` gets the game setup
-    // installed.
+    // The window, until Play (true) or Close; `setup` gets what setup did.
     static bool RunWindow(const fs::path& gameRoot, const fs::path& userRoot, const RunMode& mode,
-        fs::path* installed)
+        SetupResult* setup)
     {
         if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
         {
@@ -2385,6 +2719,7 @@ namespace dao::launcher
         st.window = window;
         st.renderer = renderer;
         st.setupOnly = mode.setup;
+        st.steamPath = steam::FindSteam();
         if (mode.setup)
         {
             std::error_code ec;
@@ -2394,6 +2729,7 @@ namespace dao::launcher
             st.installIso = Utf8(mode.iso);
             // An update keeps the shortcuts there are (or the player removed).
             st.installShortcuts = !HasGameFiles(st);
+            st.installSteam = !HasGameFiles(st);
             SetView(st, View::Install);
             // The launcher's Update: straight on, as there's nothing to choose.
             if (mode.update && HasGameFiles(st))
@@ -2422,6 +2758,8 @@ namespace dao::launcher
         // (Setup may have no art until a disc image is chosen.)
         if (std::error_code ec; !st.setupOnly || fs::is_regular_file(st.gameRoot / kArtArchive, ec))
             LoadArt(st, renderer);
+        if (mode.addToSteam && !st.steamPath.empty())
+            st.steamStep = SteamStep::Start;
         st.updater = std::make_unique<Updater>();
         if (st.settings.checkForUpdates && !mode.setup)
             st.updater->Check();
@@ -2436,7 +2774,7 @@ namespace dao::launcher
         constexpr int kIdleWaitMs = 100;
 
         Uint64 frameStart = SDL_GetTicksNS();
-        while (!st.play && !st.quit)
+        while ((!st.play && !st.quit) || st.steamStep == SteamStep::Working)
         {
             const SDL_WindowFlags flags = SDL_GetWindowFlags(window);
             const bool background = !(flags & SDL_WINDOW_INPUT_FOCUS) && st.screenshotDir.empty();
@@ -2477,6 +2815,8 @@ namespace dao::launcher
                     (!nav || !nav->ParentWindow || !nav->ParentWindow->ParentWindow);
             }
             ImGui_ImplSDLRenderer3_NewFrame();
+            // (After the renderer's NewFrame, which makes the font texture the art uses.)
+            UpdateSteam(st);
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
 
@@ -2521,7 +2861,8 @@ namespace dao::launcher
             st.fade = st.screenshotDir.empty()
                 ? std::clamp(float(ImGui::GetTime() - st.viewStart) / kFadeSeconds, 0.0f, 1.0f)
                 : 1.0f;
-            DrawScene(st, layout, view == View::Main ? 0.0f : kPanelSceneDim);
+            DrawScene(ImGui::GetBackgroundDrawList(), st, layout, view == View::Main ? 0.0f : kPanelSceneDim,
+                ImGui::GetTime());
             switch (view)
             {
             case View::Main:
@@ -2540,6 +2881,7 @@ namespace dao::launcher
                 InstallView(st, layout);
                 break;
             }
+            SteamPopup(st);
             // Focus moves to the new view's first item in the frame it's shown.
             if (viewChanged && st.view == view)
                 st.viewChanged = false;
@@ -2589,8 +2931,8 @@ namespace dao::launcher
         if (!st.setupOnly)
             SaveSettings(userRoot, st.settings);
         // (Closed while installing: the installer is stopped with st.)
-        if (installed && st.installer.GetState() == InstallRunner::State::Done)
-            *installed = st.installer.Installed();
+        if (setup && st.installer.GetState() == InstallRunner::State::Done)
+            *setup = { st.installer.Installed(), st.installSteam && !st.steamPath.empty() };
         LOGI("Launcher: {}", st.play ? "play" : "quit");
 
         ImGui_ImplSDLRenderer3_Shutdown();
@@ -2605,16 +2947,16 @@ namespace dao::launcher
         return st.play;
     }
 
-    bool Run(const fs::path& gameRoot, const fs::path& userRoot, bool showMods)
+    bool Run(const fs::path& gameRoot, const fs::path& userRoot, bool showMods, bool addToSteam)
     {
-        return RunWindow(gameRoot, userRoot, { .showMods = showMods }, nullptr);
+        return RunWindow(gameRoot, userRoot, { .showMods = showMods, .addToSteam = addToSteam }, nullptr);
     }
 
-    fs::path RunSetup(const fs::path& dest, const fs::path& iso, bool update)
+    SetupResult RunSetup(const fs::path& dest, const fs::path& iso, bool update)
     {
-        fs::path installed;
+        SetupResult result;
         RunWindow(dest / "game", dest / "userdata", { .setup = true, .update = update, .dest = dest, .iso = iso },
-            &installed);
-        return installed;
+            &result);
+        return result;
     }
 }

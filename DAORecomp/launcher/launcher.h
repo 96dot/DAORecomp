@@ -15,14 +15,25 @@ namespace dao::launcher
     // Options > Graphics > Manage mods does).
     bool ShowsMods(int argc, char** argv);
 
-    // Runs the launcher, on the Mods page with `showMods`; false if the player closed
-    // it instead of pressing Play.
-    bool Run(const std::filesystem::path& gameRoot, const std::filesystem::path& userRoot, bool showMods = false);
+    // Whether --add-to-steam asks the launcher to add the game to Steam once it's
+    // open (as setup has it do after installing, when chosen).
+    bool AddsToSteam(int argc, char** argv);
+
+    // Runs the launcher, on the Mods page with `showMods`, adding the game to Steam
+    // with `addToSteam`; false if the player closed it instead of pressing Play.
+    bool Run(const std::filesystem::path& gameRoot, const std::filesystem::path& userRoot, bool showMods = false,
+        bool addToSteam = false);
+
+    struct SetupResult
+    {
+        // The DAORecomp.exe setup installed; empty if it was closed first.
+        std::filesystem::path installed;
+        // Whether that one's launcher is to add the game to Steam.
+        bool addToSteam = false;
+    };
 
     // Setup, the launcher-only build players download: the Install view for `dest`,
     // with `iso` as the disc image if given (started at once with `update` when the
-    // folder has the game's files). Returns the DAORecomp.exe it installed, or
-    // nothing if it was closed first.
-    std::filesystem::path RunSetup(const std::filesystem::path& dest, const std::filesystem::path& iso,
-        bool update);
+    // folder has the game's files).
+    SetupResult RunSetup(const std::filesystem::path& dest, const std::filesystem::path& iso, bool update);
 }

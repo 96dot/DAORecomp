@@ -15,4 +15,7 @@ namespace dao
     // started, with GetLastError saying why.
     bool StartProgram(const std::filesystem::path& program, std::wstring_view arguments, DWORD flags = 0,
         const std::filesystem::path& folder = {});
+
+    // Whether this runs under Wine or Proton.
+    bool IsUnderWine();
 }
