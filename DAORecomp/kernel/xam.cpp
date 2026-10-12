@@ -266,15 +266,20 @@ namespace dao::imp
         for (auto& entry : fs::directory_iterator(ProfileDir(), ec))
         {
             uint32_t id = 0;
-            if (sscanf(dao::Utf8(entry.path().filename()).c_str(), "%08X.bin", &id) != 1)
+            if (entry.path().extension() != ".bin" ||
+                sscanf(dao::Utf8(entry.path().filename()).c_str(), "%08X.bin", &id) != 1)
+                continue;
+            const uint64_t size = entry.file_size(ec);
+            if (ec || size > 0x1000) // (a setting holds at most 0xFFF bytes)
                 continue;
             FILE* f = _wfopen(entry.path().c_str(), L"rb");
             if (!f)
                 continue;
-            std::vector<uint8_t> data(size_t(entry.file_size()));
-            fread(data.data(), 1, data.size(), f);
+            std::vector<uint8_t> data(size_t(size), 0);
+            const bool read = fread(data.data(), 1, data.size(), f) == data.size();
             fclose(f);
-            s_profileSettings[id] = std::move(data);
+            if (read)
+                s_profileSettings[id] = std::move(data);
         }
     }
 
@@ -282,11 +287,18 @@ namespace dao::imp
     {
         std::error_code ec;
         fs::create_directories(ProfileDir(), ec);
-        FILE* f = _wfopen((ProfileDir() / fmt::format("{:08X}.bin", id)).c_str(), L"wb");
-        if (f)
+        // Written next to it and swapped in, so a crash mid-write keeps the old value.
+        const fs::path path = ProfileDir() / fmt::format("{:08X}.bin", id);
+        const fs::path temp = fs::path(path).concat(L".tmp");
+        FILE* f = _wfopen(temp.c_str(), L"wb");
+        if (!f)
+            return;
+        const bool written = fwrite(data.data(), 1, data.size(), f) == data.size();
+        if (fclose(f) != 0 || !written ||
+            !MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
         {
-            fwrite(data.data(), 1, data.size(), f);
-            fclose(f);
+            LOGW("Profile setting {:08X}: can't save it", id);
+            fs::remove(temp, ec);
         }
     }
 
@@ -409,7 +421,8 @@ namespace dao::imp
             std::vector<uint8_t> value;
             if (type == 4 || type == 6)
             {
-                const uint32_t size = s.binary.size;
+                // No more than the setting holds (its id carries the size), as reading it back.
+                const uint32_t size = std::min<uint32_t>(s.binary.size, (id >> 16) & 0xFFF);
                 const uint8_t* src = g_memory.Translate<uint8_t>(s.binary.ptr);
                 value.assign(src, src + size);
             }
@@ -696,6 +709,18 @@ namespace dao::imp
         return std::string(data.fileName, strnlen(data.fileName, sizeof(data.fileName)));
     }
 
+    // A name Windows holds as one folder: not empty, "." or "..", no separators, drive or
+    // stream colons, wildcards or control characters, no trailing dot or space.
+    static bool ValidContentName(const std::string& name)
+    {
+        if (name.empty() || name == "." || name == ".." || name.back() == '.' || name.back() == ' ')
+            return false;
+        return std::ranges::none_of(name, [](char c)
+            {
+                return uint8_t(c) < 32 || std::string_view("<>:\"/\\|?*").find(c) != std::string_view::npos;
+            });
+    }
+
     static fs::path ContentPath(uint32_t contentType, const std::string& fileName)
     {
         return content::ContentFolder(VfsUserRoot(), g_module.titleId, contentType) / fileName;
@@ -716,6 +741,13 @@ namespace dao::imp
             return X_ERROR_INVALID_PARAMETER;
         const std::string root = RootName(rootName);
         const std::string fileName = ContentFileName(*data);
+        // The name becomes a folder in the saves' folder, which "create always" deletes
+        // first: one folder there, never the folder itself or anything outside it.
+        if (!ValidContentName(fileName))
+        {
+            LOGW("XamContentCreateEx: refused the content name '{}'", fileName);
+            return X_ERROR_INVALID_PARAMETER;
+        }
         const fs::path path = ContentPath(data->contentType, fileName);
 
         std::error_code ec;

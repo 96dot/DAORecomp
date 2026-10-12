@@ -513,6 +513,12 @@ namespace dao::imp
             break;
         case XFileRenameInformation:
         {
+            // (The ANSI string after 8 bytes: ReplaceIfExists and the root directory.)
+            if (length < 8 + sizeof(X_ANSI_STRING))
+            {
+                status = X_STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
             const auto* ansi = reinterpret_cast<X_ANSI_STRING*>(info + 8);
             auto target = VfsResolve(AnsiString(ansi));
             std::error_code ec;
@@ -521,6 +527,13 @@ namespace dao::imp
                 status = X_STATUS_OBJECT_PATH_NOT_FOUND;
                 break;
             }
+            // Neither from nor into the disc, the title update or the mods.
+            if (VfsIsReadOnly(file->hostPath) || VfsIsReadOnly(*target))
+            {
+                status = X_STATUS_ACCESS_DENIED;
+                break;
+            }
+            std::lock_guard lock(file->mutex);
             if (file->host != INVALID_HANDLE_VALUE)
             {
                 ::CloseHandle(file->host);

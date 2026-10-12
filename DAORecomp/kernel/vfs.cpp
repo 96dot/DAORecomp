@@ -120,8 +120,48 @@ namespace dao::kernel
         LOGW("VFS: no device {} for overlays", devicePath);
     }
 
-    // The device a guest path lives on and the path relative to the device root.
-    // Caller holds s_vfsMutex.
+    // A path relative to a device root as it is joined to the host folder: "." and ".."
+    // resolved within it (false if ".." would leave it), and no component Windows reads
+    // as something else (a drive or stream ':', a device name such as CON).
+    static bool CleanRest(std::string& rest)
+    {
+        std::vector<std::string> parts;
+        size_t start = 0;
+        while (start <= rest.size())
+        {
+            size_t end = rest.find('\\', start);
+            if (end == std::string::npos)
+                end = rest.size();
+            std::string part = rest.substr(start, end - start);
+            start = end + 1;
+            if (part.empty() || part == ".")
+                continue;
+            if (part == "..")
+            {
+                if (parts.empty())
+                    return false;
+                parts.pop_back();
+                continue;
+            }
+            if (part.find(':') != std::string::npos)
+                return false;
+            std::string stem = Lower(part.substr(0, part.find('.')));
+            while (!stem.empty() && stem.back() == ' ')
+                stem.pop_back();
+            if (stem == "con" || stem == "prn" || stem == "aux" || stem == "nul" ||
+                (stem.size() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) &&
+                 stem[3] >= '0' && stem[3] <= '9'))
+                return false;
+            parts.push_back(std::move(part));
+        }
+        rest.clear();
+        for (const std::string& part : parts)
+            rest += (rest.empty() ? "" : "\\") + part;
+        return true;
+    }
+
+    // The device a guest path lives on and the path relative to the device root (which
+    // stays inside it). Caller holds s_vfsMutex.
     static std::optional<std::pair<const Device*, std::string>> Locate(std::string_view guestPath)
     {
         std::string path = Normalize(guestPath);
@@ -155,8 +195,11 @@ namespace dao::kernel
                 if (lower == device.path || (lower.starts_with(device.path) && lower[device.path.size()] == '\\'))
                 {
                     std::string rest = path.substr(device.path.size());
-                    while (!rest.empty() && rest[0] == '\\')
-                        rest.erase(0, 1);
+                    if (!CleanRest(rest))
+                    {
+                        LOGW("VFS: refused {} (outside its device, or a name Windows reserves)", guestPath);
+                        return std::nullopt;
+                    }
                     return std::make_pair(&device, rest);
                 }
             }
@@ -260,6 +303,15 @@ namespace dao::kernel
         return out;
     }
 
+    // Whether host (lowercase, normalized) is folder or inside it.
+    static bool IsUnder(const std::string& host, const fs::path& folder)
+    {
+        std::string root = Lower(Utf8(folder.lexically_normal()));
+        while (!root.empty() && (root.back() == '\\' || root.back() == '/'))
+            root.pop_back();
+        return host.starts_with(root) && (host.size() == root.size() || host[root.size()] == '\\');
+    }
+
     bool VfsIsReadOnly(const fs::path& hostPath)
     {
         std::lock_guard lock(s_vfsMutex);
@@ -268,11 +320,11 @@ namespace dao::kernel
         {
             if (!device.readOnly)
                 continue;
-            if (host.starts_with(Lower(Utf8(device.root.lexically_normal()))))
+            if (IsUnder(host, device.root))
                 return true;
             for (const auto& overlay : device.overlays)
             {
-                if (host.starts_with(Lower(Utf8(overlay.lexically_normal()))))
+                if (IsUnder(host, overlay))
                     return true;
             }
             for (const auto& [rest, file] : device.files)

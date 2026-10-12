@@ -231,13 +231,15 @@ namespace dao::imp
                 continue;
             }
 
+            // A width or precision from the arguments, within what fits the buffer below.
+            constexpr int32_t kMaxWidth = 511;
             std::string spec = "%";
             while (*p && strchr("-+ #0", *p))
                 spec += *p++;
 
             if (*p == '*')
             {
-                spec += std::to_string(int32_t(args.Next32()));
+                spec += std::to_string(std::clamp(int32_t(args.Next32()), -kMaxWidth, kMaxWidth));
                 p++;
             }
             else
@@ -251,7 +253,7 @@ namespace dao::imp
                 spec += *p++;
                 if (*p == '*')
                 {
-                    spec += std::to_string(int32_t(args.Next32()));
+                    spec += std::to_string(std::clamp(int32_t(args.Next32()), -kMaxWidth, kMaxWidth));
                     p++;
                 }
                 else
@@ -282,7 +284,7 @@ namespace dao::imp
                 break;
             }
 
-            char buffer[512];
+            char buffer[512] = {}; // (left empty if snprintf fails)
             switch (conv)
             {
             case 'd':

@@ -178,8 +178,9 @@ namespace dao::imp
     uint32_t NetDll_WSACreateEvent()
     {
         auto event = std::make_shared<Event>(true, false); // manual-reset, initially non-signaled
-        AttachGuestHeader(event, sizeof(X_KEVENT));
-        return CreateHandle(event); // 0 on failure
+        if (!AttachGuestHeader(event, sizeof(X_KEVENT)))
+            return 0; // (WSA_INVALID_EVENT)
+        return CreateHandle(event);
     }
 
     int32_t NetDll_WSACloseEvent(uint32_t event)

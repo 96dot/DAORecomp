@@ -79,11 +79,15 @@ namespace dao::kernel
         const uint32_t staticSize = (s_tlsDataSize + 15) & ~15u;
         tlsStatic = KernelAlloc(staticSize + s_tlsSlotCount * 4);
         tlsDynamic = tlsStatic + staticSize;
-        if (s_tlsRawSize)
-            memcpy(g_memory.Translate(tlsStatic), g_memory.Translate(s_tlsRawAddress), s_tlsRawSize);
-
         pcr = KernelAlloc(kPcrSize);
         kthread = KernelAlloc(kKThreadSize);
+        if (!tlsStatic || !pcr || !kthread)
+        {
+            LOGE("Out of kernel memory for a thread's TLS, PCR and KTHREAD");
+            return false;
+        }
+        if (s_tlsRawSize)
+            memcpy(g_memory.Translate(tlsStatic), g_memory.Translate(s_tlsRawAddress), s_tlsRawSize);
 
         auto w32 = [](uint32_t address, uint32_t value) { *g_memory.Translate<u32>(address) = value; };
         auto w8 = [](uint32_t address, uint8_t value) { *g_memory.Translate<uint8_t>(address) = value; };
@@ -148,6 +152,10 @@ namespace dao::kernel
             keep = std::move(it->second); // released after the lock
             s_threads.erase(it);
         }
+        // (Unless a newer thread already has a KTHREAD at the same address.)
+        if (auto k = s_byKThread.find(thread->kthread);
+            k != s_byKThread.end() && (k->second.expired() || k->second.lock().get() == thread))
+            s_byKThread.erase(k);
     }
 
     std::shared_ptr<GuestThread> ThreadFromKThread(uint32_t kthread)

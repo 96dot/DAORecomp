@@ -63,12 +63,15 @@ namespace dao::kernel
     {
         using namespace std::chrono;
         const auto now = steady_clock::now();
+        // Waits longer than about a century are "forever" (and nanoseconds of them would
+        // overflow).
+        constexpr int64_t kMaxDelta = 100ll * 365 * 24 * 3600 * 10'000'000;
         if (timeout < 0)
-            return now + nanoseconds(-timeout * 100);
+            return now + nanoseconds(std::min<uint64_t>(0 - uint64_t(timeout), kMaxDelta) * 100);
 
         // Positive = absolute system time.
         const int64_t delta = timeout - int64_t(SystemTime100ns());
-        return now + nanoseconds(std::max<int64_t>(delta, 0) * 100);
+        return now + nanoseconds(std::clamp<int64_t>(delta, 0, kMaxDelta) * 100);
     }
 
     // ---------------------------------------------------------------- objects
@@ -299,7 +302,9 @@ namespace dao::kernel
         }
     };
 
-    static TimerService s_timers;
+    // Never destroyed: its thread runs until the process ends, and destroying a joinable
+    // std::thread at exit would call std::terminate.
+    static TimerService& s_timers = *new TimerService;
 
     Timer::~Timer() = default;
 
@@ -427,9 +432,14 @@ namespace dao::kernel
         object->guestObject = header;
     }
 
-    void AttachGuestHeader(const ObjectRef& object, uint32_t size)
+    bool AttachGuestHeader(const ObjectRef& object, uint32_t size)
     {
         const uint32_t header = KernelAlloc(std::max<uint32_t>(size, sizeof(X_DISPATCH_HEADER)));
+        if (!header)
+        {
+            LOGE("Out of kernel memory for an object's header");
+            return false;
+        }
         auto* h = Header(header);
         switch (object->type)
         {
@@ -449,10 +459,19 @@ namespace dao::kernel
         }
         h->size = uint8_t(size / 4);
 
-        std::lock_guard lock(s_headerMutex);
-        BindLocked(object, header);
-        object->ownsGuestObject = true;
-        object->SyncGuest();
+        {
+            std::lock_guard lock(s_headerMutex);
+            // (Another thread may have given it one meanwhile: that one stays.)
+            if (!object->guestObject)
+            {
+                BindLocked(object, header);
+                object->ownsGuestObject = true;
+                object->SyncGuest();
+                return true;
+            }
+        }
+        KernelFree(header);
+        return true;
     }
 
     // Objects the header maps drop are destroyed after s_headerMutex is released

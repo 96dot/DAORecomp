@@ -159,7 +159,7 @@ namespace dao::kernel
     // Guest dispatcher header <-> host object --------------------------------
 
     // Allocates a guest header for a handle-created object and binds it.
-    void AttachGuestHeader(const ObjectRef& object, uint32_t size);
+    bool AttachGuestHeader(const ObjectRef& object, uint32_t size); // false when out of kernel memory
     // Binds an object to an existing guest header (the game's own KEVENT etc).
     void BindGuestHeader(const ObjectRef& object, uint32_t header);
     // Returns the object for a guest header, creating one from the header's

@@ -89,6 +89,15 @@ namespace dao
 
     void ClampSettings(Settings& s)
     {
+        // (A NaN or infinity gets past std::clamp: those are the default instead.)
+        const Settings defaults;
+        for (auto [value, fallback] : { std::pair{ &s.sharpness, defaults.sharpness },
+                 { &s.temporalSharpness, defaults.temporalSharpness }, { &s.hdrPaperWhite, defaults.hdrPaperWhite },
+                 { &s.hdrPeak, defaults.hdrPeak } })
+        {
+            if (!std::isfinite(*value))
+                *value = fallback;
+        }
         s.resolutionScale = std::clamp(s.resolutionScale, 1, kMaxResolutionScale);
         s.sharpness = std::clamp(s.sharpness, 0.0f, 2.0f);
         s.temporalSharpness = std::clamp(s.temporalSharpness, 0.0f, 1.0f);
@@ -96,8 +105,8 @@ namespace dao
             s.anisotropicFiltering = 0;
         s.hdrPaperWhite = std::clamp(s.hdrPaperWhite, kHdrMinNits, kHdrMaxPaperWhite);
         s.hdrPeak = std::clamp(s.hdrPeak, s.hdrPaperWhite, kHdrMaxPeak);
-        s.windowWidth = std::max(320, s.windowWidth);
-        s.windowHeight = std::max(180, s.windowHeight);
+        s.windowWidth = std::clamp(s.windowWidth, 320, 16384);
+        s.windowHeight = std::clamp(s.windowHeight, 180, 16384);
     }
 
     Settings ReadSettings(const std::filesystem::path& userRoot)
@@ -235,7 +244,12 @@ window_height = {}
             s.hdr, s.hdrPaperWhite, s.hdrPeak, s.anisotropicFiltering, s.shadows, s.postProcessing, s.fullscreen,
             s.windowWidth, s.windowHeight);
         for (const auto& [id, enabled] : s.patches)
-            out += fmt::format("{} = {}\n", id, enabled);
+        {
+            // Quoted unless a bare TOML key (one quoted by hand may hold anything).
+            const bool bare = !id.empty() && std::ranges::all_of(id, [](char c)
+                { return std::isalnum(uint8_t(c)) || c == '_' || c == '-'; });
+            out += fmt::format("{} = {}\n", bare ? id : Quote(id), enabled);
+        }
 
         out += "\n# Mods: folders under mods/, in load order (later mods win over earlier ones).\n";
         for (const auto& mod : s.mods)

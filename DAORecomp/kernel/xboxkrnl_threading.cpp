@@ -43,7 +43,8 @@ namespace dao::imp
         }
 
         std::shared_ptr<T> object = factory();
-        AttachGuestHeader(object, headerSize);
+        if (!AttachGuestHeader(object, headerSize))
+            return X_STATUS_NO_MEMORY;
         if (!name.empty())
             RegisterNamedObject(name, object);
         if (handleOut)
@@ -371,8 +372,8 @@ namespace dao::imp
         auto object = LookupHandle(handle);
         if (!object)
             return X_STATUS_INVALID_HANDLE;
-        if (!object->guestObject)
-            AttachGuestHeader(object, 0x40);
+        if (!object->guestObject && !AttachGuestHeader(object, 0x40))
+            return X_STATUS_NO_MEMORY;
         if (objectOut)
             *objectOut = object->guestObject;
         return X_STATUS_SUCCESS;
@@ -506,12 +507,13 @@ namespace dao::imp
     {
         const uint32_t self = CurrentKThread(ctx);
 
-        // Brief spin while the lock looks free-ish.
+        // Brief spin while the lock looks free-ish. (Read first: a failing exchange still
+        // takes the cache line from the thread about to release the lock.)
         for (int spin = 0; spin < 1000; spin++)
         {
             auto a = AtomicWord(&cs->lockCount);
             uint32_t expected = ByteSwap(uint32_t(-1));
-            if (a.compare_exchange_strong(expected, 0))
+            if (a.load(std::memory_order_relaxed) == expected && a.compare_exchange_strong(expected, 0))
             {
                 cs->owningThread = self;
                 cs->recursionCount = 1;
@@ -549,8 +551,9 @@ namespace dao::imp
         if (AtomicAddBE(cs->lockCount, -1) >= 0)
         {
             // Waiters: hand over through the synchronisation event.
-            if (auto event = std::static_pointer_cast<Event>(ObjectFromGuestHeader(g_memory.ToGuest(cs))))
-                event->Set();
+            auto object = ObjectFromGuestHeader(g_memory.ToGuest(cs));
+            if (object && object->type == ObjectType::Event)
+                static_cast<Event*>(object.get())->Set();
         }
     }
 

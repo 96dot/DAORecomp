@@ -85,6 +85,21 @@ static LONG CALLBACK CrashHandler(EXCEPTION_POINTERS* info)
         // Writes to physical pages the GPU watches (to invalidate its copies).
         if (dao::gpu::HandleWatchedWrite(reinterpret_cast<void*>(p[1]), p[0] == 1))
             return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    // This sees exceptions first, ones other code (such as a driver) handles too: a
+    // few are logged, not a flood of them.
+    constexpr uint32_t kMaxLogged = 32;
+    static std::atomic<uint32_t> s_logged{ 0 };
+    const uint32_t logged = s_logged.fetch_add(1, std::memory_order_relaxed);
+    if (logged >= kMaxLogged)
+        return EXCEPTION_CONTINUE_SEARCH;
+    if (logged == kMaxLogged - 1)
+        LOGE("(Exceptions after this one are not logged.)");
+
+    if (code == EXCEPTION_ACCESS_VIOLATION)
+    {
+        const auto* p = info->ExceptionRecord->ExceptionInformation;
 
         const auto* address = reinterpret_cast<const uint8_t*>(p[1]);
         if (g_memory.IsGuest(address))
@@ -187,7 +202,11 @@ int main(int argc, char** argv)
     // coordinates.
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
-    const fs::path gameRoot = fs::absolute(FindGameRoot());
+    // Without a trailing separator (as DAO_GAME or an argument may have it), so that
+    // parent_path() is the install folder.
+    fs::path gameRoot = fs::absolute(FindGameRoot()).lexically_normal();
+    if (!gameRoot.has_filename())
+        gameRoot = gameRoot.parent_path();
     const fs::path userRoot = gameRoot.parent_path() / "userdata";
     fs::create_directories(userRoot);
     dao::log::Init(userRoot / "dao.log");
