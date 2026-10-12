@@ -1,0 +1,4 @@
+# Loads the latest save, then turns the camera (for motion vectors, FSR, HDR checks).
+every 2 START 0.2 from 10 until 26
+27 A 0.2
+every 4 RLEFT 1.5 from 50 until 95

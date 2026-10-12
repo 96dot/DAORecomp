@@ -1,0 +1,14 @@
+# Makes a new save (checks save writing and thumbnails). The load steps follow the
+# developer's saves: Load Game, Switch Character (X), the 2nd character, its 1st save.
+# Adjust them to yours; run_game.sh removes the new save afterwards.
+every 2 START 0.2 from 10 until 22   # title screen
+every 1 DOWN 0.2 from 26 until 28    # to Load Game
+29 A 0.2
+33 X 0.2                             # Switch Character
+35 DOWN 0.2
+37 A 0.2
+40 A 0.2                             # load its first save
+75 START 0.2                         # pause menu
+79 A 0.2                             # Save Game
+84 A 0.2                             # New Save
+89 A 0.2                             # confirm the name

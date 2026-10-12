@@ -1,0 +1,3 @@
+# Title screen -> Continue (loads the latest save). Needs skip_intro_logos (run_game.sh sets it).
+every 2 START 0.2 from 10 until 26   # past "Press START" and any notices
+27 A 0.2                             # Continue

@@ -1,0 +1,7 @@
+# Loads the latest save, opens Options from the pause menu (~74 s); Graphics is 3 x DOWN on its tabs.
+every 2 START 0.2 from 10 until 26
+27 A 0.2
+66 START 0.1
+69 DOWN 0.1
+71 DOWN 0.1
+74 A 0.1

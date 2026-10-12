@@ -19,7 +19,7 @@ method given here, never by copying an address.
   lines (counts, the first mismatch, pass/fail); full output goes to a file that is read
   only if needed. Logs go to `userdata/*.log`, never to the terminal.
 - **Test harnesses live in the repo** (`scripts/test/`), not in a session scratchpad,
-  so they are reused instead of rewritten.
+  so they are reused instead of rewritten. DAO's are there to copy.
 - **Reviews (logic, readability, security) after big changes only**, not after every
   fix. Small follow-ups get one combined review.
 - **Mechanical work** (stubs, porting a Python prototype to C++, compile-fixing) can go
@@ -114,22 +114,20 @@ match by hand.
 
 ## Test recipes
 
-Before any run: check that the game isn't already running (`tasklist`), back up
-`userdata/config.toml` and the saves in `userdata/content/`, and restore and compare
-them afterwards. Always set `DAO_BACKGROUND=1` so the window doesn't take focus.
+Use `scripts/test/run_game.sh` (see [its README](../scripts/test/README.md)) and copy
+it to the new repo. It does what every run needs: refuses to start while the game is
+running, opens the window in the background, gives the game a test copy of the
+settings and restores the user's, removes saves the run made, and collects the
+captures and logs. `contact_sheet.py` turns a run into one image to look at,
+`perf_summary.py` gives fps and CPU per thread, and `untile.py` shows tiled texture
+data the game wrote.
 
-**Scripted input** (`DAO_INPUT_SCRIPT`), `;`-separated rules:
-`every <period s> <BUTTON> <hold s> [from <s>] [until <s>]`. A single press at time T is
-`every 30 A 0.2 from T until T+1`. Example, title screen to a loaded save and a new
-save (DAO; timings vary with load times):
-
-```
-every 2 START 0.2 from 10 until 22; every 1 DOWN 0.2 from 26 until 28;
-every 30 A 0.2 from 29 until 30; ...; every 30 START 0.2 from 75 until 76
-```
-
-Build the sequence once by hand with captures every 2 s, then keep it in
-`scripts/test/`.
+**Scripted input** (`DAO_INPUT_SCRIPT`, a file or inline text): statements
+`<time> <BUTTONS> [hold]` and `every <period> <BUTTONS> [hold] [from <t>] [until <t>]`,
+separated by newlines or `;`, with `#` comments. DAO's sequences (load the latest save,
+turn the camera, open Options, make a new save) are in `scripts/test/inputs/`. Build a
+new one with captures every 2 s, read the times off the contact sheet, and keep it
+there.
 
 **Environment variables** (rename the prefix for the new game):
 
@@ -152,11 +150,6 @@ Build the sequence once by hand with captures every 2 s, then keep it in
 | `DAO_LAUNCHER_SCREENSHOTS=<dir>` | launcher screenshots, then exits |
 | `DAO_BUILD=disc` | forces the disc build when a title update is installed |
 | `DAO_CONVERT_MOD`, `DAO_EXTRACT_PACKAGE` | run one converter or package step and exit |
-
-**Checking results without looking at every frame:** make a contact sheet of the
-captures (a small PIL script) and look at that one image. To check what the game wrote
-from the GPU (thumbnails), untile the 360 texture data with the Tiled2D address formula
-and save it as PNG.
 
 **A test that "changed nothing":** first check the game ran at all (only two output
 files means it didn't), and that the setting reached the game (`dao.log`).
