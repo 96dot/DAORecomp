@@ -6,7 +6,7 @@
 #include "thread.h"
 #include "vfs.h"
 #include "content/content.h"
-#include "mods/mod_files.h"
+#include "files.h"
 
 #include "input/input.h"
 #include "ui/keyboard.h"
@@ -712,11 +712,10 @@ namespace dao::imp
 
     // A name Windows holds as one folder: not empty, "." or "..", no separators, drive or
     // stream colons, wildcards or control characters, no trailing dot or space, not a
-    // device. No "~" either, so it can't be another's short (8.3) name.
+    // device (IsPlainName). No "~" either, so it can't be another's short (8.3) name.
     static bool ValidContentName(const std::string& name)
     {
-        if (name.empty() || name == "." || name == ".." || name.back() == '.' || name.back() == ' ' ||
-            mods::IsDeviceName(name))
+        if (!IsPlainName(name) || name.find('~') != std::string::npos)
             return false;
         // Nor named as the files kept beside a content folder (<name>.name) or a save's
         // backup (see BackUpSave): a save "x.new" would be save x's staged backup.
@@ -726,10 +725,7 @@ namespace dao::imp
             if (lower.ends_with(suffix))
                 return false;
         }
-        return std::ranges::none_of(name, [](char c)
-            {
-                return uint8_t(c) < 32 || std::string_view("<>:\"/\\|?*~").find(c) != std::string_view::npos;
-            });
+        return true;
     }
 
     static fs::path ContentPath(uint32_t contentType, const std::string& fileName)

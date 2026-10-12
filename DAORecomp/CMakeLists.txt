@@ -44,6 +44,7 @@ if (DAO_LAUNCHER_ONLY)
         ${CMAKE_CURRENT_SOURCE_DIR}/kernel/title_update.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/patches/patches.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/settings.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/files.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/log.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/hash.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/program.cpp

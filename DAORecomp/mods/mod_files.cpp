@@ -53,21 +53,6 @@ namespace dao::mods
         return std::ranges::find(kDocuments, Lower(Utf8(path.extension()))) != std::end(kDocuments);
     }
 
-    bool IsDeviceName(std::string_view name)
-    {
-        std::string base = Lower(name.substr(0, name.find('.')));
-        while (!base.empty() && base.back() == ' ')
-            base.pop_back();
-        if (base == "con" || base == "prn" || base == "aux" || base == "nul")
-            return true;
-        if (!base.starts_with("com") && !base.starts_with("lpt"))
-            return false;
-        const std::string_view number = std::string_view(base).substr(3);
-        // A digit, or a superscript 1, 2 or 3.
-        return (number.size() == 1 && isdigit(uint8_t(number[0]))) || number == "\xC2\xB9" ||
-            number == "\xC2\xB2" || number == "\xC2\xB3";
-    }
-
     bool IsLink(const fs::path& path)
     {
         std::error_code ec;

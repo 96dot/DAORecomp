@@ -5,6 +5,7 @@
 #include <set>
 #include <variant>
 
+#include "files.h"
 #include "mods/convert/gff.h"
 #include "mods/convert/mesh.h"
 #include "mods/convert/texture.h"
@@ -172,17 +173,6 @@ namespace dao::mods
         std::vector<uint8_t> ReadHead(const fs::path& path)
         {
             return mods::ReadHead(path, kFormatHeadBytes);
-        }
-
-        // Whether a name can be a file's as it is (a name from an archive): not a
-        // path, nor a device's.
-        bool IsPlainName(std::string_view name)
-        {
-            constexpr std::string_view kNotInNames = "<>:\"/\\|?*";
-            if (name.empty() || name.back() == '.' || name.back() == ' ' || IsDeviceName(name))
-                return false;
-            return std::ranges::all_of(name,
-                [&](char c) { return uint8_t(c) >= 0x20 && kNotInNames.find(c) == std::string_view::npos; });
         }
 
         // A PC archive: ERF V2.0, or V2.2 (whose files may be compressed), with UTF-16 names.

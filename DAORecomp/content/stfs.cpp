@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "content/stfs.h"
+#include "files.h"
 #include "text.h"
 
 #include <unordered_set>
@@ -38,11 +39,10 @@ namespace dao::content
         {
             if (name.empty() || name == "." || name == ".." || name.back() == '.' || name.back() == ' ')
                 return false;
-            for (const char c : name)
-            {
-                if (uint8_t(c) < 32 || strchr("<>:\"/\\|?*", c))
-                    return false;
-            }
+            if (std::ranges::any_of(name, IsBadNameChar))
+                return false;
+            // The device names as scripts/stfs.py has them (test_stfs.py checks both):
+            // the stem as it is, where IsDeviceName also drops spaces before the dot.
             std::string stem(name.substr(0, name.find('.')));
             for (char& c : stem)
                 c = char(toupper(uint8_t(c)));
