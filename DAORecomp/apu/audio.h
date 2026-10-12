@@ -1,6 +1,7 @@
 #pragma once
 // Host side of the XAudio render driver and the XMA context pool. Frames the game's XAudio2
-// submits are queued here for a host audio backend to consume. XMA decoding is not implemented.
+// submits are queued here for a host audio backend to consume. XMA decoding is in
+// xma_decoder.cpp; DAO_XMA=fake (or an FFmpeg without the xmaframes decoder) gives silence.
 
 #include <cstdint>
 

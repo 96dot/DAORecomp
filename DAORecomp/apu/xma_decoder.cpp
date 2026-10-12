@@ -419,8 +419,16 @@ namespace dao::apu
             return XmaSkip::NoSpace;
         }
 
-        while (m_remainingBlocks >= minimumSubframeDecodeCount)
+        // Far more frames than a pass can write; reached only when every frame of an endless
+        // loop fails to decode (each still moves the read offset, so "stalled" never shows).
+        constexpr uint32_t kMaxFramesPerPass = 8192;
+        for (uint32_t frames = 0; m_remainingBlocks >= minimumSubframeDecodeCount; frames++)
         {
+            if (frames == kMaxFramesPerPass)
+            {
+                m_lastNote = XmaSkip::Stalled;
+                break;
+            }
             const uint32_t preDecodeOffset = data.Get(kInputBufferReadOffset);
             const uint8_t preRemainingSubframes = m_currentFrameRemaining;
 
@@ -698,6 +706,15 @@ namespace dao::apu
 
         BitReader frameStream(m_inputBuffer.data(), (kXmaBitsPerPacket - kXmaBitsPerPacketHeader) * 2);
         frameStream.SetOffset(relativeOffset - kXmaBitsPerPacketHeader);
+        // A frame is never longer than a packet's payload; a damaged header saying so would
+        // copy past the frame buffer.
+        if (packetInfo.currentFrameSize > kMaxFrameSizeInBits ||
+            packetInfo.currentFrameSize > frameStream.BitsRemaining())
+        {
+            data.Set(kErrorStatus, 4);
+            m_lastNote = XmaSkip::FrameError;
+            return;
+        }
 
         m_frameBits.fill(0);
         const size_t paddingStart = frameStream.Copy(m_frameBits.data() + 1, packetInfo.currentFrameSize);
@@ -777,6 +794,14 @@ namespace dao::apu
         const uint32_t stereo = data.Get(kIsStereo);
         const uint32_t totalSubframes = kXmaSubframesPerChannel << stereo;
         const uint32_t padding = data.Get(kOutputBufferPadding);
+
+        // A stereo frame still pending when the context became mono: more than a frame
+        // holds, which would read before the decoded frame. Dropped.
+        if (m_currentFrameRemaining > totalSubframes)
+        {
+            m_currentFrameRemaining = 0;
+            return;
+        }
 
         // Loop end truncation: the rest of the frame is discarded once the limit is reached.
         if (m_loopFrameOutputLimit > 0)
@@ -859,6 +884,8 @@ namespace dao::apu
         if (avcodec_open2(m_context, m_codec, nullptr) < 0)
         {
             XMA_WARN_LIMITED("XMA: failed to open the xmaframes decoder ({} Hz, {} ch)", sampleRate, channels);
+            // (Freed, so the next frame tries again instead of matching the settings above.)
+            avcodec_free_context(&m_context);
             return -1;
         }
         return 1;

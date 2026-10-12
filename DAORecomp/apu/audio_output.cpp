@@ -13,6 +13,7 @@ namespace dao::apu
     {
         SDL_AudioStream* s_stream = nullptr;
         uint64_t s_underruns = 0;
+        bool s_gameAudioStarted = false; // (the silence before the game's first frame isn't an underrun)
         FILE* s_dump = nullptr; // DAO_AUDIO_DUMP=<path.wav>: what's played, as 6-channel float WAV
         uint32_t s_dumpBytes = 0;
 
@@ -42,6 +43,7 @@ namespace dao::apu
             {
                 if (PopFrame(planar))
                 {
+                    s_gameAudioStarted = true;
                     for (uint32_t s = 0; s < kFrameChannelSamples; s++)
                     {
                         for (uint32_t c = 0; c < kFrameChannels; c++)
@@ -52,8 +54,12 @@ namespace dao::apu
                 {
                     // The game hasn't produced audio in time (or isn't running audio yet).
                     memset(interleaved, 0, sizeof(interleaved));
-                    if (s_underruns++ == 100)
-                        LOGW("Audio output: game audio is not keeping up (underruns)");
+                    if (s_gameAudioStarted)
+                    {
+                        const uint64_t underruns = ++s_underruns;
+                        if (underruns == 100 || underruns == 1000 || underruns % 10000 == 0)
+                            LOGW("Audio output: game audio is not keeping up ({} underruns so far)", underruns);
+                    }
                 }
                 SDL_PutAudioStreamData(stream, interleaved, kFrameBytes);
                 if (s_dump)

@@ -461,6 +461,8 @@ namespace dao::apu
                     return;
                 }
                 // FFmpeg has no usable xmaframes decoder: use the fake pass instead.
+                static std::once_flag s_noDecoder;
+                std::call_once(s_noDecoder, [] { LOGW("XMA: no xmaframes decoder in FFmpeg; game audio is silent"); });
             }
             RunFakePass(address, slot);
         }

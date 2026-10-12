@@ -152,7 +152,9 @@ namespace dao::apu
         XmaBuffers m_buffers{};
 
         std::array<uint8_t, kXmaBytesPerPacketData * 2> m_inputBuffer{};   // two packets' payloads
-        std::array<uint8_t, 1 + 4096> m_frameBits{};                       // packet header byte + frame bits
+        // Packet header byte + frame bits, then the 64 zero bytes FFmpeg may read past a packet
+        // (AV_INPUT_BUFFER_PADDING_SIZE).
+        std::array<uint8_t, 1 + 4096 + 64> m_frameBits{};
         std::array<uint8_t, kXmaBytesPerFrameChannel * 2> m_rawFrame{};    // one decoded frame, interleaved PCM
 
         int32_t m_remainingBlocks = 0;
