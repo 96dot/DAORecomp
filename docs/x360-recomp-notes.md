@@ -85,6 +85,9 @@ recipes) is in [porting-playbook.md](porting-playbook.md).
   ported Xenia's new XMA context onto its FFmpeg fork (xmaframes).
 - **Spin waits:** guest spin waits (`KeDelayExecution(0)` loops) should sleep briefly.
   This took the game threads from 100% CPU to about 25% each at 60 fps.
+  - A sleeping poll can miss a flag the other thread clears for only microseconds
+    (DAO's conversation camera froze for seconds). Make that thread wait for the
+    poller rather than shorten the sleep.
 - **GPU write watches:** two threads can fault on the same watched page. The handler
   must retry if the page has become writable meanwhile.
 - **Diagnosing aborts:** log the host stack on `abort()` and `terminate`. Silent

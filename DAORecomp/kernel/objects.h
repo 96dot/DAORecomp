@@ -178,7 +178,8 @@ namespace dao::kernel
     // without high resolution timers, for a millisecond).
     void ShortSleep(uint32_t microseconds);
     // How long the game's busy-wait loops sleep between their checks: short
-    // next to a frame, so the waits end about as soon as when spinning.
+    // next to a frame, so the waits end about as soon as when spinning. A flag
+    // that is clear only briefly can be missed, though (gpu/held_shot.cpp).
     constexpr uint32_t kSpinSleepMicroseconds = 100;
 
     // 100 ns system time (FILETIME epoch) and conversions.

@@ -66,6 +66,12 @@ the next game.
   60 fps, after checking game logic doesn't count vblanks.
 - **Fence wait step** (`sub_82CC4338`): the D3D `BlockOnFence` spin loop. Found with
   `DAO_PROFILE` stack samples of the 100%-CPU render thread. Make it sleep.
+- **Held shot hand-over** (TU6 only: `tu6_sub_82557DE0` ending the hold,
+  `tu6_sub_82555060` the render job): the update thread polls the job's running byte
+  with `Sleep(0)`, but the job requeues itself every frame. Found from a thread dump
+  during a frozen conversation shot (the update thread in that loop), then per-second
+  call counts and time spent in the two functions, with a key press marking the
+  freezes. The job waits at its end for the poller.
 - **Scene tiles** (`sub_82661640`, MSAA global `0x8316E35C`, tile rects `0x82144D64`):
   the function returning the predicated-tiling tile count, called every frame. Found
   from `DAO_GPU_FRAME_TRACE` (two resolves per scene) back to the code setting the
@@ -113,6 +119,9 @@ match by hand.
     hang the GPU. Fixed by binding each draw its own buffer part and counter and
     unbinding after it (about 0.7 ms a frame). `DAO_DRED=1` shows the hung draw;
     a small D3D11 compute load running alongside reproduces it.
+12. Conversation camera frozen for seconds after a line (TU6): a `Sleep(0)` poll on
+    a flag clear for microseconds, against the spin-wait sleep. Fixed by the other
+    side waiting for the poller.
 
 ## Test recipes
 

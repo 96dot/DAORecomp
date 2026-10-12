@@ -713,8 +713,10 @@ namespace dao::kernel
             // a core busy (and on handhelds takes power from the GPU), so after
             // a run of such calls with next to nothing done in between, the
             // thread sleeps briefly instead. Calls further apart (a loop doing
-            // work and yielding) keep yielding. 64 yields are well under a
-            // millisecond, so short waits still end without a sleep.
+            // work and yielding) keep yielding, so short waits still end without
+            // a sleep. A poll that sleeps can miss a flag the other thread clears
+            // only briefly: then that thread should wait for the poller
+            // (gpu/held_shot.cpp), rather than the sleep be made shorter.
             constexpr auto kPollGap = std::chrono::microseconds(50);
             constexpr uint32_t kPollsBeforeSleeping = 64;
             thread_local std::chrono::steady_clock::time_point lastReturn;

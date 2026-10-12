@@ -207,7 +207,7 @@ start, so this happens once per place.
   `scripts/recomp.cmd tu6` translates it into `ppc_tu6/` (built when that folder exists),
   and `scripts/prefix_symbols.py` gives its functions names of their own (`tu6_sub_...`).
   The runtime picks the build at start (`DAORecomp/kernel/game_build.h`); code hooks are
-  given both builds' functions with `GAME_HOOK`, and addresses both builds' with
+  given both builds' functions with `GAME_HOOK` (one build's with `GAME_HOOK_ONE`), and addresses both builds' with
   `GameAddress`. `scripts/match_build.py` finds a disc function's counterpart in the
   updated executable, and the analysis scripts take `DAO_VARIANT=tu6`.
 - `scripts/stfs.py` lists and extracts Xbox 360 packages (`info`/`extract`); the
