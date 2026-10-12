@@ -5,6 +5,7 @@
 #include <regex>
 #include <unordered_set>
 
+#include "files.h"
 #include "mods/mod_files.h"
 #include "text.h"
 
@@ -400,7 +401,7 @@ namespace dao::mods
             std::string out;
             for (const char c : name)
             {
-                if (uint8_t(c) >= 0x20 && !strchr("<>:\"/\\|?*", c))
+                if (!IsBadNameChar(c))
                     out += c;
             }
             out = Truncate(std::move(out), kMaxNameBytes);

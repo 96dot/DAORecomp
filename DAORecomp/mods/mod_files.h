@@ -25,10 +25,6 @@ namespace dao::mods
     // Read-mes, pictures and links: files that aren't for the game.
     bool IsDocument(const std::filesystem::path& path);
 
-    // Whether Windows reserves the name for a device (CON, NUL, COM1...), also
-    // with an extension.
-    bool IsDeviceName(std::string_view name);
-
     // Whether a path is a link (symbolic, or a junction) rather than what it leads to.
     bool IsLink(const std::filesystem::path& path);
 
