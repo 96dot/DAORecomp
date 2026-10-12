@@ -25,7 +25,7 @@ namespace dao::ui
 {
     namespace
     {
-        // The game's menus' colours, as the launcher's.
+        // The game's menus' colours (ui/palette.h), as the launcher's.
         using namespace palette;
 
         // The game's art: the Options screen's panel, section and footer bars, and the

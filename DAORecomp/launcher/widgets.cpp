@@ -7,7 +7,6 @@
 
 namespace dao::launcher
 {
-    // The state, for the settings tabs' helpers.
     const State* g_state = nullptr;
 
     const Texture* Art(const State& st, const char* name)

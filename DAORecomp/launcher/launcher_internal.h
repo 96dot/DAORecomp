@@ -1,9 +1,10 @@
 #pragma once
 // The launcher's parts (see launcher.h), shared by its files: launcher.cpp has
-// the window and its frame loop, widgets.cpp the drawing helpers, and the views
-// a file each (title_screen.cpp, configure_view.cpp, mods_view.cpp,
-// update_view.cpp, install_view.cpp, and add_to_steam.cpp's popup).
+// the command line, the window and its frame loop, widgets.cpp the helpers the
+// views draw with, and the views a file each (title_screen.cpp, configure_view.cpp,
+// mods_view.cpp, update_view.cpp, install_view.cpp, and add_to_steam.cpp's popup).
 
+// (Every part had these when the launcher was one file.)
 #include <future>
 #include <ranges>
 
@@ -22,7 +23,13 @@
 namespace dao::launcher
 {
     namespace fs = std::filesystem;
-    using namespace ui::palette;
+    using ui::palette::kGold;
+    using ui::palette::kGoldBright;
+    using ui::palette::kShadow;
+    using ui::palette::kText;
+    using ui::palette::kTextDim;
+    using ui::palette::kTextOff;
+    using ui::palette::WithAlpha;
 
     // Messages about something wrong (no game data, a failed download).
     constexpr ImU32 kError = IM_COL32(242, 115, 89, 255);
@@ -292,11 +299,12 @@ namespace dao::launcher
     // The menus' art archive, as the game has it (and LoadGameArt reads it).
     constexpr const char* kArtArchive = "packages/core/data/guiexport.erf";
 
-    // The state, for the settings tabs' helpers (widgets.cpp).
+    // The state, for the helpers that aren't given it (HelpText, Section, RowWidth).
     extern const State* g_state;
 
     // widgets.cpp: drawing the game's art and text, its menus' buttons and hints,
-    // the settings' text, and the Options screen's frame.
+    // the settings' text, the Options screen's frame; opening folders and files,
+    // and switching views.
     const Texture* Art(const State& st, const char* name);
     void DrawTinted(ImDrawList* draw, const Texture& art, ImVec2 at, float scale, ImU32 tint, bool mirrored = false);
     void DrawSprite(ImDrawList* draw, const Texture& art, ImVec2 at, float scale, float alpha,
@@ -319,7 +327,8 @@ namespace dao::launcher
     void PanelFrame(State& st, const Layout& layout, const char* title, Restore restore);
     void ShowContents(State& st, const Layout& layout, float left, Contents contents, bool resetScroll = false);
 
-    // title_screen.cpp: the title screen and its menu, and the game's art they draw.
+    // title_screen.cpp: the title screen and its menu, and loading the game's art
+    // (for every view).
     void DrawScene(ImDrawList* draw, const State& st, const Layout& layout, float dim, double t);
     std::optional<LogoArt> FindLogoArt(const State& st);
     void DrawLogoArt(ImDrawList* draw, const LogoArt& art, ImVec2 center, float width);

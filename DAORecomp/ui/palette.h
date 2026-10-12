@@ -1,6 +1,8 @@
 #pragma once
 // The game's menus' colours, for the launcher and the on-screen keyboard: cream
-// serif text, gold edges, dark warm panels.
+// serif text and gold edges.
+
+#include <algorithm>
 
 #include <imgui.h>
 
