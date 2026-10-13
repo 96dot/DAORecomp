@@ -346,6 +346,17 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
       draw_util::ResolveCopyShaderIndex copy_shader, bool copy_dest_scaled,
       uint32_t dump_base, uint32_t dump_row_length_used, uint32_t dump_rows,
       uint32_t dump_pitch, D3D12TextureCache::ResolvedArea& area_out) const;
+  // DAO (dao_render_target_cache.cc): with Initialize, the pipelines of the
+  // copies straight from a render target, from the resolve copy root
+  // signature's description (its parameters are changed for them).
+  void DaoInitializeDirectResolve(
+      std::array<D3D12_ROOT_PARAMETER, 3>& resolve_copy_root_parameters,
+      const D3D12_ROOT_SIGNATURE_DESC& resolve_copy_root_signature_desc);
+  // Whether the direct copy from the render target can be done: its pipeline
+  // exists, and source_out is the render target's SRV.
+  bool DaoCreateDirectResolveSource(
+      D3D12RenderTarget& source, bool copy_native,
+      ui::d3d12::util::DescriptorCpuGpuHandlePair& source_out);
 
   enum TransferCBVRegister : uint32_t {
     kTransferCBVRegisterStencilMask,
