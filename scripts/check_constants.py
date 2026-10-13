@@ -47,6 +47,9 @@ NAMES = [
     ("DAORecomp/main.cpp", "DAORecomp.old.exe"),
     ("installer/pipeline.py", "DAORecomp.old.exe"),
     ("DAORecomp/launcher/install_runner.cpp", "DAORecomp-build"),
+    ("DAORecomp/launcher/install_runner.cpp", python_string("scripts/build_installer_engine.py", "BUNDLE_NAME")),
+    ("DAORecomp/launcher/install_runner.cpp", "python.exe"),
+    ("scripts/build_installer_engine.py", "python.exe"),
     ("installer/util.py", "DAORecomp-build"),
 ]
 

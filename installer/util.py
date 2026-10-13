@@ -13,13 +13,17 @@ import tarfile
 import threading
 import urllib.request
 import zipfile
+import zipimport
 from pathlib import Path
 
 IS_WINDOWS = sys.platform == "win32"
 HOST = "windows" if IS_WINDOWS else "linux"
 EXE = ".exe" if IS_WINDOWS else ""
-# Running as the bundled installer executable (PyInstaller).
-FROZEN = getattr(sys, "frozen", False)
+# Running from the bundled installer: installer.pyz beside python.org's embeddable Python,
+# which the launcher unpacks (scripts/build_installer_engine.py); BUNDLE is that file.
+_LOADER = getattr(__spec__, "loader", None)
+BUNDLED = isinstance(_LOADER, zipimport.zipimporter)
+BUNDLE = Path(_LOADER.archive) if BUNDLED else None
 
 if IS_WINDOWS:
     # Programs run by name are found on PATH only, never in the current folder.
@@ -43,17 +47,19 @@ if IS_WINDOWS:
 def _work_root():
     if os.environ.get("DAO_WORK_DIR"):
         return Path(os.environ["DAO_WORK_DIR"]).expanduser().absolute()
-    if not FROZEN:
+    if not BUNDLED:
         return Path(__file__).resolve().parent.parent  # the repository checkout
     base = os.environ.get("LOCALAPPDATA") if IS_WINDOWS else None
     base = Path(base) if base else Path.home() / ".local" / "share"
     return base / "DAORecomp-build"
 
 
-# The project source as shipped: the checkout, or the copy inside the executable.
-SOURCE = Path(sys._MEIPASS) / "source" if FROZEN else Path(__file__).resolve().parent.parent
+# The project source as shipped: the checkout, or the bundle's files (read in place).
+SOURCE = zipfile.Path(BUNDLE) if BUNDLED else Path(__file__).resolve().parent.parent
+# The project's helper scripts, importable (the bundle's through zipimport).
+SCRIPTS = str(BUNDLE / "scripts") if BUNDLED else str(SOURCE / "scripts")
 # Where the build happens: the project source plus tools/, build/ and ppc/. The
-# executable copies its source here first (see pipeline.sync_source).
+# bundled installer copies its source here first (see pipeline.sync_source).
 REPO = _work_root()
 
 # git to run; toolchain.ensure_git may switch it to a downloaded MinGit.
@@ -62,7 +68,7 @@ GIT = ["git"]
 
 def _version():
     """The release this installer is (its tag), for the build and the launcher's update
-    check: the executable carries it in VERSION; a source checkout of a tag is that tag
+    check: the bundle carries it in VERSION; a source checkout of a tag is that tag
     (with -dirty if changed, which the launcher treats as a dev build); anything else is "dev".
     It goes into the build as a C++ string, so only plain characters are kept."""
     stamp = SOURCE / "VERSION"

@@ -145,6 +145,11 @@ MINGIT = Download("https://github.com/git-for-windows/git/releases/download/v2.5
                   "MinGit-2.55.0.5-64-bit.zip",
                   "56d7b226b7693196cfc71fef26568f536c4a021ab6c37ff2db4287bed908e96e", 38989688)
 
+# python.org's Windows embeddable package, which runs the installer appended to the
+# launcher players download (scripts/build_installer_engine.py); SHA-256 as published.
+EMBED_PYTHON = Download("https://www.python.org/ftp/python/3.14.8/python-3.14.8-embed-amd64.zip",
+                        "a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a310", 12601679)
+
 # Intel XeSS SDK 3.0.2: XeSS-SR's headers and libxess.dll (the Intel Simplified Software
 # License lets the DLL be redistributed unmodified, with its notices). Of the archive,
 # only XESS_KEEP stays.

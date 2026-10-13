@@ -231,10 +231,12 @@ start, so this happens once per place.
   next to the exe.
 - `scripts/build_setup_exe.py` builds `dist/DAORecomp.exe`, what players download: the
   launcher alone (`-DDAO_LAUNCHER_ONLY=ON`) with the installer appended to it, which it
-  unpacks to run. The installer is `scripts/build_installer_exe.py`'s PyInstaller exe
-  (it bundles the files tracked by git). CI builds both (the *Windows installer*
-  workflow) and publishes `DAORecomp.exe` also as `DAORecomp-Installer.exe`, the name
-  launchers up to v0.5.1 update with.
+  unpacks to run. The installer is `scripts/build_installer_engine.py`'s folder:
+  python.org's embeddable Python (signed by the Python Software Foundation; the
+  PyInstaller exe it replaced was deleted by antivirus as a false positive) and
+  `installer.pyz`, the files tracked by git with truststore. The *Windows installer*
+  workflow builds the folder and the exe, and publishes `DAORecomp.exe` also as
+  `DAORecomp-Installer.exe`, the name launchers up to v0.5.1 update with.
 - `config/DAO.toml` and `config/DAO_switch_tables.toml` tell XenonRecomp where the game's
   functions and jump tables are; `scripts/patch_recompiler.py` adds the PowerPC
   instructions XenonRecomp lacked.

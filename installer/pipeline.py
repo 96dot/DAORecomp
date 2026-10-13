@@ -8,14 +8,15 @@ import struct
 import subprocess
 import sys
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import deps, shortcuts, sources, toolchain
-from .util import (EXE, FROZEN, GIT, IS_WINDOWS, REPO, SOURCE, VERSION, InstallError, check_host, clean_env,
-                   human_size, run)
+from .util import (BUNDLE, EXE, BUNDLED, GIT, IS_WINDOWS, REPO, SCRIPTS, SOURCE, VERSION, InstallError, check_host,
+                   clean_env, human_size, run)
 
-sys.path.insert(0, str(SOURCE / "scripts"))
+sys.path.insert(0, SCRIPTS)
 import patch_recompiler  # noqa: E402
 import prefix_symbols  # noqa: E402
 import stfs  # noqa: E402
@@ -44,18 +45,24 @@ class Options:
 # --------------------------------------------------------------------- source
 
 SOURCE_MANIFEST = "dao-source-files.txt"
+# The bundle's files that aren't the project's (scripts/build_installer_engine.py).
+BUNDLE_ONLY = ("__main__.py",)
+BUNDLE_LIBS = "_lib/"
 
 
 def _source_files():
     """The project's files under SOURCE, as relative POSIX paths."""
-    if FROZEN:
-        files = (p.relative_to(SOURCE).as_posix() for p in SOURCE.rglob("*") if p.is_file())
+    if BUNDLED:
+        # Not the bundle's own: its entry point and the libraries the installer imports.
+        with zipfile.ZipFile(BUNDLE) as bundle:
+            files = [rel for rel in bundle.namelist()
+                     if not rel.endswith("/") and rel not in BUNDLE_ONLY and not rel.startswith(BUNDLE_LIBS)]
     else:
         # A checkout: only its tracked files (never the game's, nor builds).
         out = subprocess.run([*GIT, "-C", str(SOURCE), "ls-files", "-z"], capture_output=True, check=True,
                              creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0).stdout
         files = (rel for rel in out.decode("utf-8").split("\0") if rel and (SOURCE / rel).is_file())
-    # Not VERSION: the executable's own (util.VERSION), which doesn't belong in a checkout.
+    # Not VERSION: the bundle's own (util.VERSION), which doesn't belong in a checkout.
     return sorted(rel for rel in files if rel != "VERSION")
 
 
@@ -68,7 +75,7 @@ def _plain_relative(rel):
 def sync_source(reporter):
     """Copies the project source into the work folder (when that is somewhere else), changing
     only files that differ (so rebuilds stay incremental) and removing ones it dropped."""
-    if SOURCE.resolve() == REPO.resolve():
+    if not BUNDLED and SOURCE.resolve() == REPO.resolve():
         return
     try:
         files = _source_files()
@@ -494,22 +501,35 @@ def install(reporter, built, dest, with_shortcuts=False):
 
 # The footer after the installer appended to the launcher-only DAORecomp.exe:
 # magic, the installer's offset and size (little-endian u64) and its SHA-256, as
-# DAORecomp/launcher/install_runner.cpp reads it.
-ENGINE_MAGIC = b"DAORecompEngine1"
+# DAORecomp/launcher/install_runner.cpp reads it. The installer is its folder's files
+# (scripts/build_installer_engine.py), each as: the name's length (u32) and the name
+# (UTF-8, "/" between folders), the size (u64), the SHA-256, the data.
+ENGINE_MAGIC = b"DAORecompEngine2"
+# The installer's files: one folder of plainly named files, no device names (the
+# launcher's PlainEngineName takes no others).
+ENGINE_NAME = re.compile(r"(?!\.)(?!(?:con|prn|aux|nul|com\d|lpt\d)(?:\.|$))[A-Za-z0-9._-]{1,64}(?<!\.)", re.I)
 
 
-def append_engine(launcher, engine, out):
-    """Writes `out`: the launcher-only exe with the installer executable appended (Windows
-    ignores data after an image; the launcher extracts it to run it)."""
+def append_engine(launcher, engine_dir, out):
+    """Writes `out`: the launcher-only exe with the installer's files appended (Windows
+    ignores data after an image; the launcher unpacks them to run the installer)."""
     image = Path(launcher).read_bytes()
-    data = Path(engine).read_bytes()
+    engine_dir = Path(engine_dir)
+    data = bytearray()
+    for path in sorted(engine_dir.iterdir()):
+        if not path.is_file() or not ENGINE_NAME.fullmatch(path.name):
+            raise InstallError(f"{path}: the installer's folder takes only plainly named files")
+        name = path.name.encode("utf-8")
+        content = path.read_bytes()
+        data += struct.pack("<I", len(name)) + name + struct.pack("<Q", len(content))
+        data += hashlib.sha256(content).digest() + content
     footer = ENGINE_MAGIC + struct.pack("<QQ", len(image), len(data)) + hashlib.sha256(data).digest()
     Path(out).write_bytes(image + data + footer)
 
 
 def build_setup(reporter, engine, out, jobs=0):
     """Builds what players download: DAORecomp.exe with the launcher and its Install view
-    but no game code (DAO_LAUNCHER_ONLY), with the installer executable `engine` in it.
+    but no game code (DAO_LAUNCHER_ONLY), with the installer's folder `engine` in it.
     Accepts the Microsoft build tools license for the download (as the CI does)."""
     check_host()
     if not IS_WINDOWS:

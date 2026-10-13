@@ -15,4 +15,7 @@ namespace dao
 
     // The SHA-1 of bytes as upper-case hex, or "" if it can't be computed.
     std::string Sha1(std::span<const uint8_t> data);
+
+    // The SHA-256 of bytes into `digest`; false if it can't be computed.
+    bool Sha256(std::span<const uint8_t> data, std::span<uint8_t, 32> digest);
 }

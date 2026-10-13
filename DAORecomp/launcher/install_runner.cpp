@@ -3,8 +3,6 @@
 
 #include <bcrypt.h>
 
-#include <fstream>
-
 #include <rapidjson/document.h>
 
 #include "hash.h"
@@ -24,8 +22,15 @@ namespace dao::launcher
             handle = nullptr;
         }
 
+        // Where the appended installer is unpacked, in the work folder, and what to say
+        // when its files went missing.
+        constexpr std::wstring_view kEngineFolder = L"installer-engine";
+        constexpr std::string_view kAntivirusHint =
+            ". If antivirus removed it, Windows Security's Protection history can restore it (it's python.org's "
+            "Python, signed by the Python Software Foundation)";
+
         // The footer after the appended installer (installer/pipeline.py ENGINE_MAGIC).
-        constexpr std::string_view kEngineMagic = "DAORecompEngine1";
+        constexpr std::string_view kEngineMagic = "DAORecompEngine2";
         struct EngineFooter
         {
             char magic[16];
@@ -53,23 +58,225 @@ namespace dao::launcher
             return ReadFile(file, data, size, &read, &at) != 0;
         }
 
-        // Opened so others may only read it (until it has started), and its SHA-256.
+        // Opened so others may only read it (until the installer has ended), and its
+        // SHA-256; nullptr (with the Windows error) if it can't be.
         HANDLE OpenChecked(const fs::path& path, std::array<uint8_t, 32>& digest)
         {
             const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                 FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file == INVALID_HANDLE_VALUE)
+                return nullptr;
             uint64_t size = 0;
-            if (file != INVALID_HANDLE_VALUE && HashFile(file, BCRYPT_SHA256_ALGORITHM, digest, size))
+            if (HashFile(file, BCRYPT_SHA256_ALGORITHM, digest, size))
                 return file;
-            if (file != INVALID_HANDLE_VALUE)
-                CloseHandle(file);
+            const DWORD error = GetLastError();
+            CloseHandle(file);
+            SetLastError(error);
             return nullptr;
         }
 
-        // The installer appended to this program, extracted (once) next to the build
-        // tools; checked by its SHA-256 every time, as the folder is the player's, and
-        // `lock`ed from then until it runs.
-        fs::path EmbeddedInstaller(std::string& error, HANDLE& lock)
+        std::string WindowsError(DWORD code)
+        {
+            std::string text = std::system_category().message(int(code));
+            while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == '.'))
+                text.pop_back();
+            return fmt::format("{} (error {})", text, code);
+        }
+
+        // Errors from a file just written while antivirus scans it (holding it for a
+        // moment), and those too as when antivirus removed it.
+        bool Transient(DWORD code)
+        {
+            return code == ERROR_SHARING_VIOLATION || code == ERROR_ACCESS_DENIED || code == ERROR_LOCK_VIOLATION;
+        }
+        bool HeldOrRemoved(DWORD code)
+        {
+            return Transient(code) || code == ERROR_FILE_NOT_FOUND || code == ERROR_VIRUS_INFECTED ||
+                   code == ERROR_VIRUS_DELETED;
+        }
+
+        // How many times, and how far apart, an unpacked file held by antivirus is
+        // tried again (2 s in all).
+        constexpr int kHeldRetries = 20;
+        constexpr DWORD kHeldRetryMs = 100;
+        // The most read or written at once.
+        constexpr size_t kChunk = 1 << 24;
+
+        // A file name in the appended installer (installer/pipeline.py ENGINE_NAME): all
+        // its files are in one folder, with plain names (the longest is about 20).
+        constexpr size_t kMaxEngineName = 64;
+        bool PlainEngineName(std::string_view name)
+        {
+            if (name.empty() || name.size() > kMaxEngineName || name.front() == '.' || name.back() == '.')
+                return false;
+            if (!std::ranges::all_of(name, [](char c) { return std::isalnum(uint8_t(c)) || c == '.' || c == '_' || c == '-'; }))
+                return false;
+            // Not a device's name (con, nul, com1...), which Windows opens whatever follows.
+            const std::string stem = Lower(std::string(name.substr(0, name.find('.'))));
+            static constexpr std::string_view kDevices[] = {"con", "prn", "aux", "nul"};
+            const bool numbered = stem.size() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) &&
+                                  std::isdigit(uint8_t(stem[3]));
+            return !numbered && std::ranges::find(kDevices, stem) == std::end(kDevices);
+        }
+
+        struct EngineFile
+        {
+            std::string name;
+            std::span<const uint8_t> data;
+            std::array<uint8_t, 32> sha256;
+        };
+
+        // The appended installer's files (installer/pipeline.py append_engine); false if
+        // it isn't one.
+        bool ParseEngine(std::span<const uint8_t> payload, std::vector<EngineFile>& files)
+        {
+            for (size_t at = 0; at < payload.size();)
+            {
+                EngineFile file;
+                uint32_t nameSize = 0;
+                uint64_t size = 0;
+                if (payload.size() - at < sizeof(nameSize))
+                    return false;
+                std::memcpy(&nameSize, payload.data() + at, sizeof(nameSize));
+                at += sizeof(nameSize);
+                if (payload.size() - at < uint64_t(nameSize) + sizeof(size) + file.sha256.size())
+                    return false;
+                file.name.assign(reinterpret_cast<const char*>(payload.data() + at), nameSize);
+                at += nameSize;
+                std::memcpy(&size, payload.data() + at, sizeof(size));
+                at += sizeof(size);
+                std::memcpy(file.sha256.data(), payload.data() + at, file.sha256.size());
+                at += file.sha256.size();
+                if (size > payload.size() - at || !PlainEngineName(file.name))
+                    return false;
+                file.data = payload.subspan(at, size_t(size));
+                at += size_t(size);
+                files.push_back(std::move(file));
+            }
+            return !files.empty();
+        }
+
+        // Writes `file` to `path` (as <path>.part-<process>, renamed once complete) and
+        // opens it checked into `lock`. Empty, or what went wrong (`antivirus`: as when
+        // antivirus takes the file away).
+        std::string Unpack(const EngineFile& file, const fs::path& path, HANDLE& lock, bool& antivirus)
+        {
+            std::error_code ec;
+            fs::create_directories(path.parent_path(), ec);
+            const fs::path part = fs::path(path).concat(L".part-" + std::to_wstring(GetCurrentProcessId()));
+            const HANDLE out = CreateFileW(part.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (out == INVALID_HANDLE_VALUE)
+                return fmt::format("can't create {}: {}", Utf8(part), WindowsError(GetLastError()));
+            bool written = true;
+            DWORD error = 0;
+            for (size_t at = 0, chunk = 0; written && at < file.data.size(); at += chunk)
+            {
+                DWORD wrote = 0;
+                chunk = std::min(file.data.size() - at, kChunk);
+                written = WriteFile(out, file.data.data() + at, DWORD(chunk), &wrote, nullptr) && wrote == chunk;
+                error = written ? 0 : GetLastError();
+            }
+            CloseHandle(out);
+            if (!written)
+            {
+                DeleteFileW(part.c_str());
+                return fmt::format("can't write {}: {}", Utf8(part), WindowsError(error));
+            }
+            // Antivirus scanning the new file may hold it for a moment: tried for a while.
+            // (A try after the rename went through finds no .part, and opens the file.)
+            std::array<uint8_t, 32> digest = {};
+            for (int attempt = 0;; attempt++)
+            {
+                error = 0;
+                if (GetFileAttributesW(part.c_str()) != INVALID_FILE_ATTRIBUTES &&
+                    !MoveFileExW(part.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
+                    error = GetLastError();
+                else if (!(lock = OpenChecked(path, digest)))
+                    error = GetLastError() ? GetLastError() : ERROR_GEN_FAILURE;
+                if (!error || !Transient(error) || attempt == kHeldRetries)
+                    break;
+                Sleep(kHeldRetryMs);
+            }
+            if (error)
+            {
+                DeleteFileW(part.c_str());
+                antivirus = HeldOrRemoved(error);
+                return fmt::format("{} can't be opened once unpacked: {}", file.name, WindowsError(error));
+            }
+            if (digest != file.sha256)
+                return fmt::format("{} changed once unpacked", file.name);
+            return {};
+        }
+
+        // Earlier versions' unpacked installers, not to pile up: the other folders in
+        // `engines` (one in use stays: its files are open), and the single programs
+        // releases before v0.7.1 unpacked into the work folder's installer/ (which also
+        // holds the source copy's installer package: only those programs go).
+        void RemoveOldInstallers(const fs::path& engines, const fs::path& current)
+        {
+            std::error_code ec;
+            for (fs::directory_iterator it(engines, ec), end; !ec && it != end; it.increment(ec))
+            {
+                std::error_code removeError;
+                if (it->path() != current && it->symlink_status(removeError).type() == fs::file_type::directory)
+                    fs::remove_all(it->path(), removeError);
+            }
+            for (fs::directory_iterator it(InstallerWorkFolder() / "installer", ec), end; !ec && it != end;
+                 it.increment(ec))
+            {
+                std::error_code removeError;
+                if (it->path().filename().wstring().starts_with(L"DAORecomp-Installer-") &&
+                    it->symlink_status(removeError).type() == fs::file_type::regular)
+                    fs::remove(it->path(), removeError);
+            }
+        }
+
+        // Whether `path` is a folder itself, not a link to one.
+        bool PlainFolder(const fs::path& path)
+        {
+            std::error_code ec;
+            return fs::symlink_status(path, ec).type() == fs::file_type::directory;
+        }
+
+        // What's in the installer's folder besides its files (put there since), removed:
+        // the ._pth file has Python import from it. False if something can't be.
+        bool RemoveStrays(const fs::path& folder, const std::vector<EngineFile>& files)
+        {
+            std::error_code ec;
+            bool removed = true;
+            for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
+            {
+                const std::string name = Utf8(it->path().filename());
+                const bool known = std::ranges::any_of(files, [&](const EngineFile& file) {
+                    return Lower(file.name) == Lower(name);
+                });
+                std::error_code removeError;
+                const fs::file_type type = it->symlink_status(removeError).type();
+                if (known && type == fs::file_type::regular)
+                    continue;
+                // (A folder's links are removed, not followed.)
+                if (type == fs::file_type::directory)
+                    fs::remove_all(it->path(), removeError);
+                else
+                    fs::remove(it->path(), removeError);
+                if (removeError)
+                {
+                    LOGE("Install: can't remove {} from the installer's folder: {}", Utf8(it->path()),
+                        removeError.message());
+                    removed = false;
+                }
+            }
+            return removed && !ec;
+        }
+
+        // The installer appended to this program (installer/pipeline.py append_engine):
+        // python.org's embeddable Python and installer.pyz, unpacked (once) into a
+        // folder next to the build tools named after them, and checked by their SHA-256
+        // every time, as the folder is the player's. Each stays open (`locks`: others
+        // may only read it) until the installer has ended. The folder, or empty with
+        // `error`.
+        fs::path EmbeddedInstaller(std::string& error, std::vector<HANDLE>& locks)
         {
             const HANDLE self = Self();
             LARGE_INTEGER selfSize = {};
@@ -88,53 +295,89 @@ namespace dao::launcher
                 error = "this copy of DAORecomp.exe is incomplete: download it again";
                 return {};
             }
-            std::array<uint8_t, 32> wanted;
-            std::copy(std::begin(footer.sha256), std::end(footer.sha256), wanted.begin());
-            const fs::path folder = InstallerWorkFolder() / "installer";
-            const fs::path engine = folder / fmt::format("DAORecomp-Installer-{:02x}{:02x}{:02x}{:02x}.exe",
-                wanted[0], wanted[1], wanted[2], wanted[3]);
-            std::array<uint8_t, 32> digest;
-            if ((lock = OpenChecked(engine, digest)) && digest == wanted)
-                return engine;
-            Close(lock);
-
-            std::error_code ec;
-            fs::create_directories(folder, ec);
-            const fs::path part = fs::path(engine).concat(L".part");
+            // Read and checked whole (a damaged download).
+            std::vector<uint8_t> payload(size_t(footer.size));
+            for (uint64_t at = 0; at < footer.size; at += read)
             {
-                std::ofstream out(part, std::ios::binary | std::ios::trunc);
-                std::vector<char> chunk(1 << 20);
-                for (uint64_t at = footer.offset, end = footer.offset + footer.size; at < end && out;)
+                const DWORD chunk = DWORD(std::min<uint64_t>(footer.size - at, kChunk));
+                if (!ReadAt(self, footer.offset + at, payload.data() + at, chunk, read) || !read)
                 {
-                    if (!ReadAt(self, at, chunk.data(), DWORD(std::min<uint64_t>(end - at, chunk.size())), read) ||
-                        !read)
-                        break;
-                    out.write(chunk.data(), std::streamsize(read));
-                    at += read;
+                    payload.clear();
+                    break;
                 }
             }
-            // (Checked again once renamed, through the handle that keeps it so.)
-            if (const HANDLE checked = OpenChecked(part, digest))
-                CloseHandle(checked);
-            else
-                digest = {};
-            if (digest != wanted || (fs::rename(part, engine, ec), ec) || !(lock = OpenChecked(engine, digest)) ||
-                digest != wanted)
+            std::array<uint8_t, 32> digest;
+            std::vector<EngineFile> files;
+            if (payload.size() != footer.size || !Sha256(payload, digest) ||
+                !std::equal(digest.begin(), digest.end(), std::begin(footer.sha256)) || !ParseEngine(payload, files))
             {
-                Close(lock);
-                fs::remove(part, ec);
-                error = fmt::format("can't unpack the installer into {}", Utf8(folder));
+                LOGE("Install: the installer appended to {} is damaged", Utf8(ProgramPath()));
+                error = "this copy of DAORecomp.exe is damaged: download it again";
                 return {};
             }
-            LOGI("Install: unpacked the installer to {}", Utf8(engine));
-            return engine;
+
+            const fs::path engines = InstallerWorkFolder() / kEngineFolder;
+            const fs::path folder = engines / fmt::format("{:02x}{:02x}{:02x}{:02x}", footer.sha256[0],
+                footer.sha256[1], footer.sha256[2], footer.sha256[3]);
+            // One launcher at a time unpacks and cleans up (another's cleanup would take
+            // the folder being unpacked).
+            const HANDLE mutex = CreateMutexW(nullptr, FALSE, L"Local\\DAORecompInstallerEngine");
+            const DWORD waited = mutex ? WaitForSingleObject(mutex, 60000) : WAIT_FAILED;
+            const auto release = [&] {
+                if (waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED)
+                    ReleaseMutex(mutex);
+                if (mutex)
+                    CloseHandle(mutex);
+            };
+            RemoveOldInstallers(engines, folder);
+            std::error_code ec;
+            fs::create_directories(folder, ec);
+            // Its folders are real ones, not links (the files checked are the ones run).
+            if (!PlainFolder(engines) || !PlainFolder(folder) || !RemoveStrays(folder, files))
+            {
+                release();
+                LOGE("Install: {} isn't a plain folder of the installer's files", Utf8(folder));
+                error = fmt::format("can't unpack the installer into {}: something else is there (remove the "
+                                    "folder and try again)", Utf8(folder));
+                return {};
+            }
+            size_t unpacked = 0;
+            for (const EngineFile& file : files)
+            {
+                const fs::path path = folder / FromUtf8(file.name);
+                HANDLE lock = OpenChecked(path, digest);
+                if (lock && digest == file.sha256)
+                {
+                    locks.push_back(lock);
+                    continue;
+                }
+                Close(lock);
+                bool antivirus = false;
+                const std::string problem = Unpack(file, path, lock, antivirus);
+                if (lock)
+                    locks.push_back(lock);
+                if (!problem.empty())
+                {
+                    release();
+                    LOGE("Install: can't unpack the installer into {}: {}", Utf8(folder), problem);
+                    error = fmt::format("can't unpack the installer into {}: {}", Utf8(folder), problem);
+                    if (antivirus)
+                        error += kAntivirusHint;
+                    return {};
+                }
+                unpacked++;
+            }
+            release();
+            if (unpacked)
+                LOGI("Install: unpacked the installer to {} ({} of {} files)", Utf8(folder), unpacked, files.size());
+            return folder;
         }
 
         // How to run the installer: DAO_INSTALL_ENGINE (an executable, or install.py
         // run with Python, for development), else the one appended to this program
-        // (scripts/build_setup_exe.py), extracted to the work folder and `lock`ed.
+        // (scripts/build_setup_exe.py), unpacked to the work folder and `locks`ed.
         // Empty, with `error`, if there's none.
-        std::wstring InstallerCommand(std::string& error, HANDLE& lock)
+        std::wstring InstallerCommand(std::string& error, std::vector<HANDLE>& locks)
         {
             if (const wchar_t* engine = _wgetenv(L"DAO_INSTALL_ENGINE"); engine && *engine)
             {
@@ -144,8 +387,9 @@ namespace dao::launcher
                     return L"python " + QuoteArgument(path);
                 return QuoteArgument(path);
             }
-            const fs::path engine = EmbeddedInstaller(error, lock);
-            return engine.empty() ? std::wstring() : QuoteArgument(engine);
+            const fs::path engine = EmbeddedInstaller(error, locks);
+            return engine.empty() ? std::wstring()
+                                  : QuoteArgument(engine / "python.exe") + L" " + QuoteArgument(engine / "installer.pyz");
         }
     }
 
@@ -166,6 +410,14 @@ namespace dao::launcher
         Close(output_);
         Close(process_);
         Close(job_);
+        ReleaseEngine();
+    }
+
+    void InstallRunner::ReleaseEngine()
+    {
+        for (void*& lock : engineLocks_)
+            Close(lock);
+        engineLocks_.clear();
     }
 
     bool InstallRunner::Start(const InstallRequest& request, std::string& error)
@@ -177,6 +429,7 @@ namespace dao::launcher
         Close(output_);
         Close(process_);
         Close(job_);
+        ReleaseEngine();
         status_.clear();
         error_.clear();
         progress_ = -1.0f;
@@ -194,10 +447,12 @@ namespace dao::launcher
                 return false;
             }
         }
-        HANDLE lock = nullptr;
-        std::wstring command = InstallerCommand(error, lock);
+        std::wstring command = InstallerCommand(error, engineLocks_);
         if (command.empty())
+        {
+            ReleaseEngine();
             return false;
+        }
         command += L" --progress-json --dest " + QuoteArgument(request.dest);
         if (!request.iso.empty())
             command += L" --iso " + QuoteArgument(request.iso);
@@ -215,6 +470,7 @@ namespace dao::launcher
         if (!CreatePipe(&readEnd, &writeEnd, &inherit, 0))
         {
             error = fmt::format("can't start the installer (error {})", GetLastError());
+            ReleaseEngine();
             return false;
         }
         SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0);
@@ -239,10 +495,13 @@ namespace dao::launcher
                 nullptr, work.c_str(), &startup, &info);
         const DWORD startError = GetLastError();
         CloseHandle(writeEnd);
-        Close(lock);
         if (!started)
         {
-            error = fmt::format("can't start the installer (error {})", startError);
+            error = fmt::format("can't start the installer: {}", WindowsError(startError));
+            // (The unpacked installer's python.exe taken away since it was checked.)
+            if (!engineLocks_.empty() && HeldOrRemoved(startError))
+                error += kAntivirusHint;
+            ReleaseEngine();
             return false;
         }
         process_ = info.hProcess;
@@ -251,6 +510,7 @@ namespace dao::launcher
             error = fmt::format("can't start the installer (error {})", GetLastError());
             TerminateProcess(process_, 1);
             CloseHandle(info.hThread);
+            ReleaseEngine();
             return false;
         }
         ResumeThread(info.hThread);
@@ -343,6 +603,7 @@ namespace dao::launcher
             Take(line);
         if (!ended)
             return;
+        ReleaseEngine();
         if (code == 0 && !installed_.empty())
         {
             state_ = State::Done;
@@ -362,6 +623,7 @@ namespace dao::launcher
         TerminateJobObject(job_, 1);
         if (reader_.joinable())
             reader_.join();
+        ReleaseEngine();
         state_ = State::Failed;
         error_ = "Stopped. Installing again resumes where it stopped.";
         LOGI("Install: stopped");

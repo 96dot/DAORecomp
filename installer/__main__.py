@@ -6,19 +6,7 @@ import os
 import sys
 
 from . import deps, pipeline, toolchain
-from .util import FROZEN, IS_WINDOWS, VERSION, InstallError, Reporter
-
-
-def hide_own_console():
-    """The executable is a console program (so its command line works in a terminal);
-    when it was double-clicked, the console is its own: close it for the window."""
-    if not (FROZEN and IS_WINDOWS):
-        return
-    import ctypes
-    kernel32 = ctypes.windll.kernel32
-    processes = (ctypes.c_uint32 * 2)()
-    if kernel32.GetConsoleProcessList(processes, 2) == 1:
-        kernel32.FreeConsole()
+from .util import BUNDLED, IS_WINDOWS, VERSION, InstallError, Reporter
 
 
 def ask_license():
@@ -33,7 +21,7 @@ def ask_license():
 
 
 def main():
-    prog = "DAORecomp-Installer.exe" if FROZEN else "install.py"
+    prog = "python.exe installer.pyz" if BUNDLED else "install.py"
     parser = argparse.ArgumentParser(prog=prog, description=__doc__.replace("python install.py", prog))
     parser.add_argument("--iso", help="the Dragon Age: Origins (Xbox 360) disc image (not needed to update an "
                                       "install whose game files are extracted)")
@@ -63,6 +51,10 @@ def main():
         return run_for_launcher(args)
 
     if args.gui or not (args.iso or args.dest or args.prepare_only):
+        # (The bundled installer's Python has no Tkinter: the launcher is its window.)
+        if BUNDLED:
+            parser.print_help()
+            return 2
         try:
             from . import gui
         except ImportError:
@@ -74,7 +66,6 @@ def main():
         if not IS_WINDOWS and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
             parser.print_help()
             return 2
-        hide_own_console()
         gui.main(args.iso or "", args.dest or "", args.update)
         return 0
 

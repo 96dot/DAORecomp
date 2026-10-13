@@ -68,4 +68,12 @@ namespace dao
             return {};
         return Hex(digest);
     }
+
+    bool Sha256(std::span<const uint8_t> data, std::span<uint8_t, 32> digest)
+    {
+        // (BCryptHash takes a ULONG length.)
+        return data.size() <= ULONG_MAX &&
+               BCryptHash(BCRYPT_SHA256_ALG_HANDLE, nullptr, 0, const_cast<uint8_t*>(data.data()), ULONG(data.size()),
+                   digest.data(), ULONG(digest.size())) >= 0;
+    }
 }

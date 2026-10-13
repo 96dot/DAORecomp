@@ -53,6 +53,7 @@ namespace dao::launcher
     private:
         void Read();
         void Take(std::string_view line);
+        void ReleaseEngine();
 
         State state_ = State::Idle;
         std::string status_, error_;
@@ -70,6 +71,9 @@ namespace dao::launcher
         std::vector<std::string> pending_;
         bool ended_ = false;
         DWORD exitCode_ = 0;
+        // The unpacked installer's files, open so others may only read them until it
+        // has ended (they were checked before it started).
+        std::vector<void*> engineLocks_;
     };
 
     // The installer's work folder, as installer/util.py has it (DAO_WORK_DIR, else
