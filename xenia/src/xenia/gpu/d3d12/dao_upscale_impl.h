@@ -478,7 +478,22 @@ class DaoUpscalerImpl {
   PfnFfxQuery ffx_query_ = nullptr;
   PfnFfxDispatch ffx_dispatch_ = nullptr;
   PfnFfxConfigure ffx_configure_ = nullptr;
+  // FSR couldn't be loaded or created, or its dispatches kept failing: not
+  // retried.
   bool ffx_failed_ = false;
+  // Set by a dispatch that failed (when the command list is executed), seen
+  // at the next swap.
+  std::atomic<bool> dispatch_failed_{false};
+  static constexpr uint32_t kMaxDispatchFailures = 3;
+  uint32_t dispatch_failures_ = 0;
+  // A DLL in the program folder in place of a system one (OptiScaler, which
+  // can take over FSR's calls), for the log; empty if none.
+  std::string ffx_proxy_;
+  // " - see the log of <proxy>", or nothing: for FSR's error messages.
+  std::string ProxyNote() const {
+    return ffx_proxy_.empty() ? std::string()
+                              : " - see the log of " + ffx_proxy_;
+  }
   ffxContext context_ = nullptr;
   uint32_t context_size_[4] = {};
   std::string version_name_;

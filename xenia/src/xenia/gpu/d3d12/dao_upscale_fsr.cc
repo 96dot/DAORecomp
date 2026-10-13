@@ -2,11 +2,17 @@
 // dispatch - see dao_upscale.h.
 #include "xenia/gpu/d3d12/dao_upscale_impl.h"
 
+#include <algorithm>
+#include <iterator>
 #include <string>
+#include <string_view>
 
 #include "xenia/base/logging.h"
 #include "xenia/base/platform_win.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
+
+// After platform_win.h (needs windows.h).
+#include <psapi.h>
 
 DECLARE_string(dao_temporal_upscaler);
 
@@ -16,20 +22,66 @@ namespace d3d12 {
 
 namespace {
 
+// ASCII, anything else as '?'.
+std::string NarrowAscii(const wchar_t* text) {
+  std::string narrow;
+  for (const wchar_t* c = text; c && *c; ++c) {
+    narrow += char(*c < 128 ? *c : '?');
+  }
+  return narrow;
+}
+
 void FfxMessage(uint32_t type, const wchar_t* message) {
   static std::atomic<uint32_t> s_errors{0}, s_warnings{0};
   if (!LogNth(type == FFX_API_MESSAGE_TYPE_ERROR ? s_errors : s_warnings)) {
     return;
   }
-  std::string text;
-  for (const wchar_t* c = message; c && *c; ++c) {
-    text += char(*c < 128 ? *c : '?');
-  }
+  const std::string text = NarrowAscii(message);
   if (type == FFX_API_MESSAGE_TYPE_ERROR) {
     XELOGE("FSR: {}", text);
   } else {
     XELOGW("FSR: {}", text);
   }
+}
+
+// The first DLL loaded from the program folder under the name of a system one
+// that mods load themselves as, or an empty string. The names are those
+// OptiScaler's guide lists (it can take over FSR's calls); kept by hand.
+std::string ProxyDllInProgramFolder() {
+  wchar_t exe[MAX_PATH];
+  const DWORD exe_length = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  if (!exe_length || exe_length >= MAX_PATH) {
+    return {};
+  }
+  const std::wstring_view exe_path(exe, exe_length);
+  const std::wstring_view folder =
+      exe_path.substr(0, exe_path.rfind(L'\\') + 1);
+  // (A process with more modules isn't searched past these.)
+  HMODULE modules[1024];
+  DWORD bytes = 0;
+  if (!EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules),
+                          &bytes)) {
+    return {};
+  }
+  const DWORD count =
+      std::min<DWORD>(bytes / sizeof(HMODULE), DWORD(std::size(modules)));
+  for (DWORD i = 0; i < count; ++i) {
+    wchar_t path[MAX_PATH];
+    const DWORD length = GetModuleFileNameW(modules[i], path, MAX_PATH);
+    if (length <= folder.size() || length >= MAX_PATH ||
+        _wcsnicmp(path, folder.data(), folder.size()) != 0) {
+      continue;
+    }
+    const wchar_t* name = path + folder.size();
+    for (const wchar_t* system_name :
+         {L"dxgi.dll", L"d3d12.dll", L"winmm.dll", L"version.dll",
+          L"dbghelp.dll", L"winhttp.dll", L"wininet.dll"}) {
+      if (_wcsicmp(name, system_name) == 0) {
+        return NarrowAscii(name);
+      }
+    }
+  }
+  return {};
 }
 
 }  // namespace
@@ -58,6 +110,13 @@ bool DaoUpscalerImpl::LoadFfx() {
         "temporal upscaling is off");
     ffx_failed_ = true;
     return false;
+  }
+  ffx_proxy_ = ProxyDllInProgramFolder();
+  if (!ffx_proxy_.empty()) {
+    XELOGW(
+        "FSR: {} in the program folder isn't the system's (OptiScaler?); it "
+        "may handle the upscaler's calls",
+        ffx_proxy_);
   }
 
   // List the available upscaler versions for the log.
@@ -150,7 +209,7 @@ bool DaoUpscalerImpl::EnsureContext(uint32_t render_width,
   }
   ffxReturnCode_t result = ffx_create_(&context_, &desc.header, nullptr);
   if (result != FFX_API_RETURN_OK) {
-    XELOGE("FSR: creating the upscaler failed ({})", result);
+    XELOGE("FSR: creating the upscaler failed ({}){}", result, ProxyNote());
     context_ = nullptr;
     ffx_failed_ = true;
     return false;
@@ -175,7 +234,10 @@ bool DaoUpscalerImpl::EnsureContext(uint32_t render_width,
       jitter_phase_count_ <= 0) {
     jitter_phase_count_ = 8;
   }
-  XELOGI("FSR: upscaler {} - {}x{} -> {}x{}, {} jitter phases", version_name_,
+  // (Through a proxy, the version it reports, not necessarily what runs.)
+  XELOGI("FSR: upscaler {}{} - {}x{} -> {}x{}, {} jitter phases",
+         version_name_,
+         ffx_proxy_.empty() ? "" : " as " + ffx_proxy_ + " reports it",
          render_width, render_height, display_width, display_height,
          jitter_phase_count_);
   reset_history_ = true;
@@ -207,9 +269,13 @@ void DaoUpscalerImpl::ExecuteDispatch(void* context,
   }
   params.desc.commandList = command_list;
   ffxReturnCode_t result = self.ffx_dispatch_(&self.context_, &params.desc.header);
-  static std::atomic<uint32_t> s_failures{0};
-  if (result != FFX_API_RETURN_OK && LogNth(s_failures)) {
-    XELOGE("FSR: dispatch failed ({})", result);
+  if (result != FFX_API_RETURN_OK) {
+    // Seen at the next swap (see OnSwap).
+    self.dispatch_failed_.store(true, std::memory_order_relaxed);
+    static std::atomic<uint32_t> s_failures{0};
+    if (LogNth(s_failures)) {
+      XELOGE("FSR: dispatch failed ({}){}", result, self.ProxyNote());
+    }
   }
 }
 

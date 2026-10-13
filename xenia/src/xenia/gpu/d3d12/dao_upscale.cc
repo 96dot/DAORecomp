@@ -716,6 +716,22 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   render_size_[0] = render_width;
   render_size_[1] = render_height;
 
+  // A dispatch failed in the commands run since the last swap (that frame
+  // showed the upscaled image as it was before). FSR is started again (an
+  // overlay such as OptiScaler may have failed once, switching upscalers),
+  // and given up for the session after kMaxDispatchFailures, as when it can't
+  // be created: the image is scaled instead.
+  if (dispatch_failed_.exchange(false, std::memory_order_relaxed) &&
+      context_) {
+    DestroyContext();
+    if (++dispatch_failures_ >= kMaxDispatchFailures) {
+      XELOGE("FSR: the upscaler failed {} times, scaling the image instead{}",
+             dispatch_failures_, ProxyNote());
+      ffx_failed_ = true;
+    } else {
+      XELOGW("FSR: the upscaler failed, starting it again");
+    }
+  }
   overlay_shown_ = true_hdr_ && OverlayShown();
   const char* reason = nullptr;
   if (!jitter_active_) {
@@ -1089,7 +1105,7 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   if (jitter_cooldown_) {
     --jitter_cooldown_;
   }
-  // No retries once FSR couldn't be loaded or created.
+  // No retries once FSR couldn't be loaded or created, or kept failing.
   jitter_active_ = enabled && !jitter_cooldown_ && !ffx_failed_;
   true_hdr_ = WantsTrueHdr();
   // The game's 2xMSAA while the scene isn't antialiased here.

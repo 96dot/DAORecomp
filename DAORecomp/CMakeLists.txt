@@ -115,7 +115,9 @@ target_link_libraries(DAORecomp PRIVATE
 
 # Recompiled code recurses on the host stack as deeply as the guest does. A window
 # program, like the launcher-only build above: no console window behind it
-# (DAO_CONSOLE=1 gets one, see main.cpp).
+# (DAO_CONSOLE=1 gets one, see main.cpp). Unlike the launcher-only build, no
+# /DEPENDENTLOADFLAG: this one is run from its install folder, where players put
+# mods such as OptiScaler as dxgi.dll (README.md).
 target_link_options(DAORecomp PRIVATE /STACK:16777216 /MAP /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
 
 target_precompile_headers(DAORecomp PRIVATE stdafx.h)

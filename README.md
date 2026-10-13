@@ -181,6 +181,19 @@ the next time it starts. Turning off dynamic shadows and post-processing there (
 launcher) makes the game faster on low-power devices such as the Steam Deck. Motion
 blur is off by default; Low and High cost GPU time while the scene moves.
 
+[OptiScaler](https://github.com/optiscaler/OptiScaler) can take over the temporal upscaling
+(as can unofficial forks of it, such as AMD-NR). It isn't included: copy its files next to
+`DAORecomp.exe` without replacing the `amd_fidelityfx_*.dll` files already there, rename
+`OptiScaler.dll` to `dxgi.dll`, and keep *Temporal upscaling* on (not Off), since that's what
+it replaces. A `dxgi.dll` there runs as part of the game, launcher included, every time it
+starts, so only use a build you trust. AMD-NR's Neural Rendering is expensive: about 13 ms a
+frame on an RX 9070 XT at `resolution_scale = 2` (1440p) with 4K output, too much for 60 fps;
+`AmdLmxxfTierCap=720` under `[DlssNr]` in `OptiScaler.ini` halves that. If the upscaling
+keeps failing through it, the game falls back to regular scaling for the session, and
+`userdata/xenia.log` names the DLL; OptiScaler's own log says why (it may contain your user
+name: check before sharing it). To remove it, delete `dxgi.dll` and the files and folders it
+came with.
+
 Mods go in `mods/` (see `mods/README.txt`); the easiest way to add one is to drop its
 archive, folder or files on the launcher window (archives are opened with Windows'
 `tar.exe`, in Windows 10 1803 and later). PC mods with models, textures or archives

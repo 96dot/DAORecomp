@@ -66,8 +66,11 @@ DAO_SANDBOX=C:/Sandbox scripts/test/run_sandbox.sh out/walk 100 scripts/test/inp
 
 `run_sandbox.sh` refuses to start while the game is running and opens the window in the
 background, like `run_game.sh`, but doesn't restore settings or saves: the copy is there
-to be changed. Remove a sandbox's `game` junction with `rmdir`, never `rm -r`, which
-deletes the real game files through it.
+to be changed. It starts the game in the exe's folder, as a shortcut does: with an `EXE`
+copied into the sandbox and mods such as OptiScaler beside it, the logs they write there
+during the run are copied into the output folder too. Remove a
+sandbox's `game` junction with `rmdir`, never `rm -r`, which deletes the real game files
+through it.
 
 ## Flicker and motion
 
