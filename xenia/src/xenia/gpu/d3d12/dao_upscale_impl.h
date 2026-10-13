@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "xenia/base/cvar.h"
+#include "xenia/dao_live_settings.h"
 #include "xenia/gpu/d3d12/d3d12_render_target_cache.h"
 #include "xenia/gpu/d3d12/dao_upscale.h"
 #include "xenia/gpu/d3d12/pipeline_cache.h"
@@ -27,7 +28,6 @@
 #include "ffx_api.h"
 #include "ffx_upscale.h"
 
-DECLARE_double(present_hdr_paper_white);
 DECLARE_double(present_hdr_gamma);
 
 namespace xe {
@@ -127,9 +127,7 @@ enum CompositeMode : uint32_t {
 };
 
 // SDR white in nits; at least the scRGB unit, as in the presenter.
-inline float PaperWhiteNits() {
-  return float(std::max(cvars::present_hdr_paper_white, 80.0));
-}
+inline float PaperWhiteNits() { return dao_live::HdrPaperWhite(); }
 
 // The gamma the game's output is encoded with, within reason.
 inline float OutputGamma() {

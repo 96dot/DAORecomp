@@ -15,6 +15,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/threading.h"
 #include "xenia/dao_host.h"
+#include "xenia/dao_live_settings.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/gpu/d3d12/d3d12_graphics_system.h"
 #include "xenia/gpu/d3d12/dao_upscale.h"
@@ -33,6 +34,11 @@
 DECLARE_path(log_file);
 DECLARE_bool(log_to_stdout);
 DECLARE_bool(dao_present_vsync);
+DECLARE_double(dao_temporal_sharpness);
+DECLARE_int32(anisotropic_override);
+DECLARE_int32(dao_motion_blur);
+DECLARE_double(present_hdr_paper_white);
+DECLARE_double(present_hdr_peak);
 
 using namespace dao::kernel;
 
@@ -120,6 +126,17 @@ namespace dao::gpu
             config.SetDither(!GetSettings().hdr);
             return config;
         }
+    }
+
+    void LoadXeniaLiveSettings()
+    {
+        xe::dao_live::Values& live = xe::dao_live::values;
+        live.present_vsync = cvars::dao_present_vsync;
+        live.temporal_sharpness = cvars::dao_temporal_sharpness;
+        live.anisotropic_override = cvars::anisotropic_override;
+        live.motion_blur = cvars::dao_motion_blur;
+        live.hdr_paper_white = cvars::present_hdr_paper_white;
+        live.hdr_peak = cvars::present_hdr_peak;
     }
 
     bool InitializeXeniaGraphics(const std::filesystem::path& userRoot)
@@ -447,6 +464,7 @@ namespace xe::dao_host
 
     bool PollGpuWaits()
     {
-        return dao::FrameRateAbove60(dao::gpu::FrameRate()) || !cvars::dao_present_vsync;
+        return dao::FrameRateAbove60(dao::gpu::FrameRate()) ||
+            !xe::dao_live::Load(xe::dao_live::values.present_vsync);
     }
 }

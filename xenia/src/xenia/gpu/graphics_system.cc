@@ -107,7 +107,7 @@ X_STATUS GraphicsSystem::Setup(Memory* memory,
             // the host waits for its display (with vsync off Xenia raised one
             // every millisecond: the game's vblank-counted flips went through
             // at once, and anything counted in vblanks ran ~16x fast). The
-            // host's own vsync is dao_present_vsync.
+            // host's own vsync is dao_present_vsync (live: dao_live_settings.h).
             if (normalized_framerate_limit == 0) {
               normalized_framerate_limit = 60;
             }

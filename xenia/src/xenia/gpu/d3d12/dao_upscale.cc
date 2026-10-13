@@ -6,6 +6,7 @@
 #include <bit>
 
 #include "xenia/base/logging.h"
+#include "xenia/dao_live_settings.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/gpu/d3d12/dao_gpu_timing.h"
 #include "xenia/gpu/graphics_system.h"
@@ -769,9 +770,10 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   desc.motionVectorScale = {1.0f, 1.0f};
   desc.renderSize = {render_width, render_height};
   desc.upscaleSize = {display_width, display_height};
-  desc.enableSharpening = cvars::dao_temporal_sharpness > 0.0;
-  desc.sharpness =
-      float(std::clamp(cvars::dao_temporal_sharpness, 0.0, 1.0));
+  const double sharpness =
+      dao_live::Load(dao_live::values.temporal_sharpness);
+  desc.enableSharpening = sharpness > 0.0;
+  desc.sharpness = float(std::clamp(sharpness, 0.0, 1.0));
   desc.frameTimeDelta = std::clamp(frame_ms, 1.0f, 100.0f);
   desc.preExposure = 1.0f;
   desc.reset = reset_history_;

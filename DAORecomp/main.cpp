@@ -326,6 +326,7 @@ int main(int argc, char** argv)
     StartTimeStampThread();
 
     dao::LoadSettings(userRoot);
+    dao::gpu::LoadXeniaLiveSettings();
     {
         // Same rule as the launcher: mod folders not in config.toml yet are enabled.
         const auto modsRoot = dao::mods::ModsRoot(gameRoot);

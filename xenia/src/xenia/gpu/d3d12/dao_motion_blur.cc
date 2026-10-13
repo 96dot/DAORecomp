@@ -4,9 +4,9 @@
 
 #include <algorithm>
 
+#include "xenia/dao_live_settings.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 
-DECLARE_int32(dao_motion_blur);
 DECLARE_bool(dao_motion_vectors);
 DECLARE_bool(dao_show_motion_vectors);
 
@@ -33,7 +33,7 @@ DaoUpscalerImpl::MotionBlur DaoUpscalerImpl::GetMotionBlur(
   MotionBlur blur;
   // Not on the first upscaled frame (the motion is from frames not upscaled),
   // nor with motion vectors off or shown instead of the scene.
-  const int32_t strength = cvars::dao_motion_blur;
+  const int32_t strength = dao_live::Load(dao_live::values.motion_blur);
   if (strength <= 0 || !motion_available_ || !cvars::dao_motion_vectors ||
       cvars::dao_show_motion_vectors || reset_history_ ||
       (render_width == blur_failed_size_[0] &&

@@ -28,6 +28,9 @@ namespace dao::gpu
 
     // Creates the window and the D3D12 graphics system. Returns false if Direct3D 12
     // is unavailable (the runtime then falls back to the null command processor).
+    // The in-game menu's live settings (xenia/dao_live_settings.h) from the cvars the
+    // config set: once, after LoadSettings and before any thread reading them starts.
+    void LoadXeniaLiveSettings();
     bool InitializeXeniaGraphics(const std::filesystem::path& userRoot);
     bool XeniaActive();
 

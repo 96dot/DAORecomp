@@ -9,11 +9,11 @@
 
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
+#include "xenia/dao_live_settings.h"
 #include "xenia/gpu/d3d12/dao_gpu_timing.h"
 #include "xenia/gpu/d3d12/dao_upscale.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
 
-DECLARE_double(present_hdr_paper_white);
 DECLARE_double(present_hdr_gamma);
 
 namespace xe {
@@ -105,8 +105,7 @@ void D3D12CommandProcessor::DaoSetHdrCopyRoot(
   DaoHdrCopyConstants dao_hdr_copy_constants;
   dao_hdr_copy_constants.size[0] = uint32_t(swap_texture_desc.Width);
   dao_hdr_copy_constants.size[1] = uint32_t(swap_texture_desc.Height);
-  dao_hdr_copy_constants.paper_white =
-      float(std::max(cvars::present_hdr_paper_white, 80.0));
+  dao_hdr_copy_constants.paper_white = dao_live::HdrPaperWhite();
   dao_hdr_copy_constants.gamma =
       float(std::clamp(cvars::present_hdr_gamma, 1.0, 3.0));
   dao_hdr_copy_constants.use_ramp =

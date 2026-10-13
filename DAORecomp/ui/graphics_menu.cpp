@@ -15,14 +15,7 @@
 #include <bitset>
 #include <cmath>
 
-#include "xenia/base/cvar.h"
-
-DECLARE_double(dao_temporal_sharpness);
-DECLARE_int32(anisotropic_override);
-DECLARE_double(present_hdr_paper_white);
-DECLARE_double(present_hdr_peak);
-DECLARE_int32(dao_motion_blur);
-DECLARE_bool(dao_present_vsync);
+#include "xenia/dao_live_settings.h"
 
 namespace dao::ui
 {
@@ -255,24 +248,26 @@ namespace dao::ui
         }
 
         // Applies a changed setting now; restart-only ones wait for the next start.
+        // (The renderer's live settings, not their cvars: see dao_live_settings.h.)
         void ApplyLive(const Settings& s, Key key)
         {
+            xe::dao_live::Values& live = xe::dao_live::values;
             switch (key)
             {
             case Key::Fullscreen: gpu::XeniaSetFullscreen(s.fullscreen); break;
             case Key::FrameRate: gpu::SetFrameRate(s.frameRate); break;
-            case Key::VSync: cvars::dao_present_vsync = s.vsync; break;
-            case Key::TemporalSharpness: cvars::dao_temporal_sharpness = s.temporalSharpness; break;
+            case Key::VSync: live.present_vsync = s.vsync; break;
+            case Key::TemporalSharpness: live.temporal_sharpness = s.temporalSharpness; break;
             case Key::Upscaler:
             case Key::Sharpness: gpu::XeniaSetOutputScaling(s.upscaler, s.sharpness); break;
             case Key::AnisotropicFiltering:
-                cvars::anisotropic_override = XeniaAnisotropicLevel(s.anisotropicFiltering);
+                live.anisotropic_override = XeniaAnisotropicLevel(s.anisotropicFiltering);
                 break;
             case Key::Shadows: s_shadows = s.shadows; break;
             case Key::PostProcessing: s_postProcessing = s.postProcessing; break;
-            case Key::MotionBlur: cvars::dao_motion_blur = s.motionBlur; break;
-            case Key::HdrPaperWhite: cvars::present_hdr_paper_white = s.hdrPaperWhite; break;
-            case Key::HdrPeak: cvars::present_hdr_peak = s.hdrPeak; break;
+            case Key::MotionBlur: live.motion_blur = s.motionBlur; break;
+            case Key::HdrPaperWhite: live.hdr_paper_white = s.hdrPaperWhite; break;
+            case Key::HdrPeak: live.hdr_peak = s.hdrPeak; break;
             default: break;
             }
         }

@@ -10,9 +10,7 @@
 #include "kernel/objects.h"
 #include "settings.h"
 #include "ui/graphics_menu.h"
-#include "xenia/base/cvar.h"
-
-DECLARE_bool(dao_present_vsync);
+#include "xenia/dao_live_settings.h"
 
 namespace dao::gpu
 {
@@ -59,7 +57,8 @@ namespace dao::gpu
             s_next = {};
             return;
         }
-        const double rate = cvars::dao_present_vsync ? frameRate * 1.005 : frameRate;
+        const double rate =
+            xe::dao_live::Load(xe::dao_live::values.present_vsync) ? frameRate * 1.005 : frameRate;
         const auto period = std::chrono::nanoseconds(int64_t(1e9 / rate));
         const auto now = Clock::now();
         if (s_next == Clock::time_point{} || now - s_next > period)

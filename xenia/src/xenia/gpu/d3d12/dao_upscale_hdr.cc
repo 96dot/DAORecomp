@@ -5,13 +5,13 @@
 #include <algorithm>
 #include <cmath>
 
+#include "xenia/dao_live_settings.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/ui/d3d12/d3d12_presenter.h"
 
 DECLARE_bool(dao_true_hdr);
 DECLARE_bool(present_hdr);
-DECLARE_double(present_hdr_peak);
 
 namespace xe {
 namespace gpu {
@@ -199,8 +199,7 @@ void DaoUpscalerImpl::RunHdrTonemap() {
   constants.size[0] = width;
   constants.size[1] = height;
   constants.gamma = OutputGamma();
-  constants.peak_ratio =
-      std::max(float(cvars::present_hdr_peak) / PaperWhiteNits(), 1.0f);
+  constants.peak_ratio = dao_live::HdrPeakRatio(PaperWhiteNits());
   // In the curves' linear part: their shoulders start at about 0.45.
   constants.knee = 0.4f;
   DeferredCommandList& command_list = cp_.GetDeferredCommandList();

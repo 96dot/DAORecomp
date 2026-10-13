@@ -19,6 +19,7 @@
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
+#include "xenia/dao_live_settings.h"  // DAO
 #include "xenia/ui/d3d12/d3d12_provider.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
 #include "xenia/ui/surface_win.h"
@@ -30,7 +31,6 @@ DEFINE_bool(
     "cases.",
     "D3D12");
 
-DECLARE_bool(dao_present_vsync);
 DECLARE_bool(present_hdr);
 DECLARE_bool(dao_hdr_scrgb);
 
@@ -1153,7 +1153,7 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
   // dropping none: above 60 fps frames come unevenly, two often within one
   // refresh, and RESTART discarding the first would leave the next refresh
   // without a new frame (below 60 fps shown on a 60 Hz display).
-  const bool present_vsync = cvars::dao_present_vsync;
+  const bool present_vsync = dao_live::Load(dao_live::values.present_vsync);
   HRESULT present_result = paint_context_.swap_chain->Present(
       present_vsync ? 1 : 0,
       present_vsync ? 0

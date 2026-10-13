@@ -22,6 +22,11 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
 
 - `dao_host.h`: the runtime services Xenia's code calls instead of its kernel and
   CPU modules (interrupts, guest threads, the window).
+- `dao_live_settings.h`: the settings the in-game Graphics menu changes while the
+  game runs (vsync, temporal sharpness, anisotropic filtering, motion blur, HDR
+  paper white and peak), as atomics the GPU, presenter and render threads read
+  instead of their cvars (also in the upstream files `d3d12_texture_cache.cc` and
+  `d3d12_presenter.cc`).
 - `gpu/d3d12/dao_upscale.*`: temporal upscaling (FidelityFX), motion vectors, motion
   blur: `dao_upscale.h` is its interface, `dao_upscale_impl.h` the class its files
   share; `dao_upscale.cc` the frame (draws, resolves, the swap, the composite),

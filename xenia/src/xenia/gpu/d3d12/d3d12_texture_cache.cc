@@ -18,6 +18,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/profiling.h"
+#include "xenia/dao_live_settings.h"  // DAO
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/gpu/d3d12/d3d12_shared_memory.h"
 #include "xenia/gpu/gpu_flags.h"
@@ -833,10 +834,13 @@ D3D12TextureCache::SamplerParameters D3D12TextureCache::GetSamplerParameters(
           : binding.aniso_filter;
   // Apply anisotropic override, but only for mipmapped textures
   // that are already using bilinear/trilinear filtering.
-  if (cvars::anisotropic_override > -1 && cvars::anisotropic_override < 6 &&
+  // DAO: the live setting (the Graphics menu changes it while this runs).
+  const int32_t anisotropic_override =
+      dao_live::Load(dao_live::values.anisotropic_override);
+  if (anisotropic_override > -1 && anisotropic_override < 6 &&
       has_mips && !mip_base_map && min_mag_linear &&
       mip_filter_bilinear_or_trilinear) {
-    aniso_filter = xenos::AnisoFilter(cvars::anisotropic_override);
+    aniso_filter = xenos::AnisoFilter(anisotropic_override);
   }
   aniso_filter = std::min(aniso_filter, xenos::AnisoFilter::kMax_16_1);
   parameters.aniso_filter = aniso_filter;

@@ -10,6 +10,7 @@
 
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
+#include "xenia/dao_live_settings.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
 
 DEFINE_bool(dao_present_vsync, true,
@@ -185,7 +186,8 @@ bool D3D12Presenter::DaoWaitForFrameLatency() {
   // display). The timeout only guards against a swap chain that stopped
   // presenting (a display asleep): then nothing is presented, as a present
   // not waited for would let one more frame queue from then on.
-  const UINT frame_latency = cvars::dao_present_vsync ? 2 : 3;
+  const UINT frame_latency =
+      dao_live::Load(dao_live::values.present_vsync) ? 2 : 3;
   if (paint_context_.frame_latency != frame_latency &&
       SUCCEEDED(paint_context_.swap_chain->SetMaximumFrameLatency(
           frame_latency))) {
@@ -240,8 +242,7 @@ void D3D12Presenter::DaoEncodeHdrSource(
              hdr_view_heap->GetGPUDescriptorHandleForHeapStart(),
              PaintContext::kViewIndexHdrSourceSrv));
   const bool display_hdr = paint_context_.display_hdr;
-  const float paper_white =
-      float(std::max(cvars::present_hdr_paper_white, 80.0));
+  const float paper_white = dao_live::HdrPaperWhite();
   // The scale to scRGB (1 = 80 nits): an SDR image's white is paper_white
   // on HDR displays and 1 on SDR ones; a PQ image is in nits, scaled by
   // 1/80 (HDR) or 1/paper_white (SDR); an scRGB one is copied.
@@ -253,7 +254,7 @@ void D3D12Presenter::DaoEncodeHdrSource(
   const float hdr_constants[4] = {
       scale,
       display_hdr
-          ? std::max(float(cvars::present_hdr_peak) / paper_white, 1.0f)
+          ? dao_live::HdrPeakRatio(paper_white)
           : 1.0f,
       // DAO: a gamma from the config the shader can use.
       float(std::clamp(cvars::present_hdr_gamma, 1.0, 3.0)),
