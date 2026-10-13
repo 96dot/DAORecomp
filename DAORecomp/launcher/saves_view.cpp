@@ -153,7 +153,7 @@ namespace dao::launcher
             }
             constexpr ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
                 ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
-            if (!ImGui::BeginTable("backups", 3, flags, ImVec2(0, ImGui::GetContentRegionAvail().y)))
+            if (!BeginNavTable("backups", 3, flags, ImVec2(0, ImGui::GetContentRegionAvail().y)))
                 return;
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableSetupColumn("Character", ImGuiTableColumnFlags_WidthStretch, 1.0f);

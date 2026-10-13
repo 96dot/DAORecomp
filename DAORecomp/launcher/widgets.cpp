@@ -78,12 +78,90 @@ namespace dao::launcher
         {
             return kHintIcon + kHintGap + st.headingFont->CalcTextSizeA(kHintTextSize, FLT_MAX, 0, label).x;
         }
+
+        const char* XboxArt(PadButton button)
+        {
+            switch (button)
+            {
+            case PadButton::A:
+                return kButtonA;
+            case PadButton::B:
+                return kButtonB;
+            case PadButton::Y:
+                return kButtonY;
+            case PadButton::LB:
+                return kButtonLB;
+            case PadButton::RB:
+                return kButtonRB;
+            }
+            return kButtonA;
+        }
+
+        // A PlayStation's face buttons' symbols, in their colours; L1 and R1 as pills.
+        // (Their shapes' sizes are fractions of the button's height or radius.)
+        constexpr ImU32 kPsCross = IM_COL32(124, 178, 232, 255), kPsCircle = IM_COL32(255, 102, 102, 255),
+                        kPsTriangle = IM_COL32(64, 226, 160, 255);
+        constexpr ImU32 kPsButton = IM_COL32(24, 22, 20, 235);
+        // A pill's width, in heights.
+        constexpr float kPsPillWidth = 1.7f;
+
+        void DrawPlayStationButton(ImDrawList* draw, const State& st, PadButton button, ImVec2 at, float height,
+            float alpha)
+        {
+            const float thickness = std::max(1.5f, height * 0.08f);
+            const ImU32 rim = WithAlpha(kText, 0.6f * alpha);
+            if (button == PadButton::LB || button == PadButton::RB)
+            {
+                const ImVec2 max(at.x + height * kPsPillWidth, at.y + height);
+                draw->AddRectFilled(at, max, WithAlpha(kPsButton, alpha), height * 0.5f);
+                draw->AddRect(at, max, rim, height * 0.5f, 0, thickness * 0.75f);
+                const char* label = button == PadButton::LB ? "L1" : "R1";
+                const float size = height * 0.62f;
+                const ImVec2 text = st.headingFont->CalcTextSizeA(size, FLT_MAX, 0, label);
+                draw->AddText(st.headingFont, size,
+                    ImVec2((at.x + max.x - text.x) * 0.5f, (at.y + max.y - text.y) * 0.5f), WithAlpha(kText, alpha),
+                    label);
+                return;
+            }
+            const float r = height * 0.5f, s = r * 0.42f;
+            const ImVec2 c(at.x + r, at.y + r);
+            draw->AddCircleFilled(c, r * 0.95f, WithAlpha(kPsButton, alpha));
+            draw->AddCircle(c, r * 0.95f, rim, 0, thickness * 0.75f);
+            switch (button)
+            {
+            case PadButton::A:
+                draw->AddLine(ImVec2(c.x - s, c.y - s), ImVec2(c.x + s, c.y + s), WithAlpha(kPsCross, alpha), thickness);
+                draw->AddLine(ImVec2(c.x - s, c.y + s), ImVec2(c.x + s, c.y - s), WithAlpha(kPsCross, alpha), thickness);
+                break;
+            case PadButton::B:
+                draw->AddCircle(c, s, WithAlpha(kPsCircle, alpha), 0, thickness);
+                break;
+            case PadButton::Y:
+            default:
+                draw->AddTriangle(ImVec2(c.x, c.y - s * 1.05f), ImVec2(c.x + s, c.y + s * 0.7f),
+                    ImVec2(c.x - s, c.y + s * 0.7f), WithAlpha(kPsTriangle, alpha), thickness);
+                break;
+            }
+        }
+    }
+
+    // A gamepad button's icon, `height` high with its top left at `at`, as the
+    // gamepad used last has it.
+    void DrawPadButton(ImDrawList* draw, const State& st, PadButton button, ImVec2 at, float height, float alpha)
+    {
+        if (st.padStyle == PadStyle::PlayStation)
+            DrawPlayStationButton(draw, st, button, at, height, alpha);
+        else if (const Texture* art = Art(st, XboxArt(button)))
+            DrawSprite(draw, *art, at, height / art->height, alpha);
+        else
+            draw->AddCircleFilled(ImVec2(at.x + height * 0.5f, at.y + height * 0.5f), height * 0.45f,
+                WithAlpha(kGold, alpha));
     }
 
     // A button hint of the game's footers at `at` (its top left; its top right when
     // the label comes first): the button's icon and the label. Clickable when
     // `clickable`; returns whether it was clicked.
-    bool Hint(const State& st, const Layout& layout, const char* button, const char* label, ImVec2 at,
+    bool Hint(const State& st, const Layout& layout, PadButton button, const char* label, ImVec2 at,
         bool labelFirst, bool clickable)
     {
         ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -103,11 +181,7 @@ namespace dao::launcher
         }
         const float iconX = labelFirst ? min.x + text.x + gap : min.x;
         const float textX = labelFirst ? min.x : min.x + icon + gap;
-        if (const Texture* art = Art(st, button))
-            DrawSprite(draw, *art, ImVec2(iconX, min.y), icon / art->height, st.fade);
-        else
-            draw->AddCircleFilled(ImVec2(iconX + icon * 0.5f, min.y + icon * 0.5f), icon * 0.45f,
-                WithAlpha(kGold, st.fade));
+        DrawPadButton(draw, st, button, ImVec2(iconX, min.y), icon, st.fade);
         ShadowText(draw, st, font, size, ImVec2(textX, min.y + (icon - text.y) * 0.5f), hot ? kGoldBright : kText,
             label);
         return pressed;
@@ -194,7 +268,22 @@ namespace dao::launcher
         return ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
     }
 
-    // How something went, a line each: problems in the error colour.
+    // BeginTable for a table that scrolls (in a child window of its own), its rows
+    // navigated as part of the view (NavFlattened, as ShowContents' contents): the
+    // d-pad moves into, through and out of it, and B means Back. (ImGui has no call
+    // for a table's child flags: they're set as BeginChild's would be.)
+    bool BeginNavTable(const char* id, int columns, ImGuiTableFlags flags, ImVec2 size)
+    {
+        ImGuiContext& g = *GImGui;
+        g.NextWindowData.HasFlags |= ImGuiNextWindowDataFlags_HasChildFlags;
+        g.NextWindowData.ChildFlags = ImGuiChildFlags_NavFlattened;
+        if (ImGui::BeginTable(id, columns, flags, size))
+            return true;
+        // (Not begun: not left for the next window.)
+        g.NextWindowData.ClearFlags();
+        return false;
+    }
+
     // Wrapped text in `color` (kWarning, kError).
     void ColoredText(ImU32 color, const char* text)
     {
@@ -203,6 +292,7 @@ namespace dao::launcher
         ImGui::PopStyleColor();
     }
 
+    // How something went, a line each: problems in the error colour.
     void Messages(const std::vector<mods::InstallResult::Line>& lines)
     {
         ImGui::PushTextWrapPos(0.0f);
@@ -245,7 +335,7 @@ namespace dao::launcher
         const ImVec2 left = layout.Center(kFooterLeft, kFooterTop), right = layout.Center(kFooterRight, kFooterTop);
         if (const Texture* bar = Art(st, kFooterBar))
             DrawStretched(draw, *bar, left, ImVec2(right.x, left.y + bar->height * layout.fit), st.fade);
-        Hint(st, layout, kButtonA, "Select", layout.Center(kFooterLeft + 1.0f, kFooterHintY), false, false);
+        Hint(st, layout, PadButton::A, "Select", layout.Center(kFooterLeft + 1.0f, kFooterHintY), false, false);
         if (restore)
         {
             const char* label = "Restore Defaults";
@@ -254,13 +344,13 @@ namespace dao::launcher
             // slider); owning it keeps Y to this.
             const ImGuiID owner = ImGui::GetID("restore defaults");
             ImGui::SetKeyOwner(ImGuiKey_GamepadFaceUp, owner);
-            if (Hint(st, layout, kButtonY, label, hint, false, true) ||
+            if (Hint(st, layout, PadButton::Y, label, hint, false, true) ||
                 (st.backKeysFree && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, ImGuiInputFlags_None, owner)))
                 restore(st.settings);
         }
         if (st.installer.GetState() == InstallRunner::State::Running)
             return;
-        if (Hint(st, layout, kButtonB, st.setupOnly ? "Close" : "Back",
+        if (Hint(st, layout, PadButton::B, st.setupOnly ? "Close" : "Back",
                 layout.Center(kFooterRight, kFooterHintY), true, true) ||
             (st.backKeysFree && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
                                     ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))))
@@ -274,16 +364,41 @@ namespace dao::launcher
 
     // A view's contents, scrolling between the header and the footer, from `left`
     // (stage pixels from the left) to the right side; scrolled to the top when the
-    // view is new or `resetScroll`.
+    // view is new or `resetScroll`. A new view's first item has the focus, unless
+    // something took it this frame (Configure's tab): the gamepad's focus is never
+    // left on the last view's items. The gamepad's right stick scrolls the list the
+    // focus is in (a scrolling table), or else the contents.
     void ShowContents(State& st, const Layout& layout, float left, Contents contents, bool resetScroll)
     {
+        // Scrolled this far a second with the stick all the way, in stage pixels.
+        constexpr float kPadScrollSpeed = 900.0f;
         const ImVec2 min = layout.Left(left, kContentsTop), max = layout.Right(kContentsRight, kContentsBottom);
         ImGui::SetCursorScreenPos(min);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, st.fade);
         if (resetScroll || st.viewChanged)
             ImGui::SetNextWindowScroll(ImVec2(0, 0));
+        ImGuiContext& g = *GImGui;
+        // The focus is in this (the launcher's) window, or one navigated as part of it
+        // (NavFlattened: the contents below, their tables), as NavInitWindow wants.
+        ImGuiWindow* const root = ImGui::GetCurrentWindow();
+        if (st.viewChanged && !g.NavMoveSubmitted && g.NavWindow && g.NavWindow->RootWindowForNav == root)
+            ImGui::NavInitWindow(g.NavWindow, true);
         ImGui::BeginChild("contents", ImVec2(max.x - min.x, max.y - min.y), ImGuiChildFlags_NavFlattened,
             ImGuiWindowFlags_NoBackground);
+        // (Whole pixels: ImGui rounds the scroll, so the rest waits for the next frame.)
+        if (st.padScroll == 0.0f || st.viewChanged)
+            st.padScrollCarry = 0.0f;
+        else
+        {
+            ImGuiWindow* window = ImGui::GetCurrentWindow();
+            if (g.NavWindow && g.NavWindow != window && g.NavWindow->RootWindowForNav == root &&
+                g.NavWindow->ScrollMax.y > 0.0f)
+                window = g.NavWindow;
+            st.padScrollCarry += st.padScroll * kPadScrollSpeed * layout.fit * ImGui::GetIO().DeltaTime;
+            const float pixels = std::trunc(st.padScrollCarry);
+            st.padScrollCarry -= pixels;
+            ImGui::SetScrollY(window, window->Scroll.y + pixels);
+        }
         contents(st);
         ImGui::EndChild();
         ImGui::PopStyleVar();

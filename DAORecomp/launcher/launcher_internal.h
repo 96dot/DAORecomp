@@ -3,7 +3,7 @@
 // the command line, the window and its frame loop, widgets.cpp the helpers the
 // views draw with, and the views a file each (title_screen.cpp, configure_view.cpp,
 // mods_view.cpp, saves_view.cpp, dlc_view.cpp, update_view.cpp, install_view.cpp,
-// and add_to_steam.cpp's popup).
+// and add_to_steam.cpp's popup); gamepad.cpp feeds the gamepads to ImGui.
 
 // (Every part had these when the launcher was one file.)
 #include <future>
@@ -79,6 +79,10 @@ namespace dao::launcher
     constexpr const char* kButtonY = "XBoxGamepad_TopAction";
     constexpr const char* kButtonLB = "XBoxGamepad_LeftBumper";
     constexpr const char* kButtonRB = "XBoxGamepad_RightBumper";
+    // The gamepad buttons the hints show, and whose: the game's Xbox art, or drawn
+    // as a PlayStation's.
+    enum class PadButton { A, B, Y, LB, RB };
+    enum class PadStyle { Xbox, PlayStation };
     // Button hints: the icon's height, the gap to the label, the label's size.
     constexpr float kHintIcon = 30.0f, kHintGap = 8.0f, kHintTextSize = 19.0f;
 
@@ -174,6 +178,20 @@ namespace dao::launcher
     {
         std::vector<content::InstalledPackage> packages;
         content::TitleUpdateState titleUpdate;
+    };
+
+    // DAO_LAUNCHER_PAD (with DAO_LAUNCHER_SCREENSHOTS): a virtual gamepad pressing a
+    // script's buttons, for testing.
+    struct PadScript
+    {
+        SDL_Joystick* joystick = nullptr;
+        SDL_JoystickID id = 0;
+        std::vector<std::string> steps;
+        size_t step = 0;
+        int frame = 0;
+        // Save this frame as launcher_pad_<shots>.bmp.
+        bool capture = false;
+        int shots = 0;
     };
 
     // The Install view's paths.
@@ -288,11 +306,23 @@ namespace dao::launcher
         SteamResult steamResult;
         // Setup: have the installed game's launcher add it to Steam.
         bool installSteam = false;
-        // DAO_LAUNCHER_SCREENSHOTS=<dir>: show each view, save it as BMP, quit.
+        // DAO_LAUNCHER_SCREENSHOTS=<dir>: show each view, save it as BMP, quit (or
+        // follow the pad script).
         fs::path screenshotDir;
         int screenshotFrame = 0;
+        std::optional<PadScript> padScript;
+        // The gamepads open; whose buttons the hints show (the one used last's); the
+        // left stick's direction, as the d-pad's; the right stick's scrolling (-1 to 1),
+        // and the part of a pixel it has scrolled and not yet shown.
+        std::vector<SDL_Gamepad*> gamepads;
+        PadStyle padStyle = PadStyle::Xbox;
+        ImGuiDir stickDir = ImGuiDir_None;
+        float padScroll = 0.0f, padScrollCarry = 0.0f;
+        // Configure: give the selected tab the focus (switched with LB or RB).
+        bool focusConfigureTab = false;
         // Whether Escape and the gamepad's B mean Back this frame: not closing a popup,
-        // ending an edit or leaving a nested child window.
+        // ending an edit or leaving a child window navigated on its own (not
+        // NavFlattened, as the views' contents and their tables are).
         bool backKeysFree = false;
     };
 
@@ -359,7 +389,8 @@ namespace dao::launcher
         const char* text);
     float Ease(ImGuiID id, bool on, float seconds = 0.12f);
     bool MenuButton(const char* id, ImVec2 min, ImVec2 size, bool enabled, bool& hot);
-    bool Hint(const State& st, const Layout& layout, const char* button, const char* label, ImVec2 at,
+    void DrawPadButton(ImDrawList* draw, const State& st, PadButton button, ImVec2 at, float height, float alpha);
+    bool Hint(const State& st, const Layout& layout, PadButton button, const char* label, ImVec2 at,
         bool labelFirst, bool clickable);
     void OpenFolder(const fs::path& path);
     void OpenFile(const fs::path& path);
@@ -373,6 +404,7 @@ namespace dao::launcher
     bool CancelPressed();
     void Messages(const std::vector<mods::InstallResult::Line>& lines);
     void ColoredText(ImU32 color, const char* text);
+    bool BeginNavTable(const char* id, int columns, ImGuiTableFlags flags, ImVec2 size);
     void PanelFrame(State& st, const Layout& layout, const char* title, Restore restore);
     void ShowContents(State& st, const Layout& layout, float left, Contents contents, bool resetScroll = false);
 
@@ -401,6 +433,14 @@ namespace dao::launcher
 
     // saves_view.cpp: Save Backups, putting back a save the game saved over.
     void SavesView(State& st, const Layout& layout);
+
+    // gamepad.cpp: the gamepads, fed to ImGui's navigation; the pad script.
+    void OpenGamepads(State& st);
+    void HandleGamepadEvent(State& st, const SDL_Event& event);
+    void FeedGamepads(State& st);
+    void CloseGamepads(State& st);
+    void StartPadScript(State& st, std::string_view script);
+    void StepPadScript(State& st);
 
     // dlc_view.cpp: Downloadable Content, what's installed and how to add more.
     bool ReadingDlc(const State& st);

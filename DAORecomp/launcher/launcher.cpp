@@ -272,6 +272,15 @@ namespace dao::launcher
 
         ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
         ImGui_ImplSDLRenderer3_Init(renderer);
+        // The gamepads are fed by FeedGamepads: all of them, the left stick as the
+        // d-pad, without the window switcher.
+        ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_Manual, nullptr, 0);
+        if (const char* padSteps = getenv("DAO_LAUNCHER_SCREENSHOTS") ? getenv("DAO_LAUNCHER_PAD") : nullptr)
+            StartPadScript(st, padSteps);
+        OpenGamepads(st);
+        // With a gamepad, the focus shows from the start (a click hides it).
+        if (!st.gamepads.empty())
+            ImGui::SetNavCursorVisible(true);
 
         st.gameRoot = gameRoot;
         st.userRoot = userRoot;
@@ -348,9 +357,12 @@ namespace dao::launcher
             if (flags & SDL_WINDOW_MINIMIZED || background)
                 SDL_WaitEventTimeout(nullptr, kIdleWaitMs);
             SDL_Event event;
+            if (st.padScript)
+                StepPadScript(st);
             while (SDL_PollEvent(&event))
             {
                 ImGui_ImplSDL3_ProcessEvent(&event);
+                HandleGamepadEvent(st, event);
                 // (Not while adding to Steam: its result says what's become of Steam.)
                 if ((event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) &&
                     st.steamStep != SteamStep::Working)
@@ -383,15 +395,17 @@ namespace dao::launcher
                 const ImGuiContext& g = *ImGui::GetCurrentContext();
                 const ImGuiWindow* nav = g.NavWindow;
                 st.backKeysFree = g.OpenPopupStack.empty() && !g.ActiveId &&
-                    (!nav || !nav->ParentWindow || !nav->ParentWindow->ParentWindow);
+                    (!nav || !nav->RootWindowForNav->ParentWindow);
             }
             ImGui_ImplSDLRenderer3_NewFrame();
             // (After the renderer's NewFrame, which makes the font texture the art uses.)
             UpdateSteam(st);
             ImGui_ImplSDL3_NewFrame();
+            FeedGamepads(st);
             ImGui::NewFrame();
 
-            const int shot = st.screenshotDir.empty() ? -1 : st.screenshotFrame / kFramesPerShot;
+            // (A pad script captures when it says.)
+            const int shot = st.screenshotDir.empty() || st.padScript ? -1 : st.screenshotFrame / kFramesPerShot;
             const bool shotStart = shot >= 0 && st.screenshotFrame % kFramesPerShot == 0;
             const bool shotNow = shot >= 0 && st.screenshotFrame % kFramesPerShot == kFramesPerShot - 1;
             // The mods page waits for mods being added, DLC for its reading, the update's
@@ -478,9 +492,13 @@ namespace dao::launcher
             SDL_SetRenderDrawColor(renderer, 12, 9, 8, 255);
             SDL_RenderClear(renderer);
             ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
-            if (shotNow)
+            if (shotNow || (st.padScript && st.padScript->capture))
             {
-                const std::string path = Utf8(st.screenshotDir / fmt::format("launcher_{}.bmp", shot));
+                const std::string name = shotNow ? fmt::format("launcher_{}.bmp", shot)
+                                                 : fmt::format("launcher_pad_{}.bmp", st.padScript->shots);
+                if (!shotNow)
+                    st.padScript->shots++;
+                const std::string path = Utf8(st.screenshotDir / name);
                 SDL_Surface* surface = SDL_RenderReadPixels(renderer, nullptr);
                 if (!surface || !SDL_SaveBMP(surface, path.c_str()))
                     LOGW("Launcher: can't save {}: {}", path, SDL_GetError());
@@ -523,6 +541,7 @@ namespace dao::launcher
         ImGui_ImplSDLRenderer3_Shutdown();
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
+        CloseGamepads(st);
         for (auto& [name, art] : st.art)
             SDL_DestroyTexture(art.texture);
         g_state = nullptr;

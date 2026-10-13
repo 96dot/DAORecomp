@@ -342,8 +342,11 @@ namespace dao::launcher
             const ImVec2 rowSize(layout.Left(kTabBarRight, 0).x - rowMin.x, rowHeight);
             if (MenuButton("##tab", rowMin, rowSize, true, hot))
                 st.configureTab = i;
-            if (st.viewChanged && selected)
+            if ((st.viewChanged || st.focusConfigureTab) && selected)
+            {
                 ImGui::SetKeyboardFocusHere(-1);
+                st.focusConfigureTab = false;
+            }
             const float shown = Ease(ImGui::GetItemID(), hot || selected);
             ImGui::PopID();
             if (const Texture* bar = Art(st, kTabBar); bar && shown > 0.0f)
@@ -355,18 +358,23 @@ namespace dao::launcher
                 selected || hot ? kText : kTextDim, kTabs[i].name);
         }
         // As Back: not while a picker is open or a slider held.
+        // (The focus goes to the new tab next frame: the old one's items are gone.)
         if (st.backKeysFree && ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false))
+        {
             st.configureTab = (st.configureTab + kConfigureTabs - 1) % kConfigureTabs;
+            st.focusConfigureTab = true;
+        }
         if (st.backKeysFree && ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false))
+        {
             st.configureTab = (st.configureTab + 1) % kConfigureTabs;
+            st.focusConfigureTab = true;
+        }
         // LB and RB under the tabs.
         const float bumper = kBumperSize * layout.fit;
         const ImVec2 bumpers = layout.Left(kTabTextX, kTabTop + kTabStep * kConfigureTabs + kBumperGap);
-        if (const Texture* lb = Art(st, kButtonLB))
-            DrawSprite(draw, *lb, bumpers, bumper / lb->height, kBumperOpacity * st.fade);
-        if (const Texture* rb = Art(st, kButtonRB))
-            DrawSprite(draw, *rb, ImVec2(bumpers.x + kBumperStep * layout.fit, bumpers.y), bumper / rb->height,
-                kBumperOpacity * st.fade);
+        DrawPadButton(draw, st, PadButton::LB, bumpers, bumper, kBumperOpacity * st.fade);
+        DrawPadButton(draw, st, PadButton::RB, ImVec2(bumpers.x + kBumperStep * layout.fit, bumpers.y), bumper,
+            kBumperOpacity * st.fade);
 
         ShowContents(st, layout, kConfigureLeft, kTabs[st.configureTab].contents, st.configureTab != previous);
     }

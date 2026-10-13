@@ -183,6 +183,8 @@ there.
 | `DAO_XMA=fake`, `DAO_AUDIO=null`, `DAO_AUDIO_DUMP=x.wav` | audio bring-up and checks |
 | `DAO_TEST_KEYBOARD=<s>` | opens the on-screen keyboard |
 | `DAO_LAUNCHER_SCREENSHOTS=<dir>` | launcher screenshots, then exits |
+| `DAO_LAUNCHER_DROP=<paths>` | with the above: files dropped on the launcher (see README) |
+| `DAO_LAUNCHER_PAD=<steps>` | with the above: a virtual gamepad's script instead (see README) |
 | `DAO_BUILD=disc` | forces the disc build when a title update is installed |
 | `DAO_CONVERT_MOD`, `DAO_EXTRACT_PACKAGE` | run one converter or package step and exit |
 

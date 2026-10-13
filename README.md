@@ -161,7 +161,10 @@ read.)
   title screen and menu art from your copy of the game (`guiexport.erf`, read at
   startup; none of it is shipped), falling back to plain shapes without it, and uses
   Windows' serif fonts (Palatino Linotype, Georgia or Times New Roman). It works with
-  a mouse, the keyboard or a gamepad (Start plays). `--launcher` shows it anyway,
+  a mouse, the keyboard or any gamepads SDL knows (Xbox, DualSense, DualShock...): the
+  d-pad or left stick moves between items, A/Cross selects, B/Circle goes back, LB/RB
+  (L1/R1) switch Configure's tabs, the right stick scrolls, Start plays. The button
+  hints show the buttons of the gamepad used last. `--launcher` shows it anyway,
   `--mods` opens it on its Mods page, and `--play` skips it.
 
   *Configure → Advanced → Add to Steam* adds the game to Steam as a non-Steam game, for
@@ -275,6 +278,13 @@ start, so this happens once per place.
     the Update page as `launcher_8.bmp` when the update check finds a release, then quits.
   - `DAO_LAUNCHER_DROP=<path>|<path>...`: with `DAO_LAUNCHER_SCREENSHOTS`, adds those
     as if dropped on the window (tests adding mods and installing packages).
+  - `DAO_LAUNCHER_PAD=<steps>`: with `DAO_LAUNCHER_SCREENSHOTS`, a virtual DualSense
+    follows these steps (separated by spaces), 12 frames each, instead of the views'
+    screenshots, then quits: a button pressed (`a b x y lb rb start up down left right`)
+    or the left stick pushed (`ls-up`, `ls-down`, `ls-left`, `ls-right`) for 3 frames,
+    the right stick held for 11 (`rs-up`, `rs-down`), `wait`, or `shot` (saved as
+    `launcher_pad_0.bmp` and on); an unknown step is logged and passed over. It is the
+    only gamepad then, and presses even with the window in the background.
   - `DAO_BUILD=disc`: runs the disc's build even when a title update is installed.
   - `DAO_EXTRACT_PACKAGE=<package>|<new folder>`: extracts an Xbox 360 package as the
     launcher does, prints the outcome and quits (used by `scripts/test_stfs.py`).

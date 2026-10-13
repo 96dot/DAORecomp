@@ -336,7 +336,7 @@ namespace dao::launcher
             SetView(st, View::Update);
         if (item("Exit"))
             st.quit = true;
-        Hint(st, layout, kButtonA, "Select", layout.Right(kContentsRight, kFooterHintY), true, false);
+        Hint(st, layout, PadButton::A, "Select", layout.Right(kContentsRight, kFooterHintY), true, false);
 
         // The bottom left: the game data, a summary of the settings, the startup option.
         const ImGuiStyle& style = ImGui::GetStyle();

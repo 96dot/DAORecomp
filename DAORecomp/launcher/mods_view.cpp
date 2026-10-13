@@ -361,7 +361,7 @@ namespace dao::launcher
             const float detailsHeight = ImGui::GetTextLineHeightWithSpacing() * 6;
             constexpr ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
                 ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
-            if (ImGui::BeginTable("mods", 5, flags, ImVec2(0, -detailsHeight)))
+            if (BeginNavTable("mods", 5, flags, ImVec2(0, -detailsHeight)))
             {
                 ImGui::TableSetupScrollFreeze(0, 1);
                 ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed);
