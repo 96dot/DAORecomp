@@ -1339,14 +1339,18 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
   // fullscreen, but DXGI fullscreen is largely unneeded with the flip
   // presentation model used in Direct3D 12).
   // DAO: or, with dao_present_vsync, waiting for the display's refresh (no
-  // tearing; two frames at most wait, see the start of this function).
+  // tearing; two frames at most wait, see the start of this function), and
+  // dropping none: above 60 fps frames come unevenly, two often within one
+  // refresh, and RESTART discarding the first would leave the next refresh
+  // without a new frame (below 60 fps shown on a 60 Hz display).
   const bool present_vsync = cvars::dao_present_vsync;
   HRESULT present_result = paint_context_.swap_chain->Present(
       present_vsync ? 1 : 0,
-      DXGI_PRESENT_RESTART |
-          (!present_vsync && paint_context_.swap_chain_allows_tearing
-               ? DXGI_PRESENT_ALLOW_TEARING
-               : 0));
+      present_vsync ? 0
+                    : DXGI_PRESENT_RESTART |
+                          (paint_context_.swap_chain_allows_tearing
+                               ? DXGI_PRESENT_ALLOW_TEARING
+                               : 0));
   // Even if presentation has failed, work might have been enqueued anyway
   // internally before the failure according to Jesse Natalie from the DirectX
   // Discord server.
