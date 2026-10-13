@@ -144,3 +144,11 @@ NINJA = {
 MINGIT = Download("https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/"
                   "MinGit-2.55.0.5-64-bit.zip",
                   "56d7b226b7693196cfc71fef26568f536c4a021ab6c37ff2db4287bed908e96e", 38989688)
+
+# Intel XeSS SDK 3.0.2: XeSS-SR's headers and libxess.dll (the Intel Simplified Software
+# License lets the DLL be redistributed unmodified, with its notices). Of the archive,
+# only XESS_KEEP stays.
+XESS_VERSION = "3.0.2"
+XESS = Download(f"https://github.com/intel/xess/releases/download/v{XESS_VERSION}/XeSS_SDK_{XESS_VERSION}.zip",
+                "88b8a373f30e33f3558a77a93e634f11b8132fc3047ea1a8edeead32b8471990", 76839749)
+XESS_KEEP = ("LICENSE.txt", "third-party-programs.txt", "inc/xess", "bin/libxess.dll")

@@ -1,5 +1,6 @@
-// DAO: temporal upscaling with AMD FSR 3.1 / FSR 4 - see dao_upscale.h. This
-// file: the frame (draws, resolves, the swap, the composite).
+// DAO: temporal upscaling with AMD FSR 3.1 / FSR 4 or Intel XeSS - see
+// dao_upscale.h. This file: the frame (draws, resolves, the swap, the
+// composite).
 #include "xenia/gpu/d3d12/dao_upscale_impl.h"
 
 #include <algorithm>
@@ -14,10 +15,12 @@
 
 DEFINE_string(dao_temporal_upscaler, "off",
               "Temporal upscaling and anti-aliasing of 3D scenes: off, auto "
-              "(FSR 4 where supported, otherwise FSR 3.1), fsr4, fsr3.",
+              "(FSR 4 where supported, otherwise FSR 3.1), fsr4, fsr3, xess "
+              "(Intel XeSS, FSR if it can't run).",
               "GPU");
 DEFINE_double(dao_temporal_sharpness, 0.3,
-              "Sharpening after temporal upscaling, 0 (off) to 1.", "GPU");
+              "Sharpening after temporal upscaling with FSR, 0 (off) to 1.",
+              "GPU");
 DEFINE_bool(dao_single_sample_scene, true,
             "With temporal upscaling, render 3D scenes in one tile without "
             "2xMSAA (the upscaler antialiases them).",
@@ -29,7 +32,7 @@ DEFINE_bool(dao_motion_vectors, true,
 DEFINE_bool(dao_true_hdr, true,
             "With HDR output on an HDR display, the game's 3D scenes in HDR: "
             "its tonemapping redone with the highlights it compresses (and "
-            "upscaled by FSR in HDR with temporal upscaling). Otherwise the "
+            "upscaled in HDR with temporal upscaling). Otherwise the "
             "SDR image is expanded by the presenter.",
             "GPU");
 DEFINE_int32(dao_motion_blur, 0,
@@ -71,6 +74,35 @@ constexpr float kMotionDepthTestOffset = kMotionDepthTolerance * 1.25f;
 
 }  // namespace
 
+namespace dao_upscale {
+
+uint32_t JitterPhaseCount(uint32_t render_width, uint32_t display_width) {
+  if (!render_width) {
+    return 8;
+  }
+  // 8 * (display / render)^2, rounded up, in integers.
+  const uint64_t render_area = uint64_t(render_width) * render_width;
+  const uint64_t phases =
+      (8 * uint64_t(display_width) * display_width + render_area - 1) /
+      render_area;
+  return uint32_t(std::max(phases, uint64_t(8)));
+}
+
+void HaltonJitter(uint32_t index, float& x, float& y) {
+  auto halton = [](uint32_t index, uint32_t base) {
+    float f = 1.0f, r = 0.0f;
+    for (uint32_t i = index + 1; i; i /= base) {
+      f /= float(base);
+      r += f * float(i % base);
+    }
+    return r;
+  };
+  x = halton(index, 2) - 0.5f;
+  y = halton(index, 3) - 0.5f;
+}
+
+}  // namespace dao_upscale
+
 DaoUpscalerImpl* DaoUpscaler::impl_ = nullptr;
 std::atomic<bool> DaoUpscaler::single_sample_scene_{false};
 
@@ -84,9 +116,18 @@ DaoUpscalerImpl::~DaoUpscalerImpl() {
     stream_out_thread_.join();
   }
   DestroyFrameGeneration();
-  DestroyContext();
-  if (ffx_module_) {
-    FreeLibrary(ffx_module_);
+  retired_backend_.reset();
+  backend_.reset();
+}
+
+ID3D12Device* DaoUpscalerImpl::device() const {
+  return cp_.GetD3D12Provider().GetDevice();
+}
+
+void DaoUpscalerImpl::AwaitSubmittedFrames() {
+  const uint64_t current_submission = cp_.GetCurrentSubmission();
+  if (current_submission > 1) {  // Otherwise nothing was submitted yet.
+    cp_.CheckSubmissionCompletion(current_submission - 1);
   }
 }
 
@@ -208,7 +249,7 @@ bool DaoUpscalerImpl::Initialize() {
       ui::d3d12::util::CreateRootSignature(provider, tonemap_desc));
   if (!copy_root_signature_ || !composite_root_signature_ ||
       !blur_root_signature_ || !hdr_tonemap_root_signature_) {
-    XELOGE("FSR: failed to create the root signatures");
+    XELOGE("Upscaler: failed to create the root signatures");
     return false;
   }
 
@@ -245,15 +286,20 @@ bool DaoUpscalerImpl::Initialize() {
       !copy_color_pipeline_ || !composite_pipeline_ ||
       !hdr_tonemap_pipeline_ || !composite_blur_pipeline_ ||
       !blur_tile_max_pipeline_ || !blur_neighbor_max_pipeline_) {
-    XELOGE("FSR: failed to create the pipelines");
+    XELOGE("Upscaler: failed to create the pipelines");
     return false;
   }
   motion_available_ = InitializeMotion();
   if (!motion_available_) {
-    XELOGW("FSR: motion vectors unavailable");
+    XELOGW("Upscaler: motion vectors unavailable");
   }
+  backend_fsr_ = cvars::dao_temporal_upscaler != "xess";
+  backend_ = backend_fsr_ ? CreateFsrBackend(*this) : CreateXessBackend(*this);
   jitter_active_ = cvars::dao_temporal_upscaler != "off";
   true_hdr_ = WantsTrueHdr();
+  if (jitter_active_) {
+    backend_->Prepare(true_hdr_);
+  }
   single_sample_scene_ = jitter_active_ && cvars::dao_single_sample_scene;
   last_swap_ = std::chrono::steady_clock::now();
   return true;
@@ -299,7 +345,7 @@ bool DaoUpscalerImpl::EnsureTexture(Texture& texture, DXGI_FORMAT format,
   if (FAILED(provider.GetDevice()->CreateCommittedResource(
           &ui::d3d12::util::kHeapPropertiesDefault, D3D12_HEAP_FLAG_NONE,
           &desc, state, nullptr, IID_PPV_ARGS(&texture.resource)))) {
-    XELOGE("FSR: failed to create the {} texture ({}x{})", name, width,
+    XELOGE("Upscaler: failed to create the {} texture ({}x{})", name, width,
            height);
     texture = {};
     return false;
@@ -637,6 +683,36 @@ void DaoUpscalerImpl::OnResolve(const draw_util::ResolveInfo& resolve_info) {
   ++depth_tiles_;
 }
 
+bool DaoUpscalerImpl::EnsureBackendContext(uint32_t render_width,
+                                           uint32_t render_height,
+                                           uint32_t display_width,
+                                           uint32_t display_height) {
+  const UpscalerBackend::ContextDesc desc = {
+      {render_width, render_height}, {display_width, display_height},
+      true_hdr_};
+  // No history from another context.
+  if (!(desc == context_desc_)) {
+    context_desc_ = desc;
+    reset_history_ = true;
+  }
+  if (backend_->EnsureContext(desc)) {
+    return true;
+  }
+  // FSR instead of a backend that can't be used (FSR failing turns upscaling
+  // off). Here, before this frame's dispatch is recorded: the replaced
+  // backend's last one was in an ended submission, normally.
+  if (backend_fsr_ || !backend_->failed()) {
+    return false;
+  }
+  XELOGW("{}: unavailable, upscaling with FSR instead", backend_->name());
+  retired_backend_ = std::move(backend_);
+  retired_submission_ = cp_.GetCurrentSubmission();
+  backend_ = CreateFsrBackend(*this);
+  backend_fsr_ = true;
+  reset_history_ = true;
+  return backend_->EnsureContext(desc);
+}
+
 void DaoUpscalerImpl::GetDisplaySize(uint32_t render_width,
                                      uint32_t render_height,
                                      uint32_t& width_out,
@@ -660,7 +736,7 @@ void DaoUpscalerImpl::GetDisplaySize(uint32_t render_width,
     height = surface_height;
     width = uint32_t(uint64_t(height) * aspect.first / aspect.second);
   }
-  // FSR doesn't downscale: below the render size, it's anti-aliasing only and
+  // No downscaling: below the render size, the upscaler only anti-aliases and
   // the presenter scales down.
   if (width > render_width && height > render_height) {
     width_out = width & ~uint32_t(1);
@@ -693,10 +769,14 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
     const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
     uint32_t render_width, uint32_t render_height,
     D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& hdr_out,
-    bool& upscaled_out, ID3D12Resource*& generated_out) {
+    bool& sharpened_out, ID3D12Resource*& generated_out) {
   hdr_out = false;
-  upscaled_out = false;
+  sharpened_out = false;
   generated_out = nullptr;
+  if (retired_backend_ && cp_.GetCompletedSubmission() >= retired_submission_) {
+    retired_backend_->SetGpuDone();
+    retired_backend_.reset();
+  }
   // Whether the previous frame was given to frame generation (this one is
   // given only if it's upscaled).
   const bool fg_previous = fg_previous_;
@@ -716,22 +796,6 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   render_size_[0] = render_width;
   render_size_[1] = render_height;
 
-  // A dispatch failed in the commands run since the last swap (that frame
-  // showed the upscaled image as it was before). FSR is started again (an
-  // overlay such as OptiScaler may have failed once, switching upscalers),
-  // and given up for the session after kMaxDispatchFailures, as when it can't
-  // be created: the image is scaled instead.
-  if (dispatch_failed_.exchange(false, std::memory_order_relaxed) &&
-      context_) {
-    DestroyContext();
-    if (++dispatch_failures_ >= kMaxDispatchFailures) {
-      XELOGE("FSR: the upscaler failed {} times, scaling the image instead{}",
-             dispatch_failures_, ProxyNote());
-      ffx_failed_ = true;
-    } else {
-      XELOGW("FSR: the upscaler failed, starting it again");
-    }
-  }
   overlay_shown_ = true_hdr_ && OverlayShown();
   const char* reason = nullptr;
   if (!jitter_active_) {
@@ -752,8 +816,8 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   if (!reason) {
     GetDisplaySize(render_width, render_height, display_width,
                    display_height);
-    if (!EnsureContext(render_width, render_height, display_width,
-                       display_height) ||
+    if (!EnsureBackendContext(render_width, render_height, display_width,
+                              display_height) ||
         !EnsureTexture(motion_vectors_, DXGI_FORMAT_R16G16_FLOAT,
                        render_width, render_height, "motion vector",
                        D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) ||
@@ -769,55 +833,47 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
     return NotUpscaled(reason, frontbuffer, frontbuffer_srv, srv_out, hdr_out);
   }
 
-  // Motion vectors, then FSR, recorded into the command list when it's
-  // executed.
+  // Linear color: true HDR's, or the SDR image linearized for a backend
+  // taking it so (upscaled linear, then encoded again in the composite).
+  const bool linear_color = true_hdr_ || backend_->LinearSdrColor();
+  if (linear_color && !EnsureHdrScene()) {
+    return NotUpscaled("no linear scene", frontbuffer, frontbuffer_srv,
+                       srv_out, hdr_out);
+  }
+  // Motion vectors, then the upscaler, recorded into the command list when
+  // it's executed.
   if (motion_available_) {
     RecordMotionPass(render_width, render_height);
     if (dao_timing::GpuTiming::Enabled()) {
       dao_timing::GpuTiming::Get().Mark(cp_, "motion vectors");
     }
   }
-  if (true_hdr_ && !EnsureHdrScene()) {
-    return NotUpscaled("no HDR scene", frontbuffer, frontbuffer_srv, srv_out,
-                       hdr_out);
-  }
-  Texture& fsr_color = true_hdr_ ? hdr_ : color_;
-  Transition(fsr_color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  Texture& upscaler_color = linear_color ? hdr_ : color_;
+  Transition(upscaler_color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(color_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(depth_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(motion_vectors_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(upscaled_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   cp_.SubmitBarriers();
-  ffxDispatchDescUpscale& desc = dispatch_params_.desc;
-  desc = {};
-  desc.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
-  desc.color = ffxApiGetResourceDX12(fsr_color.resource.Get());
-  desc.depth = ffxApiGetResourceDX12(depth_.resource.Get());
-  desc.motionVectors = ffxApiGetResourceDX12(motion_vectors_.resource.Get());
-  desc.output = ffxApiGetResourceDX12(upscaled_.resource.Get(),
-                                      FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
-  desc.jitterOffset = {jitter_[0], jitter_[1]};
-  desc.motionVectorScale = {1.0f, 1.0f};
-  desc.renderSize = {render_width, render_height};
-  desc.upscaleSize = {display_width, display_height};
-  const double sharpness =
-      dao_live::Load(dao_live::values.temporal_sharpness);
-  desc.enableSharpening = sharpness > 0.0;
-  desc.sharpness = float(std::clamp(sharpness, 0.0, 1.0));
-  desc.frameTimeDelta = std::clamp(frame_ms, 1.0f, 100.0f);
-  desc.preExposure = 1.0f;
-  desc.reset = reset_history_;
-  // Rough camera values; FSR uses them for its depth-based heuristics.
-  desc.cameraNear = 0.1f;
-  desc.cameraFar = 1000.0f;
-  desc.cameraFovAngleVertical = 1.0f;
-  desc.viewSpaceToMetersFactor = 1.0f;
-  desc.flags = true_hdr_ ? 0 : FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
-  dispatch_params_.self = this;
-  cp_.GetDeferredCommandList().DaoCallback(ExecuteDispatch, &dispatch_params_);
+  UpscalerBackend::Frame frame = {};
+  frame.color = upscaler_color.resource.Get();
+  frame.depth = depth_.resource.Get();
+  frame.motion_vectors = motion_vectors_.resource.Get();
+  frame.output = upscaled_.resource.Get();
+  frame.jitter[0] = jitter_[0];
+  frame.jitter[1] = jitter_[1];
+  frame.render_size[0] = render_width;
+  frame.render_size[1] = render_height;
+  frame.display_size[0] = display_width;
+  frame.display_size[1] = display_height;
+  frame.sharpness = float(std::clamp(
+      dao_live::Load(dao_live::values.temporal_sharpness), 0.0, 1.0));
+  frame.frame_ms = std::clamp(frame_ms, 1.0f, 100.0f);
+  frame.reset = reset_history_;
+  backend_->RecordDispatch(frame);
   InvalidateCommandProcessorState();
   if (dao_timing::GpuTiming::Enabled()) {
-    dao_timing::GpuTiming::Get().Mark(cp_, "FSR");
+    dao_timing::GpuTiming::Get().Mark(cp_, backend_->name());
   }
 
   // Motion blur's tiles, then the composite of the UI (blurring the scene).
@@ -927,9 +983,15 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   constants.render_size[0] = float(render_width);
   constants.render_size[1] = float(render_height);
   constants.show_motion = cvars::dao_show_motion_vectors ? 1 : 0;
-  constants.mode = !true_hdr_       ? kCompositeSdr
-                   : overlay_shown_ ? kCompositeHdrToSdr
-                                    : kCompositeHdr;
+  if (true_hdr_ && !overlay_shown_) {
+    constants.mode = kCompositeHdr;
+  } else if (linear_color) {
+    // A linear upscale output in SDR: true HDR's while presenter UI is shown,
+    // or the linearized SDR image's.
+    constants.mode = kCompositeHdrToSdr;
+  } else {
+    constants.mode = kCompositeSdr;
+  }
   constants.blur_samples = blur.samples;
   constants.blur_tile = blur.tile;
   if (generate) {
@@ -994,7 +1056,7 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   srv_out.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
   srv_out.Texture2D.MipLevels = 1;
   hdr_out = true_hdr_ && !overlay_shown_;
-  upscaled_out = true;
+  sharpened_out = backend_->Sharpens();
   EndFrame(true, nullptr);
   return composite_.resource.Get();
 }
@@ -1078,12 +1140,13 @@ ID3D12Resource* DaoUpscalerImpl::NotUpscaled(
 void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   if (upscaled != was_upscaling_) {
     if (upscaled) {
-      XELOGI("FSR: upscaling ({} draws, {} depth tiles, image before UI from "
+      XELOGI("{}: upscaling ({} draws, {} depth tiles, image before UI from "
              "pixel shader {:016X})",
-             scene_draws_, depth_tiles_, hudless_pixel_shader_);
+             backend_->name(), scene_draws_, depth_tiles_,
+             hudless_pixel_shader_);
       motion_logged_ = false;
     } else {
-      XELOGI("FSR: not upscaling - {}", reason);
+      XELOGI("{}: not upscaling - {}", backend_->name(), reason);
     }
     was_upscaling_ = upscaled;
   }
@@ -1105,8 +1168,10 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   if (jitter_cooldown_) {
     --jitter_cooldown_;
   }
-  // No retries once FSR couldn't be loaded or created, or kept failing.
-  jitter_active_ = enabled && !jitter_cooldown_ && !ffx_failed_;
+  // No retries once FSR couldn't be loaded or created, or kept failing
+  // (another backend failing is replaced by FSR at the next upscaled frame).
+  jitter_active_ =
+      enabled && !jitter_cooldown_ && !(backend_fsr_ && backend_->failed());
   true_hdr_ = WantsTrueHdr();
   // The game's 2xMSAA while the scene isn't antialiased here.
   DaoUpscaler::single_sample_scene_.store(
@@ -1115,32 +1180,10 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   // Next frame's jitter.
   jitter_[0] = jitter_[1] = 0.0f;
   if (jitter_active_) {
-    jitter_index_ = (jitter_index_ + 1) % uint32_t(jitter_phase_count_);
-    float x = 0.0f, y = 0.0f;
-    bool queried = false;
-    if (context_) {
-      ffxQueryDescUpscaleGetJitterOffset offset = {};
-      offset.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTEROFFSET;
-      offset.index = int32_t(jitter_index_);
-      offset.phaseCount = jitter_phase_count_;
-      offset.pOutX = &x;
-      offset.pOutY = &y;
-      queried = ffx_query_(&context_, &offset.header) == FFX_API_RETURN_OK;
-    }
-    if (!queried) {
-      // Halton (2, 3), as FSR uses.
-      auto halton = [](uint32_t index, uint32_t base) {
-        float f = 1.0f, r = 0.0f;
-        for (uint32_t i = index + 1; i; i /= base) {
-          f /= float(base);
-          r += f * float(i % base);
-        }
-        return r;
-      };
-      x = halton(jitter_index_, 2) - 0.5f;
-      y = halton(jitter_index_, 3) - 0.5f;
-    }
-    // FSR's jitter offset is the negated sample offset.
+    jitter_index_ = (jitter_index_ + 1) % backend_->JitterPhases();
+    float x, y;
+    backend_->JitterOffset(jitter_index_, x, y);
+    // The upscalers' jitter offset is the negated sample offset.
     jitter_[0] = -x;
     jitter_[1] = -y;
   }
@@ -1150,9 +1193,9 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   if (upscaled && !motion_logged_ && !previous_motion_draws_.empty()) {
     motion_logged_ = true;
     XELOGI(
-        "FSR: motion vectors for {} draws ({} new, {} skipped), {} KB of "
+        "{}: motion vectors for {} draws ({} new, {} skipped), {} KB of "
         "positions",
-        motion_matched_, motion_unmatched_,
+        backend_->name(), motion_matched_, motion_unmatched_,
         motion_skipped_, stream_out_used_ >> 10);
   }
   // This frame's draws are the previous ones for the next frame (the commands
@@ -1252,12 +1295,12 @@ ID3D12Resource* DaoUpscaler::OnSwap(
     const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
     uint32_t frontbuffer_width, uint32_t frontbuffer_height,
     D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& hdr_out,
-    bool& upscaled_out, ID3D12Resource*& generated_out) {
-  hdr_out = upscaled_out = false;
+    bool& sharpened_out, ID3D12Resource*& generated_out) {
+  hdr_out = sharpened_out = false;
   generated_out = nullptr;
   return impl_ ? impl_->OnSwap(frontbuffer, frontbuffer_srv, frontbuffer_width,
                                frontbuffer_height, srv_out, hdr_out,
-                               upscaled_out, generated_out)
+                               sharpened_out, generated_out)
                : nullptr;
 }
 

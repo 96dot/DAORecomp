@@ -469,12 +469,15 @@ def install(reporter, built, dest, with_shortcuts=False):
     dest.mkdir(parents=True, exist_ok=True)
     # The DLLs first: while the game runs they can't be replaced, and the exe is left as it was.
     for name in ("amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll",
-                 "amd_fidelityfx_framegeneration_dx12.dll"):
+                 "amd_fidelityfx_framegeneration_dx12.dll", "libxess.dll"):
         _copy_when_free(reporter, built / name, dest / name)
     _replace_exe(reporter, built / "DAORecomp.exe", dest / "DAORecomp.exe")
     ffx = REPO / "tools" / "FidelityFX-SDK" / "Kits" / "FidelityFX" / "docs" / "license.md"
     if ffx.exists():
         shutil.copy2(ffx, dest / "amd_fidelityfx_license.md")
+    # libxess.dll's license and third-party notices go with it (its license's terms).
+    shutil.copy2(toolchain.XESS_DIR / "LICENSE.txt", dest / "intel_xess_license.txt")
+    shutil.copy2(toolchain.XESS_DIR / "third-party-programs.txt", dest / "intel_xess_third_party_programs.txt")
     for folder in ("userdata", "mods"):
         (dest / folder).mkdir(exist_ok=True)
     shutil.copy2(REPO / "mods" / "README.txt", dest / "mods" / "README.txt")
@@ -547,6 +550,7 @@ def _prepare(reporter, options, first_step):
     sync_source(reporter)
     toolchain.ensure_git(reporter)
     sources.ensure_all(reporter)
+    toolchain.ensure_xess(reporter)
     _step(reporter, first_step + 1, "Setting up the compiler")
     tc = toolchain.ensure_toolchain(reporter, options.accept_license, options.llvm)
     _step(reporter, first_step + 2, "Building the recompiler")

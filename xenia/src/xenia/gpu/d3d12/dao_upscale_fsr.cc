@@ -1,11 +1,12 @@
-// DAO: temporal upscaling's FidelityFX (FSR 3.1 / FSR 4) context and
-// dispatch - see dao_upscale.h.
+// DAO: temporal upscaling's FidelityFX (FSR 3.1 / FSR 4) backend, and the
+// FidelityFX API it and frame generation call - see dao_upscale.h.
 #include "xenia/gpu/d3d12/dao_upscale_impl.h"
 
 #include <algorithm>
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "xenia/base/logging.h"
 #include "xenia/base/platform_win.h"
@@ -13,6 +14,9 @@
 
 // After platform_win.h (needs windows.h).
 #include <psapi.h>
+
+#include "dx12/ffx_api_dx12.h"
+#include "ffx_upscale.h"
 
 DECLARE_string(dao_temporal_upscaler);
 
@@ -84,96 +88,118 @@ std::string ProxyDllInProgramFolder() {
   return {};
 }
 
-}  // namespace
+class FsrBackend : public UpscalerBackend {
+ public:
+  using UpscalerBackend::UpscalerBackend;
+  ~FsrBackend() override;
 
-bool DaoUpscalerImpl::LoadFfx() {
-  if (ffx_module_ || ffx_failed_) {
-    return !ffx_failed_;
+  const char* name() const override { return "FSR"; }
+  // FSR takes the game's image as it is
+  // (FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB).
+  bool LinearSdrColor() const override { return false; }
+  bool Sharpens() const override { return true; }
+  bool EnsureContext(const ContextDesc& desc) override;
+  uint32_t JitterPhases() const override { return jitter_phase_count_; }
+  void JitterOffset(uint32_t index, float& x, float& y) const override;
+  void RecordDispatch(const Frame& frame) override;
+
+ private:
+  bool Load();
+  // The upscaler versions available, newest first.
+  void QueryVersions(std::vector<uint64_t>& ids,
+                     std::vector<const char*>& names) const;
+  void DestroyContext();
+  static void ExecuteDispatch(void* context,
+                              ID3D12GraphicsCommandList* command_list);
+
+  FfxApi& ffx_ = upscaler_.ffx();
+  bool loaded_ = false;
+  // ffxQuery takes the context by non-const pointer, also from const methods.
+  mutable ffxContext context_ = nullptr;
+  ContextDesc context_desc_ = {};
+  std::string version_name_;
+  uint32_t jitter_phase_count_ = 8;
+  // What the deferred dispatch needs when the command list is executed.
+  ffxDispatchDescUpscale dispatch_desc_ = {};
+  // Set by a dispatch that failed (when the command list is executed), seen
+  // by the next EnsureContext, at the next upscaled swap.
+  std::atomic<bool> dispatch_failed_{false};
+  static constexpr uint32_t kMaxDispatchFailures = 3;
+  uint32_t dispatch_failures_ = 0;
+};
+
+FsrBackend::~FsrBackend() { DestroyContext(); }
+
+bool FsrBackend::Load() {
+  if (loaded_ || failed_) {
+    return !failed_;
   }
-  ffx_module_ = LoadLibraryW(L"amd_fidelityfx_loader_dx12.dll");
-  if (ffx_module_) {
-    ffx_create_ = reinterpret_cast<PfnFfxCreateContext>(
-        GetProcAddress(ffx_module_, "ffxCreateContext"));
-    ffx_destroy_ = reinterpret_cast<PfnFfxDestroyContext>(
-        GetProcAddress(ffx_module_, "ffxDestroyContext"));
-    ffx_query_ =
-        reinterpret_cast<PfnFfxQuery>(GetProcAddress(ffx_module_, "ffxQuery"));
-    ffx_dispatch_ = reinterpret_cast<PfnFfxDispatch>(
-        GetProcAddress(ffx_module_, "ffxDispatch"));
-    ffx_configure_ = reinterpret_cast<PfnFfxConfigure>(
-        GetProcAddress(ffx_module_, "ffxConfigure"));
-  }
-  // (ffxConfigure only for frame generation: EnsureFrameGeneration.)
-  if (!ffx_create_ || !ffx_destroy_ || !ffx_query_ || !ffx_dispatch_) {
-    XELOGE(
-        "FSR: amd_fidelityfx_loader_dx12.dll is missing or incomplete, "
-        "temporal upscaling is off");
-    ffx_failed_ = true;
+  if (!ffx_.Load()) {
+    failed_ = true;
     return false;
   }
-  ffx_proxy_ = ProxyDllInProgramFolder();
-  if (!ffx_proxy_.empty()) {
-    XELOGW(
-        "FSR: {} in the program folder isn't the system's (OptiScaler?); it "
-        "may handle the upscaler's calls",
-        ffx_proxy_);
-  }
-
-  // List the available upscaler versions for the log.
-  ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
-  ffxQueryDescGetVersions versions = {};
-  versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
-  versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-  versions.device = device;
-  uint64_t count = 0;
-  versions.outputCount = &count;
-  ffx_query_(nullptr, &versions.header);
-  std::vector<uint64_t> ids(count);
-  std::vector<const char*> names(count);
-  versions.versionIds = ids.data();
-  versions.versionNames = names.data();
-  ffx_query_(nullptr, &versions.header);
-  for (uint64_t i = 0; i < count; ++i) {
-    XELOGI("FSR: available upscaler {}", names[i] ? names[i] : "?");
+  loaded_ = true;
+  // The available upscaler versions, for the log.
+  std::vector<uint64_t> ids;
+  std::vector<const char*> names;
+  QueryVersions(ids, names);
+  for (const char* name : names) {
+    XELOGI("FSR: available upscaler {}", name ? name : "?");
   }
   return true;
 }
 
-bool DaoUpscalerImpl::EnsureContext(uint32_t render_width,
-                                    uint32_t render_height,
-                                    uint32_t display_width,
-                                    uint32_t display_height) {
-  if (context_ && context_size_[0] == render_width &&
-      context_size_[1] == render_height && context_size_[2] == display_width &&
-      context_size_[3] == display_height && context_hdr_ == true_hdr_) {
+void FsrBackend::QueryVersions(std::vector<uint64_t>& ids,
+                               std::vector<const char*>& names) const {
+  ffxQueryDescGetVersions versions = {};
+  versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+  versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+  versions.device = upscaler_.device();
+  uint64_t count = 0;
+  versions.outputCount = &count;
+  ffx_.query(nullptr, &versions.header);
+  ids.assign(count, 0);
+  names.assign(count, nullptr);
+  versions.versionIds = ids.data();
+  versions.versionNames = names.data();
+  ffx_.query(nullptr, &versions.header);
+}
+
+bool FsrBackend::EnsureContext(const ContextDesc& desc) {
+  // A dispatch failed in the commands run since the last swap (that frame
+  // showed the upscaled image as it was before). FSR is started again (an
+  // overlay such as OptiScaler may have failed once, switching upscalers),
+  // and given up for the session after kMaxDispatchFailures, as when it can't
+  // be created: the image is scaled instead.
+  if (dispatch_failed_.exchange(false, std::memory_order_relaxed) &&
+      context_) {
+    DestroyContext();
+    if (++dispatch_failures_ >= kMaxDispatchFailures) {
+      XELOGE("FSR: the upscaler failed {} times, scaling the image instead{}",
+             dispatch_failures_, ffx_.ProxyNote());
+      failed_ = true;
+      return false;
+    }
+    XELOGW("FSR: the upscaler failed, starting it again");
+  }
+  if (context_ && context_desc_ == desc) {
     return true;
   }
-  if (!LoadFfx()) {
+  if (!Load()) {
     return false;
   }
   DestroyContext();
-
-  ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
 
   // Pick the version: the newest by default (FSR 4 on RDNA 4), or the one
   // asked for.
   uint64_t version_id = 0;
   const std::string& wanted = cvars::dao_temporal_upscaler;
   if (wanted == "fsr3" || wanted == "fsr4") {
-    ffxQueryDescGetVersions versions = {};
-    versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
-    versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-    versions.device = device;
-    uint64_t count = 0;
-    versions.outputCount = &count;
-    ffx_query_(nullptr, &versions.header);
-    std::vector<uint64_t> ids(count);
-    std::vector<const char*> names(count);
-    versions.versionIds = ids.data();
-    versions.versionNames = names.data();
-    ffx_query_(nullptr, &versions.header);
+    std::vector<uint64_t> ids;
+    std::vector<const char*> names;
+    QueryVersions(ids, names);
     const char prefix = wanted == "fsr3" ? '3' : '4';
-    for (uint64_t i = 0; i < count; ++i) {
+    for (size_t i = 0; i < names.size(); ++i) {
       if (names[i] && names[i][0] == prefix) {
         version_id = ids[i];
         break;
@@ -184,99 +210,181 @@ bool DaoUpscalerImpl::EnsureContext(uint32_t render_width,
     }
   }
 
-  ffxCreateContextDescUpscale desc = {};
-  desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+  ffxCreateContextDescUpscale create = {};
+  create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
   // The input is the tonemapped (gamma-encoded) image, or the HDR one
   // (linear).
-  desc.flags = true_hdr_ ? FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE
-                         : FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE;
-  desc.maxRenderSize = {render_width, render_height};
-  desc.maxUpscaleSize = {display_width, display_height};
-  desc.fpMessage = FfxMessage;
+  create.flags = desc.hdr ? FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE
+                          : FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE;
+  create.maxRenderSize = {desc.render_size[0], desc.render_size[1]};
+  create.maxUpscaleSize = {desc.display_size[0], desc.display_size[1]};
+  create.fpMessage = FfxMessage;
   ffxCreateContextDescUpscaleVersion version = {};
   version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION;
   version.version = FFX_UPSCALER_VERSION;
   ffxCreateBackendDX12Desc backend = {};
   backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
-  backend.device = device;
+  backend.device = upscaler_.device();
   ffxOverrideVersion override_version = {};
   override_version.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
   override_version.versionId = version_id;
-  desc.header.pNext = &version.header;
+  create.header.pNext = &version.header;
   version.header.pNext = &backend.header;
   if (version_id) {
     backend.header.pNext = &override_version.header;
   }
-  ffxReturnCode_t result = ffx_create_(&context_, &desc.header, nullptr);
+  ffxReturnCode_t result = ffx_.create(&context_, &create.header, nullptr);
   if (result != FFX_API_RETURN_OK) {
-    XELOGE("FSR: creating the upscaler failed ({}){}", result, ProxyNote());
+    XELOGE("FSR: creating the upscaler failed ({}){}", result,
+           ffx_.ProxyNote());
     context_ = nullptr;
-    ffx_failed_ = true;
+    failed_ = true;
     return false;
   }
-  context_size_[0] = render_width;
-  context_size_[1] = render_height;
-  context_size_[2] = display_width;
-  context_size_[3] = display_height;
-  context_hdr_ = true_hdr_;
+  context_desc_ = desc;
 
   ffxQueryGetProviderVersion provider = {};
   provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
-  ffx_query_(&context_, &provider.header);
+  ffx_.query(&context_, &provider.header);
   version_name_ = provider.versionName ? provider.versionName : "?";
 
-  ffxQueryDescUpscaleGetJitterPhaseCount phases = {};
-  phases.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTERPHASECOUNT;
-  phases.renderWidth = render_width;
-  phases.displayWidth = display_width;
-  phases.pOutPhaseCount = &jitter_phase_count_;
-  if (ffx_query_(&context_, &phases.header) != FFX_API_RETURN_OK ||
-      jitter_phase_count_ <= 0) {
-    jitter_phase_count_ = 8;
-  }
+  int32_t phases = 0;
+  ffxQueryDescUpscaleGetJitterPhaseCount phase_query = {};
+  phase_query.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTERPHASECOUNT;
+  phase_query.renderWidth = desc.render_size[0];
+  phase_query.displayWidth = desc.display_size[0];
+  phase_query.pOutPhaseCount = &phases;
+  jitter_phase_count_ =
+      ffx_.query(&context_, &phase_query.header) == FFX_API_RETURN_OK &&
+              phases > 0
+          ? uint32_t(phases)
+          : 8;
   // (Through a proxy, the version it reports, not necessarily what runs.)
   XELOGI("FSR: upscaler {}{} - {}x{} -> {}x{}, {} jitter phases",
          version_name_,
-         ffx_proxy_.empty() ? "" : " as " + ffx_proxy_ + " reports it",
-         render_width, render_height, display_width, display_height,
-         jitter_phase_count_);
-  reset_history_ = true;
+         ffx_.proxy.empty() ? "" : " as " + ffx_.proxy + " reports it",
+         desc.render_size[0], desc.render_size[1], desc.display_size[0],
+         desc.display_size[1], jitter_phase_count_);
   return true;
 }
 
-void DaoUpscalerImpl::DestroyContext() {
+void FsrBackend::DestroyContext() {
   if (!context_) {
     return;
   }
-  // The context's resources may still be in use by submitted frames: awaited.
-  // Not the open submission, which hasn't used it (its dispatches are recorded
-  // at swaps, which end their submissions) and which this may be called in the
-  // middle of: ending it would drop the rest of the frame's commands.
-  const uint64_t current_submission = cp_.GetCurrentSubmission();
-  if (current_submission > 1) {  // Otherwise nothing was submitted yet.
-    cp_.CheckSubmissionCompletion(current_submission - 1);
+  if (!gpu_done_) {
+    upscaler_.AwaitSubmittedFrames();
   }
-  ffx_destroy_(&context_, nullptr);
+  ffx_.destroy(&context_, nullptr);
   context_ = nullptr;
+  jitter_phase_count_ = 8;
 }
 
-void DaoUpscalerImpl::ExecuteDispatch(void* context,
-                                      ID3D12GraphicsCommandList* command_list) {
-  auto& params = *static_cast<DispatchParams*>(context);
-  DaoUpscalerImpl& self = *params.self;
+void FsrBackend::JitterOffset(uint32_t index, float& x, float& y) const {
+  if (context_) {
+    ffxQueryDescUpscaleGetJitterOffset offset = {};
+    offset.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTEROFFSET;
+    offset.index = int32_t(index);
+    offset.phaseCount = int32_t(jitter_phase_count_);
+    offset.pOutX = &x;
+    offset.pOutY = &y;
+    if (ffx_.query(&context_, &offset.header) == FFX_API_RETURN_OK) {
+      return;
+    }
+  }
+  HaltonJitter(index, x, y);
+}
+
+void FsrBackend::RecordDispatch(const Frame& frame) {
+  ffxDispatchDescUpscale& desc = dispatch_desc_;
+  desc = {};
+  desc.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
+  desc.color = ffxApiGetResourceDX12(frame.color);
+  desc.depth = ffxApiGetResourceDX12(frame.depth);
+  desc.motionVectors = ffxApiGetResourceDX12(frame.motion_vectors);
+  desc.output = ffxApiGetResourceDX12(frame.output,
+                                      FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+  desc.jitterOffset = {frame.jitter[0], frame.jitter[1]};
+  desc.motionVectorScale = {1.0f, 1.0f};
+  desc.renderSize = {frame.render_size[0], frame.render_size[1]};
+  desc.upscaleSize = {frame.display_size[0], frame.display_size[1]};
+  desc.enableSharpening = frame.sharpness > 0.0f;
+  desc.sharpness = frame.sharpness;
+  desc.frameTimeDelta = frame.frame_ms;
+  desc.preExposure = 1.0f;
+  desc.reset = frame.reset;
+  // Rough camera values; FSR uses them for its depth-based heuristics.
+  desc.cameraNear = 0.1f;
+  desc.cameraFar = 1000.0f;
+  desc.cameraFovAngleVertical = 1.0f;
+  desc.viewSpaceToMetersFactor = 1.0f;
+  desc.flags = context_desc_.hdr ? 0 : FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
+  upscaler_.command_processor().GetDeferredCommandList().DaoCallback(
+      ExecuteDispatch, this);
+}
+
+void FsrBackend::ExecuteDispatch(void* context,
+                                 ID3D12GraphicsCommandList* command_list) {
+  FsrBackend& self = *static_cast<FsrBackend*>(context);
   if (!self.context_) {
     return;
   }
-  params.desc.commandList = command_list;
-  ffxReturnCode_t result = self.ffx_dispatch_(&self.context_, &params.desc.header);
+  self.dispatch_desc_.commandList = command_list;
+  ffxReturnCode_t result =
+      self.ffx_.dispatch(&self.context_, &self.dispatch_desc_.header);
   if (result != FFX_API_RETURN_OK) {
-    // Seen at the next swap (see OnSwap).
+    // Seen by the next EnsureContext.
     self.dispatch_failed_.store(true, std::memory_order_relaxed);
     static std::atomic<uint32_t> s_failures{0};
     if (LogNth(s_failures)) {
-      XELOGE("FSR: dispatch failed ({}){}", result, self.ProxyNote());
+      XELOGE("FSR: dispatch failed ({}){}", result, self.ffx_.ProxyNote());
     }
   }
+}
+
+}  // namespace
+
+FfxApi::~FfxApi() {
+  if (module) {
+    FreeLibrary(module);
+  }
+}
+
+bool FfxApi::Load() {
+  if (module || failed) {
+    return !failed;
+  }
+  module = LoadLibraryW(L"amd_fidelityfx_loader_dx12.dll");
+  if (module) {
+    create = reinterpret_cast<PfnFfxCreateContext>(
+        GetProcAddress(module, "ffxCreateContext"));
+    destroy = reinterpret_cast<PfnFfxDestroyContext>(
+        GetProcAddress(module, "ffxDestroyContext"));
+    query = reinterpret_cast<PfnFfxQuery>(GetProcAddress(module, "ffxQuery"));
+    dispatch =
+        reinterpret_cast<PfnFfxDispatch>(GetProcAddress(module, "ffxDispatch"));
+    configure = reinterpret_cast<PfnFfxConfigure>(
+        GetProcAddress(module, "ffxConfigure"));
+  }
+  if (!create || !destroy || !query || !dispatch) {
+    XELOGE(
+        "FSR: amd_fidelityfx_loader_dx12.dll is missing or incomplete, FSR "
+        "and frame generation are off");
+    failed = true;
+    return false;
+  }
+  proxy = ProxyDllInProgramFolder();
+  if (!proxy.empty()) {
+    XELOGW(
+        "FSR: {} in the program folder isn't the system's (OptiScaler?); it "
+        "may handle FidelityFX's calls",
+        proxy);
+  }
+  return true;
+}
+
+std::unique_ptr<UpscalerBackend> CreateFsrBackend(DaoUpscalerImpl& upscaler) {
+  return std::make_unique<FsrBackend>(upscaler);
 }
 
 }  // namespace d3d12

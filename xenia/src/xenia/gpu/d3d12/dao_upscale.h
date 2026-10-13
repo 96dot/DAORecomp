@@ -1,7 +1,9 @@
 // DAO: temporal upscaling of 3D scenes with AMD FSR 3.1 / FSR 4, through the
 // FidelityFX API (amd_fidelityfx_loader_dx12.dll and
-// amd_fidelityfx_upscaler_dx12.dll next to the executable, loaded on demand;
-// amd_fidelityfx_framegeneration_dx12.dll for frame generation).
+// amd_fidelityfx_upscaler_dx12.dll), or Intel XeSS-SR (libxess.dll): the
+// DLLs next to the executable, loaded on demand. The upscalers are the
+// backends of dao_upscale_impl.h's UpscalerBackend. Frame generation is FSR
+// 3.1's (amd_fidelityfx_framegeneration_dx12.dll), whichever upscaled.
 //
 // A 3D frame of the game (Eclipse engine, Xbox 360 Direct3D 9):
 //   depth prepass, shadow maps -> scene draws (2xMSAA, two predicated tiles,
@@ -10,7 +12,7 @@
 //   full-screen post-processing passes reading the scene texture (fog, bloom,
 //   the tonemapper) -> UI on the same render target -> resolve to the front
 //   buffer -> swap.
-// What FSR gets:
+// What the upscaler gets:
 //   - jitter: added to the viewport offset of the scene draws (depth-tested
 //     multisampled draws, or with the scene single-sampled, depth-tested
 //     screen-wide draws before the scene's color resolve), so everything up to
@@ -26,12 +28,12 @@
 //     At the swap, the captured triangles are drawn into the motion vector
 //     texture where they match the scene depth. Covers camera, object and
 //     skinned motion.
-// At the swap, the FSR output is composited with the UI (where the front buffer
-// differs from the image FSR got, the front buffer is scaled up instead) and
-// replaces the front buffer as the guest output, at the size it is shown at.
-// With frame generation, a frame between the previous one and this one is
-// generated from the FSR output (dao_upscale_fg.cc) and composited with the UI
-// the same way; the presenter shows it before this one.
+// At the swap, the upscaler's output is composited with the UI (where the
+// front buffer differs from the image the upscaler got, the front buffer is
+// scaled up instead) and replaces the front buffer as the guest output, at the
+// size it is shown at. With frame generation, a frame between the previous one
+// and this one is generated from the upscaler's output (dao_upscale_fg.cc) and
+// composited with the UI the same way; the presenter shows it before this one.
 #pragma once
 
 #include "xenia/ui/d3d12/d3d12_api.h"
@@ -62,8 +64,8 @@ class DaoUpscaler {
 
   // Whether the game should render its 3D scenes in one tile without its
   // 2xMSAA: the upscaler antialiases them (from the jitter), so the second
-  // tile and the multisampling would only cost GPU time. False again if FSR
-  // fails (for good, or for a while). Any thread.
+  // tile and the multisampling would only cost GPU time. False again if the
+  // upscaler fails (for good, or for a while). Any thread.
   static bool WantsSingleSampleScene();
 
   // Before a draw's system constants are computed: jitters scene draws by
@@ -86,16 +88,16 @@ class DaoUpscaler {
   // image to present instead (at the size of the window area it's shown in)
   // and its view, or nullptr to present the front buffer. hdr_out: the image is
   // the game's HDR (dao_true_hdr), PQ-encoded or scRGB (the presenter's
-  // IsHdrScrgb); upscaled_out: by FSR (else the front buffer, only encoded);
-  // generated_out: the generated frame to show before it (same size, format
-  // and srv_out; recorded, not yet made: see ExecuteFrameGeneration), or
-  // nullptr.
+  // IsHdrScrgb); sharpened_out: upscaled by an upscaler that sharpens (FSR;
+  // not XeSS, or the front buffer only encoded); generated_out: the generated
+  // frame to show before it (same size, format and srv_out; recorded, not yet
+  // made: see ExecuteFrameGeneration), or nullptr.
   static ID3D12Resource* OnSwap(
       ID3D12Resource* frontbuffer,
       const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
       uint32_t frontbuffer_width, uint32_t frontbuffer_height,
       D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& hdr_out,
-      bool& upscaled_out, ID3D12Resource*& generated_out);
+      bool& sharpened_out, ID3D12Resource*& generated_out);
 
  private:
   friend class DaoUpscalerImpl;

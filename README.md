@@ -4,13 +4,13 @@ A static recompilation of the Xbox 360 version of *Dragon Age: Origins* into a n
 x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
 
 - rendering at up to 4K (and higher), with FSR 1 / CAS scaling of the whole image
-- temporal upscaling and anti-aliasing with AMD FSR 4 (RDNA 4) or FSR 3.1, using
-  motion vectors generated for the game's 3D scenes, which also drive optional
-  motion blur (of the camera, characters and objects), and optional FSR 3.1 frame
-  generation (a frame between each two, for a display at twice the frame rate;
+- temporal upscaling and anti-aliasing with AMD FSR 4 (RDNA 4), FSR 3.1 or Intel
+  XeSS-SR, using motion vectors generated for the game's 3D scenes, which also drive
+  optional motion blur (of the camera, characters and objects), and optional FSR 3.1
+  frame generation (a frame between each two, for a display at twice the frame rate;
   only real frames are shown on one that can't keep up)
 - HDR output: on an HDR display the 3D scenes are rendered in HDR (the game's
-  tonemapping redone without compressing its highlights), upscaled by FSR in HDR;
+  tonemapping redone without compressing its highlights), upscaled in HDR;
   HDR quality High keeps it 16-bit scRGB all the way to the display
 - 60 fps (the original is locked to 30), or up to 240 or unlimited (experimental)
 - field of view settings: gameplay's, and conversations' and cutscenes' separately
@@ -131,7 +131,9 @@ release page: update the checkout (`git pull`, or check out the new tag) and run
 Everything is pinned to exact versions and checked (`installer/deps.py`):
 
 - Source code: Xenia's third-party libraries (and rapidjson, for the update check),
-  XenonRecomp, SDL 3, the AMD FidelityFX SDK (headers and the signed FSR DLLs).
+  XenonRecomp, SDL 3, the AMD FidelityFX SDK (headers and the signed FSR DLLs), and
+  the Intel XeSS SDK (headers and `libxess.dll`; the release archive, of which only
+  those are kept).
 - LLVM/Clang 22 (or your system's LLVM 18+ if it has `clang-cl`, `lld-link`, `llvm-lib`
   and `llvm-rc`), CMake and Ninja, and on Windows without git, MinGit.
 - The Microsoft C/C++ runtime headers/libraries and the Windows SDK, fetched by
@@ -182,7 +184,7 @@ read.)
   Linux support is untested so far. The program needs Wine's support for placeholder
   memory views (`VirtualAlloc2`/`MapViewOfFile3`) and Direct3D 12 through vkd3d-proton.
   FSR 4 needs AMD's Windows driver and is unlikely to work under Proton; choose FSR 3.1
-  in the launcher.
+  in the launcher (XeSS-SR is untested there).
 
 Most graphics settings can also be changed in the game: *Options → Graphics*. Most
 apply at once; when you leave the menu, the game lists the ones that take effect
@@ -222,6 +224,10 @@ start, so this happens once per place.
 - `CMakeLists.txt` builds the runtime (`DAORecomp/`), Xenia's GPU/UI code
   (`xenia/src`, vendored and patched) and the recompiled game code (`ppc/`, generated).
 - `cmake/clang-cl-xwin.cmake` is the toolchain the installer uses on both systems.
+- The build expects the installer's downloads under `tools/` (run `python install.py`
+  once, or its `--prepare-only` step): among them the FidelityFX SDK and
+  `tools/XeSS-SDK` (`installer/toolchain.py`'s `ensure_xess`), whose DLLs are copied
+  next to the exe.
 - `scripts/build_setup_exe.py` builds `dist/DAORecomp.exe`, what players download: the
   launcher alone (`-DDAO_LAUNCHER_ONLY=ON`) with the installer appended to it, which it
   unpacks to run. The installer is `scripts/build_installer_exe.py`'s PyInstaller exe
@@ -300,5 +306,7 @@ Never commit game files or anything generated from them (`game/`, `ppc/`, `ppc_t
 
 MIT (see `LICENSE`), except `xenia/`, which is Xenia's code under its BSD license
 (`xenia/LICENSE`). The downloaded dependencies keep their own licenses; the FidelityFX
-license is copied next to its DLLs. *Dragon Age* is a trademark of Electronic Arts; this
-project is not affiliated with EA, BioWare or Microsoft.
+license is copied next to its DLLs, and Intel's XeSS license and third-party notices
+next to `libxess.dll` (`intel_xess_license.txt`, `intel_xess_third_party_programs.txt`).
+*Dragon Age* is a trademark of Electronic Arts; this project is not affiliated with EA,
+BioWare or Microsoft.

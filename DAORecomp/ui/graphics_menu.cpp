@@ -193,7 +193,7 @@ namespace dao::ui
             case Key::FrameRate: s.frameRate = whole; break;
             case Key::VSync: s.vsync = whole != 0; break;
             case Key::TemporalUpscaler:
-                s.temporalUpscaler = TemporalUpscaler(std::clamp(whole, 0, int(TemporalUpscaler::Fsr3)));
+                s.temporalUpscaler = TemporalUpscaler(std::clamp(whole, 0, int(TemporalUpscaler::Xess)));
                 break;
             case Key::TemporalSharpness:
                 s.temporalSharpness = float(value / kSliderSteps);

@@ -79,17 +79,17 @@ void D3D12CommandProcessor::DaoReplaceSwapTexture(
     dao_timing::GpuTiming::Get().Mark(*this, "swap start");
   }
   D3D12_SHADER_RESOURCE_VIEW_DESC dao_upscaled_srv_desc;
-  bool dao_upscaled_by_fsr = false;
+  bool dao_upscaler_sharpened = false;
   dao_generated = nullptr;
   if (ID3D12Resource* dao_upscaled = DaoUpscaler::OnSwap(
           swap_texture_resource, swap_texture_srv_desc,
           uint32_t(swap_texture_desc.Width),
           uint32_t(swap_texture_desc.Height), dao_upscaled_srv_desc,
-          dao_hdr, dao_upscaled_by_fsr, dao_generated)) {
+          dao_hdr, dao_upscaler_sharpened, dao_generated)) {
     swap_texture_resource = dao_upscaled;
     swap_texture_srv_desc = dao_upscaled_srv_desc;
     const D3D12_RESOURCE_DESC dao_upscaled_desc = dao_upscaled->GetDesc();
-    dao_sharpened = dao_upscaled_by_fsr &&
+    dao_sharpened = dao_upscaler_sharpened &&
                     dao_upscaled_desc.Width <= swap_texture_desc.Width &&
                     dao_upscaled_desc.Height <= swap_texture_desc.Height;
     swap_texture_desc = dao_upscaled_desc;

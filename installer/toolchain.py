@@ -16,6 +16,7 @@ DOWNLOADS = TOOLS / "downloads"
 CMAKE_DIR = TOOLS / "cmake"
 NINJA_DIR = TOOLS / "ninja"
 MINGIT_DIR = TOOLS / "mingit"
+XESS_DIR = TOOLS / "XeSS-SDK"
 LLVM_DIR = TOOLS / "llvm"
 XWIN_DIR = TOOLS / "xwin"
 WINSYSROOT = TOOLS / "winsysroot"
@@ -34,8 +35,25 @@ class Toolchain:
 
 # ------------------------------------------------------------------ cmake/ninja
 
-def _ensure_download(reporter, dl, dest, stamp_text, label):
-    """Downloads and extracts dl into dest unless dest already holds stamp_text's version."""
+def _prune(root, keep):
+    """Removes everything in root but the keep paths (relative, with /) and what they hold."""
+    kept = [root / path for path in keep]
+    missing = [path for path, k in zip(keep, kept) if not k.exists()]
+    if missing:
+        raise InstallError(f"{root.name}: the download lacks {', '.join(missing)}.")
+    # Deepest first: a folder is empty by the time it's reached, unless it holds a kept path.
+    for path in sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if any(path == k or k in path.parents or path in k.parents for k in kept):
+            continue
+        if path.is_dir():
+            path.rmdir()
+        else:
+            path.unlink()
+
+
+def _ensure_download(reporter, dl, dest, stamp_text, label, keep=()):
+    """Downloads and extracts dl into dest unless dest already holds stamp_text's version;
+    with keep, only those paths of it stay."""
     stamp = dest / "dao-version.txt"
     if stamp.exists() and stamp.read_text() == stamp_text:
         reporter.log(f"{label}: ready ({stamp_text})")
@@ -43,6 +61,8 @@ def _ensure_download(reporter, dl, dest, stamp_text, label):
     archive = download(reporter, dl, DOWNLOADS)
     extract(reporter, archive, dl.top_dir, dest)
     archive.unlink()
+    if keep:
+        _prune(dest, keep)
     stamp.write_text(stamp_text)
 
 
@@ -50,6 +70,11 @@ def ensure_build_tools(reporter):
     _ensure_download(reporter, deps.CMAKE[HOST], CMAKE_DIR, deps.CMAKE_VERSION, "CMake")
     _ensure_download(reporter, deps.NINJA[HOST], NINJA_DIR, deps.NINJA_VERSION, "Ninja")
     return CMAKE_DIR / "bin" / ("cmake" + EXE), NINJA_DIR / ("ninja" + EXE)
+
+
+def ensure_xess(reporter):
+    """Intel's XeSS SDK (headers and libxess.dll) in tools/XeSS-SDK."""
+    _ensure_download(reporter, deps.XESS, XESS_DIR, deps.XESS_VERSION, "XeSS SDK", deps.XESS_KEEP)
 
 
 def ensure_git(reporter):

@@ -235,7 +235,9 @@ bool DaoUpscalerImpl::EnsureStreamOutBuffers() {
                 IID_PPV_ARGS(&zeros))) &&
             SUCCEEDED(zeros->Map(0, &read_range, &mapping));
   if (!created) {
-    XELOGE("FSR: failed to create the motion vector stream output buffers");
+    XELOGE(
+        "Upscaler: failed to create the motion vector stream output "
+        "buffers");
     stream_out_buffers_failed_ = true;
     return false;
   }
@@ -281,7 +283,7 @@ ID3D12PipelineState* DaoUpscalerImpl::GetStreamOutPipeline(
 }
 
 void DaoUpscalerImpl::StreamOutPipelineThread() {
-  xe::threading::set_name("FSR stream output pipelines");
+  xe::threading::set_name("Upscaler stream output pipelines");
   while (true) {
     StreamOutPipeline* entry;
     {
@@ -310,7 +312,7 @@ void DaoUpscalerImpl::StreamOutPipelineThread() {
     if (entry->state) {
       entry->status.store(StreamOutPipeline::kReady, std::memory_order_release);
     } else {
-      XELOGW("FSR: no stream output pipeline for vertex shader {:016X}",
+      XELOGW("Upscaler: no stream output pipeline for vertex shader {:016X}",
              entry->vertex_shader_hash);
       entry->state.Reset();
       entry->status.store(StreamOutPipeline::kFailed,

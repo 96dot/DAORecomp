@@ -14,6 +14,8 @@
 #include "xenia/base/logging.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 
+#include "dx12/ffx_api_dx12.h"
+
 DEFINE_bool(dao_frame_generation, false,
             "With temporal upscaling, a frame generated (AMD FSR 3.1) between "
             "each two of the 3D scenes, shown half a frame apart: up to twice "
@@ -52,10 +54,10 @@ bool DaoUpscalerImpl::EnsureFrameGeneration(uint32_t render_width,
       fg_context_size_[3] == display_height && fg_context_hdr_ == true_hdr_) {
     return true;
   }
-  if (fg_failed_ || !LoadFfx()) {
+  if (fg_failed_ || !ffx_.Load()) {
     return false;
   }
-  if (!ffx_configure_) {
+  if (!ffx_.configure) {
     XELOGE(
         "FSR: amd_fidelityfx_loader_dx12.dll has no ffxConfigure, frame "
         "generation is off");
@@ -74,12 +76,12 @@ bool DaoUpscalerImpl::EnsureFrameGeneration(uint32_t render_width,
   versions.device = device;
   uint64_t count = 0;
   versions.outputCount = &count;
-  ffx_query_(nullptr, &versions.header);
+  ffx_.query(nullptr, &versions.header);
   std::vector<uint64_t> ids(count);
   std::vector<const char*> names(count);
   versions.versionIds = ids.data();
   versions.versionNames = names.data();
-  ffx_query_(nullptr, &versions.header);
+  ffx_.query(nullptr, &versions.header);
   uint64_t version_id = 0;
   for (uint64_t i = 0; i < count; ++i) {
     if (names[i] && std::strncmp(names[i], "3.", 2) == 0) {
@@ -97,7 +99,8 @@ bool DaoUpscalerImpl::EnsureFrameGeneration(uint32_t render_width,
 
   ffxCreateContextDescFrameGeneration desc = {};
   desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
-  // The scene as FSR outputs it: gamma-encoded, or linear HDR.
+  // The scene as the upscaler outputs it: gamma-encoded or linear SDR, or
+  // linear HDR.
   desc.flags = true_hdr_ ? FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE : 0;
   desc.displaySize = {display_width, display_height};
   desc.maxRenderSize = {render_width, render_height};
@@ -114,7 +117,7 @@ bool DaoUpscalerImpl::EnsureFrameGeneration(uint32_t render_width,
   desc.header.pNext = &version.header;
   version.header.pNext = &backend.header;
   backend.header.pNext = &override_version.header;
-  const ffxReturnCode_t result = ffx_create_(&fg_context_, &desc.header, nullptr);
+  const ffxReturnCode_t result = ffx_.create(&fg_context_, &desc.header, nullptr);
   if (result != FFX_API_RETURN_OK) {
     XELOGE("FSR: creating frame generation failed ({}), it's off", result);
     fg_context_ = nullptr;
@@ -129,7 +132,7 @@ bool DaoUpscalerImpl::EnsureFrameGeneration(uint32_t render_width,
 
   ffxQueryGetProviderVersion provider = {};
   provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
-  ffx_query_(&fg_context_, &provider.header);
+  ffx_.query(&fg_context_, &provider.header);
   XELOGI("FSR: frame generation {} - {}x{}{}",
          provider.versionName ? provider.versionName : "?", display_width,
          display_height, true_hdr_ ? ", HDR" : "");
@@ -140,12 +143,9 @@ void DaoUpscalerImpl::DestroyFrameGeneration() {
   if (!fg_context_) {
     return;
   }
-  // As DestroyContext: the submitted frames may still use its resources.
-  const uint64_t current_submission = cp_.GetCurrentSubmission();
-  if (current_submission > 1) {
-    cp_.CheckSubmissionCompletion(current_submission - 1);
-  }
-  ffx_destroy_(&fg_context_, nullptr);
+  // The submitted frames may still use its resources.
+  AwaitSubmittedFrames();
+  ffx_.destroy(&fg_context_, nullptr);
   fg_context_ = nullptr;
   fg_previous_ = false;
 }
@@ -170,7 +170,7 @@ bool DaoUpscalerImpl::RecordFrameGeneration(const Texture& scene,
   configure.flags = FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY;
   configure.frameID = fg_frame_id_;
 
-  // The inputs as FSR got them (see OnSwap).
+  // The inputs as the upscaler got them (see OnSwap).
   ffxDispatchDescFrameGenerationPrepareV2& prepare = params.prepare;
   prepare.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2;
   prepare.frameID = fg_frame_id_;
@@ -205,6 +205,12 @@ bool DaoUpscalerImpl::RecordFrameGeneration(const Texture& scene,
     dispatch.minMaxLuminance[0] = 0.0f;
     dispatch.minMaxLuminance[1] =
         80.0f * dao_live::HdrPeakRatio(PaperWhiteNits());
+  } else if (backend_->LinearSdrColor()) {
+    // SDR linearized for the upscaler (XeSS): scRGB up to SDR white.
+    dispatch.backbufferTransferFunction =
+        FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SCRGB;
+    dispatch.minMaxLuminance[0] = 0.0f;
+    dispatch.minMaxLuminance[1] = 80.0f;
   } else {
     dispatch.backbufferTransferFunction =
         FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
@@ -226,14 +232,14 @@ void DaoUpscalerImpl::ExecuteFrameGeneration(
   // Configured, then the dispatches, all with the same frame ID.
   static std::atomic<uint32_t> s_failures{0};
   ffxReturnCode_t result =
-      self.ffx_configure_(&self.fg_context_, &params.configure.header);
+      self.ffx_.configure(&self.fg_context_, &params.configure.header);
   if (result == FFX_API_RETURN_OK) {
     params.prepare.commandList = command_list;
-    result = self.ffx_dispatch_(&self.fg_context_, &params.prepare.header);
+    result = self.ffx_.dispatch(&self.fg_context_, &params.prepare.header);
   }
   if (result == FFX_API_RETURN_OK) {
     params.dispatch.commandList = command_list;
-    result = self.ffx_dispatch_(&self.fg_context_, &params.dispatch.header);
+    result = self.ffx_.dispatch(&self.fg_context_, &params.dispatch.header);
   }
   if (result != FFX_API_RETURN_OK) {
     // This frame's generated one is shown unwritten; none from now on.

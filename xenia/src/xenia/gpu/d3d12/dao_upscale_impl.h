@@ -1,8 +1,9 @@
 // DAO: the temporal upscaler's internals (see dao_upscale.h), shared by its
 // files: dao_upscale.cc (the frame: draws, resolves, the swap and the
-// composite), dao_upscale_fsr.cc (FidelityFX), dao_upscale_fg.cc (frame
-// generation), dao_upscale_motion.cc (motion vectors), dao_upscale_hdr.cc (true
-// HDR) and dao_motion_blur.cc.
+// composite), the backends dao_upscale_fsr.cc (FidelityFX) and
+// dao_upscale_xess.cc (XeSS), dao_upscale_fg.cc (frame generation),
+// dao_upscale_motion.cc (motion vectors), dao_upscale_hdr.cc (true HDR) and
+// dao_motion_blur.cc.
 #pragma once
 
 #include <algorithm>
@@ -25,10 +26,8 @@
 #include "xenia/gpu/d3d12/pipeline_cache.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
 
-#include "dx12/ffx_api_dx12.h"
 #include "ffx_api.h"
 #include "ffx_framegeneration.h"
-#include "ffx_upscale.h"
 
 DECLARE_double(present_hdr_gamma);
 
@@ -126,8 +125,8 @@ enum CompositeMode : uint32_t {
   // or linear.
   kCompositeEncode,
   kCompositeLinearize,
-  // The scene alone, motion-blurred, as FSR output it (frame generation's
-  // input).
+  // The scene alone, motion-blurred, as the upscaler output it (frame
+  // generation's input).
   kCompositeScene,
 };
 
@@ -139,9 +138,123 @@ inline float OutputGamma() {
   return float(std::clamp(cvars::present_hdr_gamma, 1.0, 3.0));
 }
 
+// The phases of a jitter sequence for upscaling render_width pixels to
+// display_width: 8 per render pixel's area in display pixels (at least 8), so
+// that every display pixel gets samples.
+uint32_t JitterPhaseCount(uint32_t render_width, uint32_t display_width);
+// A jitter sample offset, -0.5 to 0.5 render pixels: Halton (2, 3).
+void HaltonJitter(uint32_t index, float& x, float& y);
+
 }  // namespace dao_upscale
 
 using namespace dao_upscale;
+
+class DaoUpscalerImpl;
+
+// The FidelityFX API (amd_fidelityfx_loader_dx12.dll next to the executable),
+// loaded when first needed: FSR's upscaler backend and frame generation call
+// it (dao_upscale_fsr.cc).
+struct FfxApi {
+  ~FfxApi();
+  // False if the loader is missing or incomplete (logged once): not tried
+  // again. configure may be null (only frame generation needs it).
+  bool Load();
+  // " - see the log of <proxy>", or nothing: for FidelityFX's error messages.
+  std::string ProxyNote() const {
+    return proxy.empty() ? std::string() : " - see the log of " + proxy;
+  }
+
+  HMODULE module = nullptr;
+  bool failed = false;
+  PfnFfxCreateContext create = nullptr;
+  PfnFfxDestroyContext destroy = nullptr;
+  PfnFfxQuery query = nullptr;
+  PfnFfxDispatch dispatch = nullptr;
+  PfnFfxConfigure configure = nullptr;
+  // A DLL in the program folder in place of a system one (OptiScaler, which
+  // can take over FidelityFX's calls), for the log; empty if none.
+  std::string proxy;
+};
+
+// A temporal upscaler: AMD FSR 3.1 / 4 (dao_upscale_fsr.cc) or Intel XeSS
+// (dao_upscale_xess.cc), its library loaded from next to the executable when
+// first needed. Used on the command processor's thread only.
+class UpscalerBackend {
+ public:
+  // What the context is for.
+  struct ContextDesc {
+    uint32_t render_size[2];
+    uint32_t display_size[2];
+    // The color is linear HDR (true HDR), else SDR.
+    bool hdr;
+    bool operator==(const ContextDesc& other) const = default;
+  };
+  // A frame to upscale. The inputs are at the render size, in
+  // NON_PIXEL_SHADER_RESOURCE; the output (RGBA16F, in the color's encoding)
+  // at the display size, in UNORDERED_ACCESS.
+  struct Frame {
+    // SDR: the game's image (gamma-encoded RGBA8), or linearized (RGBA16F)
+    // if LinearSdrColor; HDR: linear (RGBA16F, 1 = the game's white).
+    ID3D12Resource* color;
+    // R32_FLOAT, nearer is smaller.
+    ID3D12Resource* depth;
+    // R16G16_FLOAT, in render pixels, to where each pixel was in the previous
+    // frame, without the jitter.
+    ID3D12Resource* motion_vectors;
+    ID3D12Resource* output;
+    // In render pixels, as the scene draws are offset (FSR's and XeSS's
+    // jitter offset: the negated sample offset).
+    float jitter[2];
+    uint32_t render_size[2];
+    uint32_t display_size[2];
+    // 0 (none) to 1, if the backend Sharpens.
+    float sharpness;
+    float frame_ms;
+    // No history (the previous frame wasn't upscaled).
+    bool reset;
+  };
+
+  explicit UpscalerBackend(DaoUpscalerImpl& upscaler) : upscaler_(upscaler) {}
+  virtual ~UpscalerBackend() = default;
+
+  // For the log.
+  virtual const char* name() const = 0;
+  // Whether it takes SDR color linear (the game's image linearized) rather
+  // than as the game encodes it.
+  virtual bool LinearSdrColor() const = 0;
+  // Whether it sharpens (Frame::sharpness); otherwise the presenter's
+  // sharpening applies.
+  virtual bool Sharpens() const = 0;
+  // Starts, before the first frame, what can be done ahead: XeSS loads and
+  // builds its pipelines in the background (not to stall the first 3D scene).
+  virtual void Prepare(bool hdr) {}
+  // Whether it can't be used: its library is missing, the GPU or the sizes
+  // unsupported, or creating its context or upscaling failed. Not tried
+  // again.
+  bool failed() const { return failed_; }
+  // Creates the context for desc unless it's for it already (re-creating it
+  // waits for the GPU to be done with the old one). False if it can't be.
+  virtual bool EnsureContext(const ContextDesc& desc) = 0;
+  // The jitter sequence's length for the context (8 without one).
+  virtual uint32_t JitterPhases() const = 0;
+  // A jitter phase's sample offset, -0.5 to 0.5 render pixels.
+  virtual void JitterOffset(uint32_t index, float& x, float& y) const = 0;
+  // Records the upscale into the deferred command list, run when it's
+  // executed (the frame is copied), with the context of the last
+  // EnsureContext.
+  virtual void RecordDispatch(const Frame& frame) = 0;
+  // The GPU is done with everything recorded with it: destroying it needn't
+  // wait.
+  void SetGpuDone() { gpu_done_ = true; }
+
+ protected:
+  DaoUpscalerImpl& upscaler_;
+  bool failed_ = false;
+  bool gpu_done_ = false;
+};
+
+std::unique_ptr<UpscalerBackend> CreateFsrBackend(DaoUpscalerImpl& upscaler);
+std::unique_ptr<UpscalerBackend> CreateXessBackend(DaoUpscalerImpl& upscaler);
 
 class DaoUpscalerImpl {
  public:
@@ -152,6 +265,16 @@ class DaoUpscalerImpl {
 
   bool Initialize();
   bool single_sample_scene() const { return single_sample_scene_; }
+  // For the backends.
+  D3D12CommandProcessor& command_processor() const { return cp_; }
+  FfxApi& ffx() { return ffx_; }
+  ID3D12Device* device() const;
+  // Waits for the GPU to finish the submitted frames (before a backend's
+  // context is destroyed). Not the open submission, which hasn't used it (the
+  // dispatches are recorded at swaps, which end their submissions) and which
+  // this may be called in the middle of: ending it would drop the rest of the
+  // frame's commands.
+  void AwaitSubmittedFrames();
   // Whether the frame has a 3D scene. Single-sampled, the multisampled draws
   // alone (the game's clears) aren't one unless a depth tile was taken.
   bool HasScene() const {
@@ -170,7 +293,7 @@ class DaoUpscalerImpl {
                          const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
                          uint32_t render_width, uint32_t render_height,
                          D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& hdr_out,
-                         bool& upscaled_out, ID3D12Resource*& generated_out);
+                         bool& sharpened_out, ID3D12Resource*& generated_out);
 
  private:
   struct CopyConstants {
@@ -230,12 +353,8 @@ class DaoUpscalerImpl {
     float peak_ratio;
     float knee;
   };
-  // What the deferred FSR dispatch needs when the command list is executed.
-  struct DispatchParams {
-    DaoUpscalerImpl* self;
-    ffxDispatchDescUpscale desc;
-  };
-  // The same for frame generation's calls.
+  // What frame generation's deferred calls need when the command list is
+  // executed.
   struct FrameGenerationParams {
     DaoUpscalerImpl* self;
     ffxConfigureDescFrameGeneration configure;
@@ -345,17 +464,18 @@ class DaoUpscalerImpl {
     std::atomic<uint32_t> status{kPending};
   };
 
-  bool LoadFfx();
-  bool EnsureContext(uint32_t render_width, uint32_t render_height,
-                     uint32_t display_width, uint32_t display_height);
-  void DestroyContext();
+  // The context of the backend chosen with dao_temporal_upscaler, or of FSR
+  // if XeSS can't be used; false if no backend can upscale the frame.
+  bool EnsureBackendContext(uint32_t render_width, uint32_t render_height,
+                            uint32_t display_width, uint32_t display_height);
   bool EnsureTexture(Texture& texture, DXGI_FORMAT format, uint32_t width,
                      uint32_t height, const char* name,
                      D3D12_RESOURCE_FLAGS extra_flags = D3D12_RESOURCE_FLAG_NONE);
   // Released once the GPU is done with it.
   void ReleaseTexture(Texture& texture);
   void Transition(Texture& texture, D3D12_RESOURCE_STATES state);
-  // Copies a rectangle of a render target into one of the FSR input textures.
+  // Copies a rectangle of a render target into one of the upscaler's input
+  // textures.
   void CopyFromRenderTarget(ID3D12Resource* source,
                             const D3D12_SHADER_RESOURCE_VIEW_DESC& source_srv,
                             D3D12RenderTargetCache::D3D12RenderTarget& target,
@@ -384,9 +504,10 @@ class DaoUpscalerImpl {
   // Presenter UI (the on-screen keyboard, notifications) is drawn over the
   // guest output, in SDR: true HDR frames are output in SDR meanwhile.
   bool OverlayShown() const;
-  // FSR's HDR input (or the scene for CompositeHdr) in hdr_: the tonemapping
-  // pass redone, or if it isn't the image before the UI (a pass after it, or
-  // none), that image linearized.
+  // The linear scene in hdr_, for the upscaler (true HDR, or a backend's
+  // LinearSdrColor) or CompositeHdr: with true HDR the tonemapping pass redone
+  // (unless it isn't the image before the UI: a pass after it, or none), else
+  // the image before the UI linearized.
   bool EnsureHdrScene();
   // A frame not upscaled: with true HDR, the front buffer HDR-encoded into
   // encoded_ (all true HDR frames are), else nullptr (the front buffer).
@@ -449,8 +570,6 @@ class DaoUpscalerImpl {
                       uint32_t& width_out, uint32_t& height_out) const;
   // Re-records the command processor's bindings after external commands.
   void InvalidateCommandProcessorState();
-  static void ExecuteDispatch(void* context,
-                              ID3D12GraphicsCommandList* command_list);
   // Frame generation (dao_upscale_fg.cc): the live setting, unless it failed.
   bool FrameGenerationWanted() const;
   // When the live setting changes: off releases its context and images, on
@@ -472,32 +591,19 @@ class DaoUpscalerImpl {
   D3D12CommandProcessor& cp_;
   D3D12RenderTargetCache& rtc_;
 
-  HMODULE ffx_module_ = nullptr;
-  PfnFfxCreateContext ffx_create_ = nullptr;
-  PfnFfxDestroyContext ffx_destroy_ = nullptr;
-  PfnFfxQuery ffx_query_ = nullptr;
-  PfnFfxDispatch ffx_dispatch_ = nullptr;
-  PfnFfxConfigure ffx_configure_ = nullptr;
-  // FSR couldn't be loaded or created, or its dispatches kept failing: not
-  // retried.
-  bool ffx_failed_ = false;
-  // Set by a dispatch that failed (when the command list is executed), seen
-  // at the next swap.
-  std::atomic<bool> dispatch_failed_{false};
-  static constexpr uint32_t kMaxDispatchFailures = 3;
-  uint32_t dispatch_failures_ = 0;
-  // A DLL in the program folder in place of a system one (OptiScaler, which
-  // can take over FSR's calls), for the log; empty if none.
-  std::string ffx_proxy_;
-  // " - see the log of <proxy>", or nothing: for FSR's error messages.
-  std::string ProxyNote() const {
-    return ffx_proxy_.empty() ? std::string()
-                              : " - see the log of " + ffx_proxy_;
-  }
-  ffxContext context_ = nullptr;
-  uint32_t context_size_[4] = {};
-  std::string version_name_;
-  int32_t jitter_phase_count_ = 8;
+  // (Before the backends: FSR's calls it, so it's destroyed after them.)
+  FfxApi ffx_;
+  std::unique_ptr<UpscalerBackend> backend_;
+  // Whether backend_ is FSR's (which the others fall back to).
+  bool backend_fsr_ = false;
+  // A backend replaced by FSR, kept until the GPU is done with the
+  // submission it was replaced in (a dispatch of it may be queued there if
+  // that submission couldn't be ended).
+  std::unique_ptr<UpscalerBackend> retired_backend_;
+  uint64_t retired_submission_ = 0;
+  // The context the backend was last asked for (a change resets the
+  // history).
+  UpscalerBackend::ContextDesc context_desc_ = {};
   uint32_t jitter_index_ = 0;
 
   ComPtr<ID3D12RootSignature> copy_root_signature_;
@@ -550,20 +656,21 @@ class DaoUpscalerImpl {
   Texture fg_scene_;
   Texture fg_generated_;
   Texture fg_composite_;
-  // True HDR: FSR's input, linear: the game's tonemapping pass redone, or
-  // the image before the UI linearized when there's no such pass.
+  // The upscaler's input when it's linear (EnsureHdrScene): with true HDR
+  // the game's tonemapping pass redone, or the image before the UI
+  // linearized.
   Texture hdr_;
   // Size of the render resolution textures (the front buffer of the last
   // frame, the scaled 1280x720 normally).
   uint32_t render_size_[2] = {};
 
-  // Jitter of the current frame in render pixels (FSR's jitterOffset).
+  // Jitter of the current frame in render pixels (UpscalerBackend::Frame).
   bool jitter_active_ = false;
   // The game renders the scene single-sampled (DaoUpscaler::
   // WantsSingleSampleScene).
   bool single_sample_scene_ = false;
   float jitter_[2] = {};
-  // Frames left before jittering again after FSR could not run.
+  // Frames left before jittering again after the upscaler could not run.
   uint32_t jitter_cooldown_ = 0;
   uint32_t fail_streak_ = 0;
 
@@ -581,8 +688,6 @@ class DaoUpscalerImpl {
   // True HDR this frame (WantsTrueHdr), and OverlayShown at its swap.
   bool true_hdr_ = false;
   bool overlay_shown_ = false;
-  // The FSR context was created for true HDR (linear input).
-  bool context_hdr_ = false;
   // The tonemapping pass, from OnDraw to AfterDraw; ran this frame.
   bool hdr_pending_ = false;
   bool hdr_captured_ = false;
@@ -591,8 +696,6 @@ class DaoUpscalerImpl {
   bool reset_history_ = true;
   bool was_upscaling_ = false;
   std::chrono::steady_clock::time_point last_swap_;
-
-  DispatchParams dispatch_params_;
 
   // Frame generation's context, not retried after failing; the display size
   // its images couldn't be created at; the live setting last seen.

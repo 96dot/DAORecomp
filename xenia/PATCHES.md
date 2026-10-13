@@ -27,10 +27,12 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
   generation, HDR paper white and peak), as atomics the GPU, presenter and render
   threads read instead of their cvars (also in the upstream files `d3d12_texture_cache.cc` and
   `d3d12_presenter.cc`).
-- `gpu/d3d12/dao_upscale.*`: temporal upscaling (FidelityFX), motion vectors, motion
-  blur: `dao_upscale.h` is its interface, `dao_upscale_impl.h` the class its files
-  share; `dao_upscale.cc` the frame (draws, resolves, the swap, the composite),
-  `dao_upscale_fsr.cc` FidelityFX, `dao_upscale_motion.cc` the motion vectors,
+- `gpu/d3d12/dao_upscale.*`: temporal upscaling (FidelityFX or XeSS), motion vectors,
+  motion blur: `dao_upscale.h` is its interface, `dao_upscale_impl.h` the class its
+  files share and the backends' interface (`UpscalerBackend`); `dao_upscale.cc` the
+  frame (draws, resolves, the swap, the composite), the backends
+  `dao_upscale_fsr.cc` (FidelityFX) and `dao_upscale_xess.cc` (XeSS, falling back to
+  FSR), `dao_upscale_motion.cc` the motion vectors,
   `dao_upscale_hdr.cc` true HDR, `dao_motion_blur.cc` motion blur,
   `dao_upscale_fg.cc` frame generation (FSR 3.1).
 - `ui/dao_frame_pacer.cc`: frame generation's presentation: the presenter's

@@ -794,9 +794,9 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // dao_gamma_ramp_identity_ from the 256-entry table ramp.
   void DaoUpdateGammaRampIdentity();
   // At the swap: the upscaler's image (DaoUpscaler::OnSwap) in place of the
-  // front buffer's, if it gives one: dao_sharpened if FSR sharpened it (at
-  // the front buffer's size or smaller), dao_hdr if it's the game's HDR.
-  // dao_generated: frame generation's frame to show before it (as
+  // front buffer's, if it gives one: dao_sharpened if the upscaler sharpened
+  // it (FSR, at the front buffer's size or smaller), dao_hdr if it's the
+  // game's HDR. dao_generated: frame generation's frame to show before it (as
   // swap_texture_resource now), or nullptr.
   void DaoReplaceSwapTexture(
       ID3D12Resource*& swap_texture_resource,

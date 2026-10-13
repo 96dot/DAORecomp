@@ -19,8 +19,10 @@ namespace dao::launcher
         constexpr const char* kScales[] = { "1x - 1280x720", "2x - 2560x1440", "3x - 3840x2160 (4K)",
             "4x - 5120x2880" };
         constexpr const char* kUpscalers[] = { "Bilinear", "FidelityFX CAS", "FidelityFX FSR 1" };
+        // In TemporalUpscaler's order.
         constexpr const char* kTemporalUpscalers[] = { "Off", "Auto (FSR 4 where supported, else FSR 3.1)",
-            "FidelityFX FSR 4", "FidelityFX FSR 3.1" };
+            "FidelityFX FSR 4", "FidelityFX FSR 3.1", "Intel XeSS-SR" };
+        static_assert(std::size(kTemporalUpscalers) == size_t(TemporalUpscaler::Xess) + 1);
         // The names of kAnisotropicLevels.
         constexpr const char* kAnisotropicNames[] = { "Game default", "2x", "4x", "8x", "16x" };
         static_assert(std::size(kAnisotropicNames) == std::size(kAnisotropicLevels));
@@ -96,12 +98,16 @@ namespace dao::launcher
             int temporal = int(s.temporalUpscaler);
             if (ComboRow("Temporal upscaling", &temporal, kTemporalUpscalers, int(std::size(kTemporalUpscalers))))
                 s.temporalUpscaler = TemporalUpscaler(temporal);
-            ImGui::BeginDisabled(s.temporalUpscaler == TemporalUpscaler::Off);
+            // XeSS doesn't sharpen.
+            ImGui::BeginDisabled(
+                s.temporalUpscaler == TemporalUpscaler::Off || s.temporalUpscaler == TemporalUpscaler::Xess);
             SliderRow("Temporal sharpening", &s.temporalSharpness, 0.0f, 1.0f, "%.2f");
             ImGui::EndDisabled();
             HelpText("Upscales and anti-aliases the 3D scenes to the window size using motion vectors; menus and "
                      "the UI use the upscaler below. In a window no larger than the rendering resolution, it only "
-                     "anti-aliases. Off is fastest on a Steam Deck.");
+                     "anti-aliases. XeSS-SR runs on most GPUs of recent years, best on Intel Arc; where it "
+                     "can't, FSR is used. XeSS-SR doesn't sharpen: the output sharpening below applies to it. "
+                     "Off is fastest on a Steam Deck.");
             ImGui::Spacing();
             ImGui::BeginDisabled(s.temporalUpscaler == TemporalUpscaler::Off);
             ImGui::Checkbox("Frame generation (FSR 3.1)", &s.frameGeneration);

@@ -9,6 +9,17 @@ namespace dao::launcher
 {
     namespace
     {
+        // The temporal upscaler in the title screen's summary line.
+        const char* TemporalUpscalerLabel(TemporalUpscaler upscaler)
+        {
+            switch (upscaler)
+            {
+            case TemporalUpscaler::Off: return "no temporal upscaling";
+            case TemporalUpscaler::Xess: return "XeSS-SR";
+            default: return "temporal FSR";
+            }
+        }
+
         // The title screen (startmenu2.gfx). Its background is a clip at kSceneX,
         // kSceneY on the stage, scaled by kSceneScale; the game shows it kSceneDrop
         // lower (its title-safe anchoring), so the scene's layers are all drawn that
@@ -368,7 +379,7 @@ namespace dao::launcher
             Label(fmt::format("{}  \xC2\xB7  {}x{}  \xC2\xB7  {}  \xC2\xB7  {}  \xC2\xB7  {}", Version(),
                 1280 * st.settings.resolutionScale, 720 * st.settings.resolutionScale,
                 st.settings.frameRate ? FrameRateName(st.settings.frameRate) : std::string("unlimited fps"),
-                st.settings.temporalUpscaler != TemporalUpscaler::Off ? "temporal FSR" : "no temporal upscaling",
+                TemporalUpscalerLabel(st.settings.temporalUpscaler),
                 modsOn)
                       .c_str());
         }
