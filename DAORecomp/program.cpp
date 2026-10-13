@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "program.h"
 
+#include <tlhelp32.h>
+
 namespace fs = std::filesystem;
 
 namespace dao
@@ -28,6 +30,48 @@ namespace dao
         if (text.ends_with(L'\\'))
             text += L'.';
         return L"\"" + text + L"\"";
+    }
+
+    bool OtherInstanceRunning()
+    {
+        const fs::path self = ProgramPath();
+        if (self.empty())
+            return false;
+        // Its name, long and short (as a process started by its 8.3 path is listed).
+        std::wstring shortPath(MAX_PATH, L'\0');
+        shortPath.resize(GetShortPathNameW(self.c_str(), shortPath.data(), DWORD(shortPath.size())));
+        const std::wstring names[] = { self.filename().native(), fs::path(shortPath).filename().native() };
+        const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        // (Not knowing counts as running: better a refusal than a race with the game.)
+        if (snapshot == INVALID_HANDLE_VALUE)
+            return true;
+        bool found = false;
+        PROCESSENTRY32W entry = { .dwSize = sizeof(entry) };
+        for (BOOL more = Process32FirstW(snapshot, &entry); more && !found; more = Process32NextW(snapshot, &entry))
+        {
+            if (entry.th32ProcessID == GetCurrentProcessId() ||
+                std::ranges::none_of(names, [&](const std::wstring& name) {
+                    return !name.empty() && _wcsicmp(entry.szExeFile, name.c_str()) == 0;
+                }))
+                continue;
+            // The same name: the same program if it's the same file, however its path
+            // is spelled (a junction, a subst drive). One that can't be asked counts.
+            found = true;
+            const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
+            if (!process)
+                continue;
+            std::wstring path(32768, L'\0');
+            DWORD length = DWORD(path.size());
+            if (QueryFullProcessImageNameW(process, 0, path.data(), &length))
+            {
+                path.resize(length);
+                std::error_code ec;
+                found = fs::equivalent(path, self, ec) || ec;
+            }
+            CloseHandle(process);
+        }
+        CloseHandle(snapshot);
+        return found;
     }
 
     bool IsUnderWine()

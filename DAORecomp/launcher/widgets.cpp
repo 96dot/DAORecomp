@@ -178,6 +178,35 @@ namespace dao::launcher
         ImGui::PopStyleColor();
     }
 
+    // A popup asking something, centred over the window; if it's open, EndPopup after.
+    bool BeginDialog(const State& st, const char* title)
+    {
+        const float width = 560.0f * st.scale;
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0), ImVec2(width, FLT_MAX));
+        return ImGui::BeginPopupModal(title, nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+    }
+
+    // Escape or the gamepad's B: a dialog's Cancel.
+    bool CancelPressed()
+    {
+        return ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
+    }
+
+    // How something went, a line each: problems in the error colour.
+    void Messages(const std::vector<mods::InstallResult::Line>& lines)
+    {
+        ImGui::PushTextWrapPos(0.0f);
+        for (const auto& line : lines)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, line.problem ? kError : kText);
+            ImGui::TextUnformatted(line.text.c_str());
+            ImGui::PopStyleColor();
+        }
+        ImGui::PopTextWrapPos();
+    }
+
     void SetView(State& st, View view)
     {
         st.view = view;

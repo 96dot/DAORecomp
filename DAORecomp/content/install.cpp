@@ -14,8 +14,6 @@ namespace dao::content
 {
     namespace
     {
-        // The game's (installer/deps.py GAME_TITLE_ID).
-        constexpr uint32_t kTitleId = 0x454108C0;
         // The disc this is recompiled from (installer/deps.py GAME_MEDIA_ID): title
         // updates are made for one disc (other languages' discs have their own).
         constexpr uint32_t kMediaId = 0x186A1115;

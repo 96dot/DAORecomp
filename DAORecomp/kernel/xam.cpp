@@ -6,6 +6,7 @@
 #include "thread.h"
 #include "vfs.h"
 #include "content/content.h"
+#include "content/save_backups.h"
 #include "files.h"
 
 #include "input/input.h"
@@ -711,24 +712,6 @@ namespace dao::imp
         return std::string(data.fileName, strnlen(data.fileName, sizeof(data.fileName)));
     }
 
-    // A name Windows holds as one folder: not empty, "." or "..", no separators, drive or
-    // stream colons, wildcards or control characters, no trailing dot or space, not a
-    // device (IsPlainName). No "~" either, so it can't be another's short (8.3) name.
-    static bool ValidContentName(const std::string& name)
-    {
-        if (!IsPlainName(name) || name.find('~') != std::string::npos)
-            return false;
-        // Nor named as the files kept beside a content folder (<name>.name) or a save's
-        // backup (see BackUpSave): a save "x.new" would be save x's staged backup.
-        const std::string lower = Lower(name);
-        for (std::string_view suffix : { ".name", ".new", ".writing" })
-        {
-            if (lower.ends_with(suffix))
-                return false;
-        }
-        return true;
-    }
-
     static fs::path ContentPath(uint32_t contentType, const std::string& fileName)
     {
         return content::ContentFolder(VfsUserRoot(), g_module.titleId, contentType) / fileName;
@@ -742,13 +725,14 @@ namespace dao::imp
 
     static fs::path SaveBackups()
     {
-        return VfsUserRoot() / "save_backups";
+        return content::SaveBackupsFolder(VfsUserRoot());
     }
 
     // The mark of a save being written (see BackUpSave).
     static fs::path WritingMarker(const std::string& fileName)
     {
-        return SaveBackups() / (fileName + ".writing");
+        // (Converted as the save's folder name is, in ContentPath.)
+        return content::SaveWritingMarker(VfsUserRoot(), fs::path(fileName));
     }
 
     static uint64_t FolderSize(const fs::path& folder)
@@ -845,7 +829,7 @@ namespace dao::imp
         const std::string fileName = ContentFileName(*data);
         // The name becomes a folder in the saves' folder, which "create always" deletes
         // first: one folder there, never the folder itself or anything outside it.
-        if (!ValidContentName(fileName))
+        if (!content::IsContentName(fileName))
         {
             LOGW("XamContentCreateEx: refused the content name '{}'", fileName);
             return X_ERROR_INVALID_PARAMETER;

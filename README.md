@@ -144,9 +144,13 @@ generates), `mods/`, and with the title update, `title_update/`.
 When you save over a save, the version it replaces is kept in
 `userdata/save_backups/`: one per save, the one before its latest overwrite (a save
 the game crashed while writing doesn't replace it, and none is kept when the drive is
-nearly full). To get one back, quit the game and copy its folder and `.name` file into
-`userdata/content/454108C0/00000001/`, replacing the ones there. (A `<save>.new`
-folder there is a backup that couldn't be put in place; the log says why.)
+nearly full). To get one back, open the launcher's *Save Backups*: it lists them by
+character, with when each backup and the save in its place were made. *Restore* puts
+the backup back (after asking, and not while the game is running), and the save it
+replaces becomes the backup, so restoring again switches back. (A `<save>.new` folder
+in `save_backups/` is a backup that couldn't be put in place; the log says why. A
+`<save>~current` one is the save a restore set aside, put back when the list is next
+read.)
 
 ## Playing
 
@@ -265,8 +269,8 @@ start, so this happens once per place.
     memory it faulted on (Direct3D 12 DRED).
   - `DAO_LAUNCHER_SCREENSHOTS=<folder>`: saves each launcher view (the title screen,
     the four Configure tabs, Mods: its list, even before the first-open notice was
-    read) as `launcher_0.bmp` to `launcher_5.bmp`, and the Update page as
-    `launcher_6.bmp` when the update check finds a release, then quits.
+    read, Save Backups) as `launcher_0.bmp` to `launcher_6.bmp`, and the Update page as
+    `launcher_7.bmp` when the update check finds a release, then quits.
   - `DAO_LAUNCHER_DROP=<path>|<path>...`: with `DAO_LAUNCHER_SCREENSHOTS`, adds those
     as if dropped on the window (tests adding mods and installing packages).
   - `DAO_BUILD=disc`: runs the disc's build even when a title update is installed.

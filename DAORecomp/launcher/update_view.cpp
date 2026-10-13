@@ -166,6 +166,6 @@ namespace dao::launcher
     void UpdateView(State& st, const Layout& layout)
     {
         PanelFrame(st, layout, "Update", nullptr);
-        ShowContents(st, layout, kModsLeft, UpdateContents);
+        ShowContents(st, layout, kListLeft, UpdateContents);
     }
 }

@@ -292,6 +292,6 @@ namespace dao::launcher
     void InstallView(State& st, const Layout& layout)
     {
         PanelFrame(st, layout, "Install", nullptr);
-        ShowContents(st, layout, kModsLeft, InstallContents);
+        ShowContents(st, layout, kListLeft, InstallContents);
     }
 }

@@ -330,11 +330,12 @@ namespace dao::launcher
             st.updater->Check();
 
         // Screenshot mode: kFramesPerShot frames per shot (main, the configure tabs,
-        // mods, and the update's page if the check finds one), captured on the last
-        // one, after the view has faded in.
+        // mods, save backups, and the update's page if the check finds one), captured
+        // on the last one, after the view has faded in.
         constexpr int kFramesPerShot = 20;
         constexpr int kModsShot = 1 + kConfigureTabs;
-        constexpr int kUpdateShot = kModsShot + 1;
+        constexpr int kSavesShot = kModsShot + 1;
+        constexpr int kUpdateShot = kSavesShot + 1;
         // While minimized or in the background: at most this often, to save power.
         constexpr int kIdleWaitMs = 100;
 
@@ -409,6 +410,7 @@ namespace dao::launcher
             {
                 SetView(st, shot == 0 ? View::Main
                         : shot == kModsShot ? View::Mods
+                        : shot == kSavesShot ? View::Saves
                         : updateShot ? View::Update
                         : View::Configure);
                 if (shot >= 1 && shot <= kConfigureTabs)
@@ -441,6 +443,9 @@ namespace dao::launcher
                 break;
             case View::Mods:
                 ModsView(st, layout);
+                break;
+            case View::Saves:
+                SavesView(st, layout);
                 break;
             case View::Update:
                 UpdateView(st, layout);

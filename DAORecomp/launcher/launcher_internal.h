@@ -2,7 +2,8 @@
 // The launcher's parts (see launcher.h), shared by its files: launcher.cpp has
 // the command line, the window and its frame loop, widgets.cpp the helpers the
 // views draw with, and the views a file each (title_screen.cpp, configure_view.cpp,
-// mods_view.cpp, update_view.cpp, install_view.cpp, and add_to_steam.cpp's popup).
+// mods_view.cpp, saves_view.cpp, update_view.cpp, install_view.cpp, and
+// add_to_steam.cpp's popup).
 
 // (Every part had these when the launcher was one file.)
 #include <future>
@@ -11,6 +12,7 @@
 #include <SDL3/SDL.h>
 #include <imgui.h>
 
+#include "content/save_backups.h"
 #include "launcher/install_runner.h"
 #include "launcher/steam.h"
 #include "launcher/updater.h"
@@ -68,7 +70,8 @@ namespace dao::launcher
     constexpr float kFooterLeft = 232.0f, kFooterRight = 1049.0f, kFooterTop = 629.0f, kFooterHintY = 632.0f;
     // The contents between the header and the footer.
     constexpr float kContentsTop = 112.0f, kContentsBottom = 612.0f, kContentsRight = 1240.0f;
-    constexpr float kConfigureLeft = 575.0f, kModsLeft = 80.0f;
+    // Configure's settings (right of its tabs), and the other views' lists and pages.
+    constexpr float kConfigureLeft = 575.0f, kListLeft = 80.0f;
 
     constexpr const char* kButtonA = "XBoxGamepad_BottomAction";
     constexpr const char* kButtonB = "XBoxGamepad_RightAction";
@@ -78,7 +81,7 @@ namespace dao::launcher
     // Button hints: the icon's height, the gap to the label, the label's size.
     constexpr float kHintIcon = 30.0f, kHintGap = 8.0f, kHintTextSize = 19.0f;
 
-    enum class View { Main, Configure, Mods, Update, Install };
+    enum class View { Main, Configure, Mods, Saves, Update, Install };
     // Graphics, Display, Patches, Advanced.
     constexpr int kConfigureTabs = 4;
 
@@ -148,6 +151,14 @@ namespace dao::launcher
         mods::ModInfo mod;
     };
 
+    // A save backup as the Save Backups view lists it.
+    struct SaveBackupRow
+    {
+        content::SaveBackup backup;
+        // Where and when each was saved, or "Deleted".
+        std::string backupText, currentText;
+    };
+
     // The Install view's paths.
     enum class InstallField
     {
@@ -198,6 +209,11 @@ namespace dao::launcher
         std::shared_ptr<const mods::GameFiles> gameFiles;
         // Scroll the mod list to the selected mod (just added).
         bool scrollToMod = false;
+        // Save Backups: the list (read as the view opens), the one selected, and how
+        // the last restore went.
+        std::vector<SaveBackupRow> saveBackups;
+        int selectedBackup = -1;
+        std::vector<mods::InstallResult::Line> saveMessages;
         // The release the updater found and its notes, taken from it once.
         std::optional<Release> release;
         std::vector<NoteLine> releaseNotes;
@@ -324,6 +340,9 @@ namespace dao::launcher
     float RowWidth();
     void Label(const char* text);
     void SetView(State& st, View view);
+    bool BeginDialog(const State& st, const char* title);
+    bool CancelPressed();
+    void Messages(const std::vector<mods::InstallResult::Line>& lines);
     void PanelFrame(State& st, const Layout& layout, const char* title, Restore restore);
     void ShowContents(State& st, const Layout& layout, float left, Contents contents, bool resetScroll = false);
 
@@ -349,6 +368,9 @@ namespace dao::launcher
     void FinishAddingMods(State& st);
     void FinishConverting(State& st);
     void ModsView(State& st, const Layout& layout);
+
+    // saves_view.cpp: Save Backups, putting back a save the game saved over.
+    void SavesView(State& st, const Layout& layout);
 
     // update_view.cpp: Update, a newer release's page.
     const Release* FoundRelease(State& st);

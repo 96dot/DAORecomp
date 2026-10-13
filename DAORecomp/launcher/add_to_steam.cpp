@@ -214,14 +214,9 @@ namespace dao::launcher
             return;
         if (!ImGui::IsPopupOpen(kTitle))
             ImGui::OpenPopup(kTitle);
-        const float width = 560.0f * st.scale;
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0), ImVec2(width, FLT_MAX));
-        if (!ImGui::BeginPopupModal(kTitle, nullptr,
-                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings))
+        if (!BeginDialog(st, kTitle))
             return;
-        const bool cancel =
-            ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
+        const bool cancel = CancelPressed();
         bool close = false;
         ImGui::PushTextWrapPos(0.0f);
         if (st.steamStep == SteamStep::Confirm)

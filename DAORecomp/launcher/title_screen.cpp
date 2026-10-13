@@ -312,20 +312,27 @@ namespace dao::launcher
         const bool canPlay = st.gameFound && !ModsBusy(st) && st.steamStep == SteamStep::None;
         DrawLogo(st, layout);
 
-        if (MenuItem(st, layout, "Play", kMenuTop, canPlay) ||
-            (canPlay && ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)))
+        // The items' rows, from the top.
+        float row = kMenuTop;
+        const auto item = [&](const char* label, bool enabled = true) {
+            const bool pressed = MenuItem(st, layout, label, row, enabled);
+            row += kMenuStep;
+            return pressed;
+        };
+        if (item("Play", canPlay) || (canPlay && ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)))
             st.play = true;
         if (st.viewChanged)
             ImGui::SetKeyboardFocusHere(canPlay ? -1 : 0);
-        if (MenuItem(st, layout, "Configure", kMenuTop + kMenuStep))
+        if (item("Configure"))
             SetView(st, View::Configure);
-        if (MenuItem(st, layout, "Mods", kMenuTop + 2 * kMenuStep))
+        if (item("Mods"))
             SetView(st, View::Mods);
+        if (item("Save Backups"))
+            SetView(st, View::Saves);
         // Update appears above Exit once a newer release is found.
-        const bool update = FoundRelease(st) != nullptr;
-        if (update && MenuItem(st, layout, "Update", kMenuTop + 3 * kMenuStep))
+        if (FoundRelease(st) && item("Update"))
             SetView(st, View::Update);
-        if (MenuItem(st, layout, "Exit", kMenuTop + (update ? 4 : 3) * kMenuStep))
+        if (item("Exit"))
             st.quit = true;
         Hint(st, layout, kButtonA, "Select", layout.Right(kContentsRight, kFooterHintY), true, false);
 

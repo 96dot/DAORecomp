@@ -16,6 +16,10 @@ namespace dao
     bool StartProgram(const std::filesystem::path& program, std::wstring_view arguments, DWORD flags = 0,
         const std::filesystem::path& folder = {});
 
+    // Whether another process runs this same DAORecomp.exe (the game started again
+    // while the launcher is open, say); true when it can't tell.
+    bool OtherInstanceRunning();
+
     // Whether this runs under Wine or Proton.
     bool IsUnderWine();
 

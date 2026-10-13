@@ -222,11 +222,7 @@ namespace dao::launcher
         // Asks before deleting the selected mod (to the Recycle Bin).
         void DeleteModPopup(State& st)
         {
-            const float width = 560.0f * st.scale;
-            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0), ImVec2(width, FLT_MAX));
-            if (!ImGui::BeginPopupModal("Delete mod", nullptr,
-                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings))
+            if (!BeginDialog(st, "Delete mod"))
                 return;
             bool close = st.selectedMod < 0 || st.selectedMod >= int(st.mods.size());
             if (!close)
@@ -256,8 +252,7 @@ namespace dao::launcher
                     close = true;
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
-                    ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
+                if (ImGui::Button("Cancel") || CancelPressed())
                     close = true;
                 // Cancel is the default.
                 if (ImGui::IsWindowAppearing())
@@ -292,14 +287,7 @@ namespace dao::launcher
                 ImGui::TextUnformatted("Adding...");
             if (ConvertingMod(st))
                 ImGui::Text("Converting %s...", st.convertingMod.c_str());
-            ImGui::PushTextWrapPos(0.0f);
-            for (const auto& line : st.modMessages)
-            {
-                ImGui::PushStyleColor(ImGuiCol_Text, line.problem ? kError : kText);
-                ImGui::TextUnformatted(line.text.c_str());
-                ImGui::PopStyleColor();
-            }
-            ImGui::PopTextWrapPos();
+            Messages(st.modMessages);
             ImGui::Spacing();
 
             if (ImGui::Button("Open mods folder"))
@@ -486,6 +474,6 @@ namespace dao::launcher
         PanelFrame(st, layout, "Mods", nullptr);
         // (Screenshots show the list.)
         const bool warn = !st.settings.modsWarningSeen && st.screenshotDir.empty();
-        ShowContents(st, layout, kModsLeft, warn ? ModsWarning : ModsList);
+        ShowContents(st, layout, kListLeft, warn ? ModsWarning : ModsList);
     }
 }
