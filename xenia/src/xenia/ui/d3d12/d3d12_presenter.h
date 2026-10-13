@@ -353,6 +353,29 @@ class D3D12Presenter final : public Presenter {
       guest_output_paint_final_pipelines_;
   Microsoft::WRL::ComPtr<ID3D12RootSignature> hdr_output_root_signature_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> hdr_output_pipeline_;
+  // DAO (dao_presenter.cc): with InitializeSurfaceIndependent, the HDR output
+  // pass's root signature and pipeline (its state from the guest output
+  // painting's).
+  bool DaoInitializeHdrOutput(
+      const D3D12_GRAPHICS_PIPELINE_STATE_DESC&
+          guest_output_paint_pipeline_desc);
+  // With the swap chain connected: its color space, whether the display is
+  // HDR, and the HDR source texture with its views (false if it can't be
+  // created).
+  bool DaoConnectHdrOutput();
+  // At the start of a paint: false if the swap chain had no room for 100 ms.
+  bool DaoWaitForFrameLatency();
+  // The HDR output pass: back_buffer (the HDR source, a render target) into
+  // the swap chain's back buffer, which is a render target then.
+  void DaoEncodeHdrSource(
+      ID3D12GraphicsCommandList* command_list, ID3D12Resource* back_buffer,
+      ID3D12Resource* swap_chain_back_buffer,
+      const D3D12_CPU_DESCRIPTOR_HANDLE& swap_chain_back_buffer_rtv,
+      bool game_hdr);
+  // An scRGB guest output's capture (rows of 4 halfs from source) to 8 bits.
+  static void DaoConvertScRgbCapture(const uint8_t* source,
+                                     uint32_t row_pitch, bool game_hdr,
+                                     RawImage& image_out);
 
   // The first is the refresher completion timeline submission index at which
   // the guest output texture was last refreshed, the second is the reference to
