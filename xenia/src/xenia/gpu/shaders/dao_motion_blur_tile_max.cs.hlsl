@@ -2,13 +2,22 @@
 // vectors: each pixel's blur length and log depth, together for the blur
 // (dao_upscale_composite_blur.cs reads them once each), and the tile's longest
 // blur vector. A tile with a camera cut in it gets none, and is counted.
+// A pixel's blur is no longer than the motion where it was a frame ago: only
+// motion that lasted is blurred, not one frame's wrong motion vectors (a draw
+// matched to the wrong one of the frame before) or motion every other frame
+// (animation at half the frame rate), which would flicker.
 #include "dao_motion_blur.hlsli"
 
 Texture2D<float2> dao_motion : register(t0);
 Texture2D<float> dao_depth : register(t1);
+// The motion vectors of the frame before (as dao_motion then), and this
+// frame's copy of them for the next.
+Texture2D<float2> dao_previous_motion : register(t2);
 RWTexture2D<float2> dao_tiles : register(u0);
 // x: the blur vector's length, y: the log view depth.
 RWTexture2D<float2> dao_pixels : register(u1);
+// (u2: dao_cuts, in dao_motion_blur.hlsli.)
+RWTexture2D<float2> dao_motion_copy : register(u3);
 
 // The longest blur vector (xy, its squared length in z), and 1 in w with a
 // cut, per thread.
@@ -27,11 +36,25 @@ void main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID,
         continue;
       }
       float2 motion = dao_motion[p];
+      dao_motion_copy[p] = motion;
       float2 blur = 0.0;
-      if (dot(motion, motion) > dao_cut * dao_cut) {
+      float motion_squared = dot(motion, motion);
+      if (motion_squared > dao_cut * dao_cut) {
         longest.w = 1.0;
       } else {
         blur = motion * dao_scale;
+        // Where it was a frame ago (motion is the previous position minus
+        // this one); outside the image (Load gives 0) or with no previous
+        // motion, none, so no blur.
+        float2 previous = 0.0;
+        if (dao_previous_valid) {
+          previous = dao_previous_motion.Load(
+              int3(int2(floor(float2(p) + 0.5 + motion)), 0));
+        }
+        float previous_squared = dot(previous, previous);
+        if (previous_squared < motion_squared) {
+          blur *= sqrt(previous_squared / motion_squared);
+        }
         float length_squared = dot(blur, blur);
         if (length_squared > tile_size * tile_size) {
           blur *= tile_size * rsqrt(length_squared);

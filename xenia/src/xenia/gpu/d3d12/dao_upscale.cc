@@ -433,9 +433,12 @@ class DaoUpscalerImpl {
     uint32_t depth_reversed;
     uint32_t counter;
     uint32_t cut_tiles;
+    uint32_t previous_valid;
   };
-  // The tile passes' views (RecordMotionBlurTiles).
-  static constexpr uint32_t kBlurViews = 7;
+  // The tile passes' descriptor tables (t0 to t2, u0 to u3), and their views
+  // (RecordMotionBlurTiles).
+  static constexpr uint32_t kBlurTables = 7;
+  static constexpr uint32_t kBlurViews = kBlurTables + 2;
   // dao_motion_blur this frame (samples 0: off).
   struct MotionBlur {
     uint32_t samples = 0;
@@ -621,11 +624,12 @@ class DaoUpscalerImpl {
   MotionBlur GetMotionBlur(uint32_t render_width,
                            uint32_t render_height) const;
   // Motion blur's tile passes, into blur_pixels_, blur_tiles_ and then
-  // blur_around_ (left readable); descriptors: kBlurViews.
+  // blur_around_ (left readable), and a copy of the motion vectors for the
+  // next; descriptors: kBlurViews.
   void RecordMotionBlurTiles(
       const MotionBlur& blur, uint32_t render_width, uint32_t render_height,
       const ui::d3d12::util::DescriptorCpuGpuHandlePair* descriptors);
-  // A tile pass, with its 5 descriptor tables: t0, t1, u0, u1, u2.
+  // A tile pass, with its kBlurTables descriptor tables.
   void DispatchBlurTiles(
       ID3D12PipelineState* pipeline, const BlurConstants& constants,
       const ui::d3d12::util::DescriptorCpuGpuHandlePair* const* tables,
@@ -713,6 +717,11 @@ class DaoUpscalerImpl {
   Texture blur_around_;
   Texture blur_cuts_;
   uint32_t blur_counter_ = 0;
+  // Copies of the motion vectors, of this blur frame ([blur_counter_]) and
+  // the last blur frame's; that one is the frame before's if
+  // blur_motion_valid_.
+  Texture blur_motion_[2];
+  bool blur_motion_valid_ = false;
   // The render size its textures couldn't be created at.
   uint32_t blur_failed_size_[2] = {};
   // How many of this frame's scene draws have a Less(Equal) depth function,
@@ -876,19 +885,19 @@ bool DaoUpscalerImpl::Initialize() {
   copy_root_signature_.Attach(
       ui::d3d12::util::CreateRootSignature(provider, copy_desc));
 
-  // Motion blur's tile passes: constants, t0, t1, u0, u1, u2.
-  D3D12_DESCRIPTOR_RANGE blur_ranges[5] = {};
-  for (uint32_t i = 0; i < 5; ++i) {
-    blur_ranges[i].RangeType = i < 2 ? D3D12_DESCRIPTOR_RANGE_TYPE_SRV
+  // Motion blur's tile passes: constants, t0 to t2, u0 to u3.
+  D3D12_DESCRIPTOR_RANGE blur_ranges[kBlurTables] = {};
+  for (uint32_t i = 0; i < kBlurTables; ++i) {
+    blur_ranges[i].RangeType = i < 3 ? D3D12_DESCRIPTOR_RANGE_TYPE_SRV
                                      : D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     blur_ranges[i].NumDescriptors = 1;
-    blur_ranges[i].BaseShaderRegister = i < 2 ? i : i - 2;
+    blur_ranges[i].BaseShaderRegister = i < 3 ? i : i - 3;
   }
-  D3D12_ROOT_PARAMETER blur_parameters[6] = {};
+  D3D12_ROOT_PARAMETER blur_parameters[1 + kBlurTables] = {};
   blur_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
   blur_parameters[0].Constants.Num32BitValues =
       sizeof(BlurConstants) / sizeof(uint32_t);
-  for (uint32_t i = 0; i < 5; ++i) {
+  for (uint32_t i = 0; i < kBlurTables; ++i) {
     blur_parameters[1 + i].ParameterType =
         D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     blur_parameters[1 + i].DescriptorTable.NumDescriptorRanges = 1;
@@ -2471,7 +2480,11 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
        !EnsureTexture(blur_around_, DXGI_FORMAT_R16G16_FLOAT,
                       blur.tile_count[0], blur.tile_count[1],
                       "blur neighborhood") ||
-       !EnsureTexture(blur_cuts_, DXGI_FORMAT_R32_UINT, 2, 1, "blur cut"))) {
+       !EnsureTexture(blur_cuts_, DXGI_FORMAT_R32_UINT, 2, 1, "blur cut") ||
+       !EnsureTexture(blur_motion_[0], DXGI_FORMAT_R16G16_FLOAT, render_width,
+                      render_height, "blur motion") ||
+       !EnsureTexture(blur_motion_[1], DXGI_FORMAT_R16G16_FLOAT, render_width,
+                      render_height, "blur motion"))) {
     // Not trying again every frame: until the render size changes.
     blur_failed_size_[0] = render_width;
     blur_failed_size_[1] = render_height;
@@ -2490,6 +2503,8 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
     if (dao_timing::GpuTiming::Enabled()) {
       dao_timing::GpuTiming::Get().Mark(cp_, "motion blur tiles");
     }
+  } else {
+    blur_motion_valid_ = false;
   }
   D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
   srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -2596,7 +2611,8 @@ void DaoUpscalerImpl::RecordMotionBlurTiles(
     const MotionBlur& blur, uint32_t render_width, uint32_t render_height,
     const ui::d3d12::util::DescriptorCpuGpuHandlePair* descriptors) {
   // descriptors: motion, depth, tiles (unordered), pixels (unordered), cuts
-  // (unordered), tiles, neighbourhoods (unordered).
+  // (unordered), tiles, neighbourhoods (unordered), the previous motion,
+  // this motion's copy (unordered).
   ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
   D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
   srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -2625,6 +2641,14 @@ void DaoUpscalerImpl::RecordMotionBlurTiles(
   uav.Format = blur_around_.format;
   device->CreateUnorderedAccessView(blur_around_.resource.Get(), nullptr,
                                     &uav, descriptors[6].first);
+  Texture& previous_motion = blur_motion_[blur_counter_ ^ 1];
+  Texture& motion_copy = blur_motion_[blur_counter_];
+  srv.Format = previous_motion.format;
+  device->CreateShaderResourceView(previous_motion.resource.Get(), &srv,
+                                   descriptors[7].first);
+  uav.Format = motion_copy.format;
+  device->CreateUnorderedAccessView(motion_copy.resource.Get(), nullptr, &uav,
+                                    descriptors[8].first);
   BlurConstants constants = {};
   constants.size[0] = render_width;
   constants.size[1] = render_height;
@@ -2635,28 +2659,32 @@ void DaoUpscalerImpl::RecordMotionBlurTiles(
   constants.depth_reversed = depth_greater_draws_ > depth_less_draws_ ? 1 : 0;
   constants.counter = blur_counter_;
   constants.cut_tiles = blur.cut_tiles;
+  constants.previous_valid = blur_motion_valid_ ? 1 : 0;
   blur_counter_ ^= 1;
+  blur_motion_valid_ = true;
   // The tile pass, after the last neighbourhood pass cleared its counter.
   Transition(blur_pixels_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   Transition(blur_tiles_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   Transition(blur_cuts_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  Transition(previous_motion, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  Transition(motion_copy, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   cp_.PushUAVBarrier(blur_cuts_.resource.Get());
-  const ui::d3d12::util::DescriptorCpuGpuHandlePair* tile_tables[5] = {
-      &descriptors[0], &descriptors[1], &descriptors[2], &descriptors[3],
-      &descriptors[4]};
+  const ui::d3d12::util::DescriptorCpuGpuHandlePair* tile_tables[kBlurTables] = {
+      &descriptors[0], &descriptors[1], &descriptors[7], &descriptors[2],
+      &descriptors[3], &descriptors[4], &descriptors[8]};
   DispatchBlurTiles(blur_tile_max_pipeline_.Get(), constants, tile_tables,
                     blur.tile_count[0], blur.tile_count[1]);
-  // The neighbourhood pass, after the tile pass's counting (t1 and u1
-  // unread).
+  // The neighbourhood pass, after the tile pass's counting: it uses only t0,
+  // u0 and u2 (the other tables are placeholders).
   Transition(blur_pixels_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(blur_tiles_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(blur_around_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   cp_.PushUAVBarrier(blur_cuts_.resource.Get());
   constants.size[0] = blur.tile_count[0];
   constants.size[1] = blur.tile_count[1];
-  const ui::d3d12::util::DescriptorCpuGpuHandlePair* around_tables[5] = {
-      &descriptors[5], &descriptors[5], &descriptors[6], &descriptors[6],
-      &descriptors[4]};
+  const ui::d3d12::util::DescriptorCpuGpuHandlePair* around_tables[kBlurTables] = {
+      &descriptors[5], &descriptors[5], &descriptors[5], &descriptors[6],
+      &descriptors[6], &descriptors[4], &descriptors[6]};
   DispatchBlurTiles(blur_neighbor_max_pipeline_.Get(), constants,
                     around_tables, (blur.tile_count[0] + 7) / 8,
                     (blur.tile_count[1] + 7) / 8);
@@ -2672,7 +2700,7 @@ void DaoUpscalerImpl::DispatchBlurTiles(
   command_list.D3DSetComputeRootSignature(blur_root_signature_.Get());
   command_list.D3DSetComputeRoot32BitConstants(
       0, sizeof(constants) / sizeof(uint32_t), &constants, 0);
-  for (uint32_t i = 0; i < 5; ++i) {
+  for (uint32_t i = 0; i < kBlurTables; ++i) {
     command_list.D3DSetComputeRootDescriptorTable(1 + i, tables[i]->second);
   }
   cp_.SetExternalPipeline(pipeline);

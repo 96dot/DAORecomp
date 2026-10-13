@@ -18,6 +18,9 @@ cbuffer DaoBlurConstants : register(b0) {
   // many such tiles make the whole frame a cut.
   uint dao_counter;
   uint dao_cut_tiles;
+  // The tile pass: dao_previous_motion is the frame before's (the tile pass
+  // ran then too); else there's none.
+  uint dao_previous_valid;
 };
 
 // Tiles with a cut, counted by the tile pass in [dao_counter], read by the
