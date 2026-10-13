@@ -23,7 +23,10 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
 - `dao_host.h`: the runtime services Xenia's code calls instead of its kernel and
   CPU modules (interrupts, guest threads, the window).
 - `gpu/d3d12/dao_upscale.*`: temporal upscaling (FidelityFX), motion vectors, motion
-  blur.
+  blur: `dao_upscale.h` is its interface, `dao_upscale_impl.h` the class its files
+  share; `dao_upscale.cc` the frame (draws, resolves, the swap, the composite),
+  `dao_upscale_fsr.cc` FidelityFX, `dao_upscale_motion.cc` the motion vectors,
+  `dao_upscale_hdr.cc` true HDR, `dao_motion_blur.cc` motion blur.
 - `gpu/d3d12/dao_frame_trace.h`, `gpu/d3d12/dao_gpu_timing.h`: diagnostics.
 - `gpu/shaders/dao_*`, `ui/shaders/dao_*`: the upscaler's, resolves' and HDR
   output's shaders (compiled by `scripts/build_xenia_shaders.py`).
