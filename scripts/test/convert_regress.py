@@ -3,7 +3,8 @@
 Converts copies of PC mods with the current build (DAO_CONVERT_MOD, as the launcher's
 Convert does) in <work dir>, and compares each with an earlier conversion of the same
 mod: files the same, different, or new. Run it after changing the converter to see
-exactly what changed. The PC folders are only read."""
+exactly what changed. The PC folders are only read; a work folder whose copies would
+overlap an input or an earlier conversion, or be links, is refused."""
 import filecmp
 import os
 import shutil
@@ -19,18 +20,25 @@ def main():
     if len(sys.argv) < 3 or any("=" not in a for a in sys.argv[2:]):
         print(__doc__)
         return 2
-    work = Path(sys.argv[1])
-    work.mkdir(parents=True, exist_ok=True)
-    for case in sys.argv[2:]:
-        pc, earlier = (Path(p).resolve() for p in case.split("=", 1))
-        mod = (work / pc.name).resolve()
-        # The work copies are deleted first: never an input, or a folder holding one.
-        for old in (mod, (work / ".originals" / pc.name).resolve()):
-            for kept in (pc, earlier):
+    work = Path(sys.argv[1]).resolve()
+    cases = [tuple(Path(p).resolve() for p in case.split("=", 1)) for case in sys.argv[2:]]
+    # The work copies are deleted first: never an input or an earlier conversion (of any
+    # case), a folder holding one, or a link (deleting through it empties its target).
+    inputs = [p for case in cases for p in case]
+    for pc, _ in cases:
+        for old in (work / pc.name, work / ".originals" / pc.name):
+            if old.is_symlink() or (hasattr(old, "is_junction") and old.is_junction()):
+                print(f"{old} is a link: use a work folder away from the inputs")
+                return 2
+            old = old.resolve()
+            for kept in inputs:
                 if old == kept or old in kept.parents or kept in old.parents:
-                    print(f"{old} would replace {kept}: use a work folder away from the inputs")
+                    print(f"{old} overlaps {kept}: use a work folder away from the inputs")
                     return 2
-        for old in (mod, (work / ".originals" / pc.name).resolve()):
+    work.mkdir(parents=True, exist_ok=True)
+    for pc, earlier in cases:
+        mod = work / pc.name
+        for old in (mod, work / ".originals" / pc.name):
             if old.exists():
                 shutil.rmtree(old)
         shutil.copytree(pc, mod)

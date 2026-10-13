@@ -28,7 +28,9 @@ if IS_WINDOWS:
     import ctypes
     from ctypes import wintypes
 
-    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _kernel32 = ctypes.WinDLL("kernel32")
+    _PROCESS_SET_QUOTA = 0x0100  # to assign a process to a job
+    _PROCESS_TERMINATE = 0x0001
     _kernel32.CreateJobObjectW.restype = wintypes.HANDLE
     _kernel32.CreateJobObjectW.argtypes = (wintypes.LPVOID, wintypes.LPCWSTR)
     _kernel32.OpenProcess.restype = wintypes.HANDLE
@@ -129,14 +131,15 @@ def clean_env(extra=None):
 
 def _job_for(process):
     """A Windows job object holding a just-started process, and so whatever it starts
-    from then on (it can't start anything before its own startup), or None if that fails.
-    Ending the job ends them all, even after the process itself has exited."""
+    from then on, or None if that fails. Ending the job ends them all, even after the
+    process itself has exited. (No limits: closing it ends nothing, so a step outlives an
+    installer that dies, as before.) A child the process starts before it joins the job
+    is outside it: _kill_tree ends the process's tree too."""
     job = _kernel32.CreateJobObjectW(None, None)
     if not job:
         return None
-    # PROCESS_SET_QUOTA | PROCESS_TERMINATE; the PID is still this process's (Popen holds
-    # its handle).
-    handle = _kernel32.OpenProcess(0x0100 | 0x0001, False, process.pid)
+    # The PID is still this process's (Popen holds its handle).
+    handle = _kernel32.OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, process.pid)
     assigned = bool(handle) and bool(_kernel32.AssignProcessToJobObject(job, handle))
     if handle:
         _kernel32.CloseHandle(handle)
@@ -148,20 +151,25 @@ def _job_for(process):
 
 def _kill_tree(process, job):
     """Ends a process and the ones it started (a build tool's compilers and linkers), also
-    those still running after it exited (one may hold its output open): its job on
-    Windows (else its tree while it runs), its process group elsewhere."""
+    those still running after it exited (one may hold its output open): its tree and its
+    job on Windows, its process group elsewhere."""
     if IS_WINDOWS:
-        if not (job and _kernel32.TerminateJobObject(job, 1)) and process.poll() is None:
+        # Its tree while it runs (a child it started before it joined the job), then
+        # the job (what outlived it).
+        if process.poll() is None:
             taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
             try:
                 subprocess.run([str(taskkill), "/T", "/F", "/PID", str(process.pid)], stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                                creationflags=subprocess.CREATE_NO_WINDOW)
             except OSError:
-                pass  # then the process itself, below
+                pass  # then the job and the process itself, below
+        if job:
+            _kernel32.TerminateJobObject(job, 1)  # their exit code
     else:
         try:
-            # Its own session (see run): the group outlives the process while members remain.
+            # Its own session (see run): the group outlives the process while members
+            # remain, and its ID isn't reused until they're gone.
             os.killpg(process.pid, signal.SIGKILL)
         except OSError:
             pass
@@ -207,9 +215,13 @@ def run(reporter, args, cwd=None, env=None, log_file=None, quiet=False):
             if not quiet:
                 reporter.log(line)
         process.wait()
+    except BaseException:
+        # Not left running unattended (the log couldn't be opened, ...).
+        _kill_tree(process, job)
+        raise
     finally:
         finished.set()
-        if watcher.is_alive():
+        if watcher.is_alive():  # (not started if the log couldn't be opened)
             watcher.join()  # before the job is closed under it
         if job:
             _kernel32.CloseHandle(job)

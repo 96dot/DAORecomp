@@ -82,7 +82,8 @@ walk each time); it also lists the frames and blocks most like a one-frame flash
   `--dump` shows what the launcher wrote.
 - `fake_install_engine.py`: stands in for the installer
   (`DAO_INSTALL_ENGINE=<its absolute path>`), to test the install screen in seconds.
-- `installer_cancel.py`: Cancel must end a silent build step and what it started at once.
+- `installer_cancel.py`: Cancel must end a silent build step and what it started at once,
+  also when the step has exited and a child of it still holds its output.
 - `installer_play.py <install folder>`: the installer's Play button after an install.
 - `capture_window.ps1 <png>`: the launcher window's contents, even behind other windows;
   `watch_windows.ps1`: logs the game window's size, position and DPI on every change.
@@ -91,7 +92,7 @@ walk each time); it also lists the frames and blocks most like a one-frame flash
 
 - `convert_regress.py <work dir> <PC mod>=<earlier conversion>...`: converts copies of PC
   mods with the current build and lists the files that changed since an earlier
-  conversion.
+  conversion (the work folder must be away from the inputs).
 - `dlc_install.py <packages> <userdata/content>`: installs DLC packages as the launcher
   does.
 

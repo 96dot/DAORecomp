@@ -3,7 +3,7 @@ processes it started: runs a silent Python that starts a silent child sleeping 2
 through installer.util.run and cancels it after 0.2 s, twice: with the step still
 running, and with the step already exited (its child still holding the output open).
 Expect each "cancelled after" well under a second, and no Python left but this one
-(Windows)."""
+(Windows; other Python programs running count too). A manual check: it doesn't fail."""
 import subprocess
 import sys
 import threading
@@ -36,7 +36,7 @@ for name, step in (("step running", f"import subprocess, sys, time; {CHILD}; tim
         util.run(reporter, [sys.executable, "-c", step])
         print(f"{name}: FAIL: not cancelled")
     except util.Cancelled:
-        print(f"{name}: cancelled after %.2f s" % (time.time() - start))
+        print(f"{name}: cancelled after {time.time() - start:.2f} s")
 time.sleep(0.5)
 if sys.platform == "win32":
     out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV"], capture_output=True,
