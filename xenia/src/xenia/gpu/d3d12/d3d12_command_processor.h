@@ -783,6 +783,25 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // The 256-entry table ramp is the identity (the HDR copy skips it).
   bool dao_gamma_ramp_identity_ = true;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> dao_hdr_copy_pipeline_;
+  // The HDR copy's root signature (the apply_gamma one's description, its
+  // constants changed) and pipeline, with SetupContext.
+  bool DaoInitializeHdrCopy(
+      D3D12_ROOT_PARAMETER* apply_gamma_root_parameters,
+      const D3D12_ROOT_SIGNATURE_DESC& apply_gamma_root_signature_desc);
+  // dao_gamma_ramp_identity_ from the 256-entry table ramp.
+  void DaoUpdateGammaRampIdentity();
+  // At the swap: the upscaler's image (DaoUpscaler::OnSwap) in place of the
+  // front buffer's, if it gives one: dao_sharpened if FSR sharpened it (at
+  // the front buffer's size or smaller), dao_hdr if it's the game's HDR.
+  void DaoReplaceSwapTexture(
+      ID3D12Resource*& swap_texture_resource,
+      D3D12_SHADER_RESOURCE_VIEW_DESC& swap_texture_srv_desc,
+      D3D12_RESOURCE_DESC& swap_texture_desc, bool dao_timed,
+      bool& dao_sharpened, bool& dao_hdr);
+  // The HDR copy's root signature and constants, in place of the gamma
+  // ramp's.
+  void DaoSetHdrCopyRoot(const D3D12_RESOURCE_DESC& swap_texture_desc,
+                         bool use_pwl_gamma_ramp, bool dao_scrgb);
 
   struct FxaaConstants {
     uint32_t size[2];
