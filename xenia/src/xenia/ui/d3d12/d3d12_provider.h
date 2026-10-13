@@ -174,6 +174,10 @@ class D3D12Provider : public GraphicsProvider {
 
   static bool EnableIncreaseBasePriorityPrivilege();
   bool Initialize();
+  // DAO (dao_provider.cc): with Initialize, before the device is created:
+  // DAO_DRED=1 collects the device removed extended data (costs a bit of
+  // GPU time), logged by LogDeviceRemoved.
+  void DaoEnableDred() const;
 
   typedef HRESULT(WINAPI* PFNCreateDXGIFactory2)(UINT Flags, REFIID riid,
                                                  _COM_Outptr_ void** ppFactory);
