@@ -1,0 +1,8 @@
+# As load_latest.txt, then walks back and forth while turning the camera (for flicker
+# and motion: run with DAO_FRAME_HISTORY=1 or a short CAPTURE, see flicker.py).
+every 2 START 0.2 from 10 until 26   # title screen, to Continue
+27 A 0.2                             # load the latest save
+every 4 LUP 1.8 from 45 until 100
+every 4 LDOWN 1.8 from 47 until 100
+every 6 RLEFT 0.8 from 46 until 100
+every 6 RRIGHT 0.8 from 49 until 100

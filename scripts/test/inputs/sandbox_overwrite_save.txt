@@ -1,0 +1,16 @@
+# As save_game.txt, but for a sandbox (a storage-device notice first), and overwrites the
+# first existing save in Save Game. Only with run_sandbox.sh: it changes a save.
+every 2 START 0.2 from 10 until 18   # title screen
+24 A 0.2                             # the storage-device notice
+every 1 DOWN 0.2 from 32 until 34    # to Load Game
+35 A 0.2
+39 X 0.2                             # Switch Character
+41 DOWN 0.2
+43 A 0.2
+46 A 0.2                             # load its first save
+81 START 0.2                         # pause menu
+85 A 0.2                             # Save Game
+90 DOWN 0.2                          # first existing save
+92 A 0.2
+96 A 0.2                             # confirm overwrite
+100 A 0.2

@@ -37,7 +37,7 @@ method given here, never by copying an address.
 | 6 | Playable | new game, save, load, keyboard UI, 60 fps | `ui/keyboard.cpp`, save-name logic in `kernel/xam.cpp` |
 | 7 | Graphics | resolution scale, FSR, HDR, in-game options | `xenia/.../dao_upscale.*`, HDR shaders, `ui/options_movie.cpp` |
 | 8 | Distribution | installer, launcher, updater, CI; built for the player's processor | `installer/`, `install.py`, `launcher/`, `.github/workflows/`, `cpu_check.cpp` |
-| 9 | Content | DLC, title update, mods | `content/`, `mods/`, `scripts/stfs.py`, `scripts/match_build.py`, `scripts/prefix_symbols.py` |
+| 9 | Content | DLC, title update, mods | `content/`, `mods/`, `scripts/stfs.py`, `scripts/match_build.py`, `scripts/pair_data.py`, `scripts/prefix_symbols.py` |
 
 Rename the `dao` namespace, the `DAO_` environment variables and `DAORecomp` paths in
 one pass when copying, with a script, before changing anything else.
