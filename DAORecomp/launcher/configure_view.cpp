@@ -66,8 +66,9 @@ namespace dao::launcher
                 if (std::abs(kFovSteps[i] - *value) < std::abs(kFovSteps[step] - *value))
                     step = i;
             }
-            const std::string text = kFovSteps[step] == kOriginalFov ? fmt::format("{}\u00B0 (original)", kOriginalFov)
-                                                                     : fmt::format("{}\u00B0", kFovSteps[step]);
+            // (The value applied: one set in config.toml between the steps too.)
+            const std::string text = *value == kOriginalFov ? fmt::format("{}\u00B0 (original)", kOriginalFov)
+                                                            : fmt::format("{}\u00B0", *value);
             const bool changed = Row(label, [&] {
                 return ImGui::SliderInt("##value", &step, 0, int(std::size(kFovSteps)) - 1, text.c_str(),
                     ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput);

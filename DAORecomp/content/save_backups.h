@@ -42,9 +42,10 @@ namespace dao::content
         bool currentUnfinished = false;
     };
 
-    // The backups there are, by character, the latest first. (A restore that stopped
-    // half-way is finished first.)
-    std::vector<SaveBackup> ListSaveBackups(const std::filesystem::path& userRoot);
+    // The backups there are, by character, the latest first. With finishStopped (only
+    // while the game isn't running: it could be saving), a restore that stopped
+    // half-way is finished first.
+    std::vector<SaveBackup> ListSaveBackups(const std::filesystem::path& userRoot, bool finishStopped);
 
     struct RestoreResult
     {
@@ -56,6 +57,6 @@ namespace dao::content
     // Puts the backup of save `name` back, and the save it replaces becomes the backup
     // (so restoring again switches back); a deleted save just comes back. Not restored,
     // the saves are as they were (unless `problem` says one is in <name>~current: the
-    // next ListSaveBackups puts it back).
+    // next ListSaveBackups with the game closed puts it back).
     RestoreResult RestoreSaveBackup(const std::filesystem::path& userRoot, const std::string& name);
 }

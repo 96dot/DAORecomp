@@ -1,7 +1,7 @@
 // The field of view settings. Every frame, the game's camera update (82265108;
 // 82284BD8 in Title Update 6) gives the main camera its field of view (vertical,
 // in radians) through the camera's SetFov (vtable slot 3): 60 degrees in
-// gameplay, and each shot's own in conversations (18 to 27 in those tested). SetFov on the main
+// gameplay, and each shot's own in conversations (narrower). SetFov on the main
 // camera within that update gets it scaled for the game mode: by the gameplay
 // setting in exploration and combat, by the conversation one in conversations and
 // cutscenes (the modes the update itself checks after SetFov), not at all in the
@@ -32,8 +32,9 @@ namespace
     constexpr uint32_t kModeControllerOffset = 280;
     constexpr uint32_t kCurrentModeOffset = 120;
     constexpr uint32_t kModeNumberOffset = 96;
-    // The modes in the world's own camera (exploring, combat, dead, the in-game
-    // menus: 0 to 3), and those with shots of their own (conversations, cutscenes).
+    // The modes in the world's own camera (0 exploring; 1 to 3 taken as gameplay
+    // too, not checked one by one), and those with shots of their own (4
+    // conversations; 5 taken to be cutscenes, unverified).
     constexpr int32_t kLastGameplayMode = 3;
     constexpr int32_t kModeConversation = 4;
     constexpr int32_t kModeCutscene = 5;

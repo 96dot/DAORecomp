@@ -13,7 +13,8 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
   tonemapping redone without compressing its highlights), upscaled in HDR;
   HDR quality High keeps it 16-bit scRGB all the way to the display
 - 60 fps (the original is locked to 30), or up to 240 or unlimited (experimental)
-- field of view settings: gameplay's, and conversations' and cutscenes' separately
+- field of view settings: gameplay's, and conversations' (and, it seems, cutscenes')
+  separately
 - SDL3 input, including DualSense and other controllers
 - a launcher for settings, mods (file overrides, with a converter for PC mods) and
   code patches
@@ -131,9 +132,9 @@ release page: update the checkout (`git pull`, or check out the new tag) and run
 Everything is pinned to exact versions and checked (`installer/deps.py`):
 
 - Source code: Xenia's third-party libraries (and rapidjson, for the update check),
-  XenonRecomp, SDL 3, the AMD FidelityFX SDK (headers and the signed FSR DLLs), and
-  the Intel XeSS SDK (headers and `libxess.dll`; the release archive, of which only
-  those are kept).
+  XenonRecomp, SDL 3, the AMD FidelityFX SDK (headers and the signed FSR and frame generation
+  DLLs), and the Intel XeSS SDK (headers, `libxess.dll` and its license notices; the
+  release archive, of which only those are kept).
 - LLVM/Clang 22 (or your system's LLVM 18+ if it has `clang-cl`, `lld-link`, `llvm-lib`
   and `llvm-rc`), CMake and Ninja, and on Windows without git, MinGit.
 - The Microsoft C/C++ runtime headers/libraries and the Windows SDK, fetched by
@@ -154,7 +155,7 @@ the backup back (after asking, and not while the game is running), and the save 
 replaces becomes the backup, so restoring again switches back. (A `<save>.new` folder
 in `save_backups/` is a backup that couldn't be put in place; the log says why. A
 `<save>~current` one is the save a restore set aside, put back when the list is next
-read.)
+read with the game closed.)
 
 ## Playing
 

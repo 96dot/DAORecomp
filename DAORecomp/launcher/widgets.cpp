@@ -191,7 +191,9 @@ namespace dao::launcher
     {
         std::error_code ec;
         fs::create_directories(path, ec);
-        ShellExecuteW(nullptr, L"open", path.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        // (Not a file of that name, which "open" would run.)
+        if (fs::is_directory(path, ec))
+            ShellExecuteW(nullptr, L"explore", path.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
 
     void OpenFile(const fs::path& path)

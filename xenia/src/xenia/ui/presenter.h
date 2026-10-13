@@ -729,6 +729,11 @@ class Presenter {
   // ConsumeGuestOutput, with the acquired guest output: whether to keep it
   // (the pacer painting its real frame) rather than take the ready one.
   static bool DaoKeepAcquired(const GuestOutputProperties& acquired);
+  // A paint of the pacer's, with the guest output it consumed: whether it's
+  // newer than the one the pacer is painting (it came during the wait for
+  // room in the swap chain), so not to be shown: the pacer, or the guest
+  // output thread, shows it next.
+  static bool DaoPacerOutdated(const GuestOutputProperties& consumed);
   // Stops the pacer thread: before the implementation it paints with is
   // destroyed.
   void DaoStopPacer();
@@ -958,8 +963,8 @@ class Presenter {
   void DaoPacerThread();
   // After falling behind, how long only real frames are shown before trying
   // generated ones again: doubled each time it falls behind again soon after
-  // (a display that can't keep up at all), back to the least kDaoRealOnlyMax
-  // after the last time.
+  // (a display that can't keep up at all), back to kDaoRealOnlyMin once it has
+  // kept up for kDaoRealOnlyMax.
   static constexpr std::chrono::seconds kDaoRealOnlyMin{5};
   static constexpr std::chrono::seconds kDaoRealOnlyMax{60};
   // The refresh count (the guest output thread's).

@@ -116,6 +116,7 @@ DaoUpscalerImpl::~DaoUpscalerImpl() {
     stream_out_thread_.join();
   }
   DestroyFrameGeneration();
+  DestroyRetiredFrameGeneration(true);
   retired_backend_.reset();
   backend_.reset();
 }
@@ -696,6 +697,10 @@ bool DaoUpscalerImpl::EnsureBackendContext(uint32_t render_width,
     reset_history_ = true;
   }
   if (backend_->EnsureContext(desc)) {
+    // (Started again: frame generation's history is stale too.)
+    if (backend_->TakeRestarted()) {
+      reset_history_ = true;
+    }
     return true;
   }
   // FSR instead of a backend that can't be used (FSR failing turns upscaling
@@ -777,6 +782,7 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
     retired_backend_->SetGpuDone();
     retired_backend_.reset();
   }
+  DestroyRetiredFrameGeneration(false);
   // Whether the previous frame was given to frame generation (this one is
   // given only if it's upscaled).
   const bool fg_previous = fg_previous_;
@@ -785,6 +791,12 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   if (fg_enabled != fg_enabled_) {
     fg_enabled_ = fg_enabled;
     OnFrameGenerationToggled(fg_enabled);
+  }
+  // Failed, or no upscaler left to give it frames (FSR given up): released.
+  if ((fg_failed_ || (backend_fsr_ && backend_ && backend_->failed())) &&
+      (fg_context_ || fg_scene_.resource || fg_generated_.resource ||
+       fg_composite_.resource)) {
+    ReleaseFrameGeneration();
   }
   const auto now = std::chrono::steady_clock::now();
   const float frame_ms =

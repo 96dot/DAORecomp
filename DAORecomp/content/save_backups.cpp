@@ -91,13 +91,15 @@ namespace dao::content
         // Finishes a restore that stopped half-way (see RestoreSaveBackup), from the
         // save it set aside, <name>~current: put back in place if nothing took its
         // place, or made the backup if the backup did. False if neither fits (all
-        // three are there), and it's left alone.
+        // three are there, or it isn't a plain folder), and it's left alone.
         bool FinishStoppedRestore(const fs::path& backups, const fs::path& saves, const std::string& name)
         {
             const fs::path aside = backups / (FromUtf8(name).native() + std::wstring(kAside));
             std::error_code ec;
             if (!fs::exists(fs::symlink_status(aside, ec)))
                 return true;
+            if (!IsPlainFolder(aside))
+                return false;
             const fs::path current = saves / FromUtf8(name), backup = backups / FromUtf8(name);
             const fs::path to = !fs::exists(fs::symlink_status(current, ec)) ? current
                 : !fs::exists(fs::symlink_status(backup, ec))              ? backup
@@ -124,7 +126,7 @@ namespace dao::content
         return SaveBackupsFolder(userRoot) / (name.native() + L".writing");
     }
 
-    std::vector<SaveBackup> ListSaveBackups(const fs::path& userRoot)
+    std::vector<SaveBackup> ListSaveBackups(const fs::path& userRoot, bool finishStopped)
     {
         const fs::path folder = SaveBackupsFolder(userRoot);
         const fs::path saves = ContentFolder(userRoot, kTitleId, kContentSave);
@@ -132,7 +134,7 @@ namespace dao::content
         std::error_code ec;
         for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
         {
-            const std::wstring& file = it->path().filename().native();
+            const std::wstring file = it->path().filename().native();
             if (file.ends_with(kAside))
                 stopped.push_back(WideToUtf8(file.substr(0, file.size() - kAside.size())));
             // Backups: not one being made (<name>.new) or a restore's work (<name>~current).
@@ -141,7 +143,7 @@ namespace dao::content
         }
         for (const std::string& name : stopped)
         {
-            if (IsContentName(name) && FinishStoppedRestore(folder, saves, name) &&
+            if (finishStopped && IsContentName(name) && FinishStoppedRestore(folder, saves, name) &&
                 std::ranges::find(names, name) == names.end() && IsPlainFolder(folder / FromUtf8(name)))
                 names.push_back(name);
         }
@@ -208,7 +210,7 @@ namespace dao::content
                 fs::rename(aside, current, ec);
                 if (ec)
                     return { false, fmt::format("the backup can't be put in place ({}), and the save there now is "
-                                                "in save_backups/{}~current until the list is read again", why, name) };
+                                                "in save_backups/{}~current until the list is read with the game closed", why, name) };
             }
             return { false, fmt::format("the backup can't be put in place ({})", why) };
         }
@@ -219,7 +221,7 @@ namespace dao::content
             fs::rename(aside, backup, ec);
             if (ec)
                 result.problem = fmt::format("the save it replaced is in save_backups/{}~current until the list is "
-                                             "read again ({})", name, ec.message());
+                                             "read with the game closed ({})", name, ec.message());
         }
         // The display names follow. (A backup kept without one keeps the replaced save's
         // name, the same character's: the game can't list a save with none.)

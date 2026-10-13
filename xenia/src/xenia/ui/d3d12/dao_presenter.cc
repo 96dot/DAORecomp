@@ -193,6 +193,10 @@ bool D3D12Presenter::DaoWaitForFrameLatency() {
           frame_latency))) {
     paint_context_.frame_latency = frame_latency;
   }
+  if (paint_context_.frame_latency_room_held) {
+    paint_context_.frame_latency_room_held = false;
+    return true;
+  }
   if (paint_context_.frame_latency_waitable &&
       WaitForSingleObjectEx(paint_context_.frame_latency_waitable, 100,
                             FALSE) == WAIT_TIMEOUT) {

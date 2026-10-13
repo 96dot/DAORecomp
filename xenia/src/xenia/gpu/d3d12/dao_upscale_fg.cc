@@ -8,6 +8,7 @@
 // (ui/dao_frame_pacer.cc), or only real ones if the display can't keep up.
 #include "xenia/gpu/d3d12/dao_upscale_impl.h"
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -28,7 +29,9 @@ namespace gpu {
 namespace d3d12 {
 
 bool DaoUpscalerImpl::FrameGenerationWanted() const {
-  return !fg_failed_ && fg_enabled_;
+  // Bindless only: the composites after it reuse descriptors requested before
+  // its heaps were bound, which bindful heaps would need again.
+  return !fg_failed_ && fg_enabled_ && cp_.bindless_resources_used_;
 }
 
 void DaoUpscalerImpl::OnFrameGenerationToggled(bool enabled) {
@@ -38,6 +41,10 @@ void DaoUpscalerImpl::OnFrameGenerationToggled(bool enabled) {
     }
     return;
   }
+  ReleaseFrameGeneration();
+}
+
+void DaoUpscalerImpl::ReleaseFrameGeneration() {
   DestroyFrameGeneration();
   ReleaseTexture(fg_scene_);
   ReleaseTexture(fg_generated_);
@@ -143,11 +150,30 @@ void DaoUpscalerImpl::DestroyFrameGeneration() {
   if (!fg_context_) {
     return;
   }
-  // The submitted frames may still use its resources.
-  AwaitSubmittedFrames();
-  ffx_.destroy(&fg_context_, nullptr);
+  // The submitted frames may still use its resources: kept until the GPU is
+  // done with them (a stall here would be a hitch). One retired before is
+  // waited for (only if changed again within a frame or two).
+  DestroyRetiredFrameGeneration(true);
+  fg_retired_context_ = fg_context_;
+  fg_retired_submission_ = cp_.GetCurrentSubmission();
   fg_context_ = nullptr;
   fg_previous_ = false;
+}
+
+void DaoUpscalerImpl::DestroyRetiredFrameGeneration(bool wait) {
+  if (!fg_retired_context_) {
+    return;
+  }
+  if (cp_.GetCompletedSubmission() < fg_retired_submission_) {
+    if (!wait) {
+      return;
+    }
+    // (Retired in an earlier submission: this one's isn't submitted yet.)
+    cp_.CheckSubmissionCompletion(
+        std::min(fg_retired_submission_, cp_.GetCurrentSubmission() - 1));
+  }
+  ffx_.destroy(&fg_retired_context_, nullptr);
+  fg_retired_context_ = nullptr;
 }
 
 bool DaoUpscalerImpl::RecordFrameGeneration(const Texture& scene,

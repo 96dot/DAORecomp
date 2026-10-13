@@ -17,6 +17,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "xenia/base/cvar.h"
@@ -119,7 +120,8 @@ constexpr uint64_t kTonemapPixelShader = 0x20BA772900FB8AA3;
 enum CompositeMode : uint32_t {
   kCompositeSdr,
   kCompositeHdr,
-  // The HDR scene with the UI, output in SDR (while presenter UI is shown).
+  // A linear scene with the UI, output in SDR: true HDR's while presenter UI
+  // is shown, or the linearized SDR image's (XeSS).
   kCompositeHdrToSdr,
   // One source (t1) to the destination at its size: HDR-encoded (HdrFormat),
   // or linear.
@@ -232,6 +234,9 @@ class UpscalerBackend {
   // unsupported, or creating its context or upscaling failed. Not tried
   // again.
   bool failed() const { return failed_; }
+  // Whether the last EnsureContext started it again after a failed dispatch
+  // (its history gone), cleared by reading it.
+  bool TakeRestarted() { return std::exchange(restarted_, false); }
   // Creates the context for desc unless it's for it already (re-creating it
   // waits for the GPU to be done with the old one). False if it can't be.
   virtual bool EnsureContext(const ContextDesc& desc) = 0;
@@ -250,6 +255,7 @@ class UpscalerBackend {
  protected:
   DaoUpscalerImpl& upscaler_;
   bool failed_ = false;
+  bool restarted_ = false;
   bool gpu_done_ = false;
 };
 
@@ -577,7 +583,14 @@ class DaoUpscalerImpl {
   void OnFrameGenerationToggled(bool enabled);
   bool EnsureFrameGeneration(uint32_t render_width, uint32_t render_height,
                              uint32_t display_width, uint32_t display_height);
+  // Retires the context: destroyed once the GPU is done with the frames
+  // submitted with it (DestroyRetiredFrameGeneration), not waited for here.
   void DestroyFrameGeneration();
+  // The retired context destroyed, waiting for the GPU if wait (else only if
+  // it's done with it).
+  void DestroyRetiredFrameGeneration(bool wait);
+  // The context and images released (off, failed, or no upscaler left).
+  void ReleaseFrameGeneration();
   // The frame between the previous one given and this one's scene (display
   // size, readable) into fg_generated_ (left in unordered access). False if
   // it has none to show (the first after a reset, or not previous_given).
@@ -591,7 +604,8 @@ class DaoUpscalerImpl {
   D3D12CommandProcessor& cp_;
   D3D12RenderTargetCache& rtc_;
 
-  // (Before the backends: FSR's calls it, so it's destroyed after them.)
+  // (Before the backends: FSR's and frame generation's calls use it, so it's
+  // destroyed after them.)
   FfxApi ffx_;
   std::unique_ptr<UpscalerBackend> backend_;
   // Whether backend_ is FSR's (which the others fall back to).
@@ -700,6 +714,8 @@ class DaoUpscalerImpl {
   // Frame generation's context, not retried after failing; the display size
   // its images couldn't be created at; the live setting last seen.
   ffxContext fg_context_ = nullptr;
+  ffxContext fg_retired_context_ = nullptr;
+  uint64_t fg_retired_submission_ = 0;
   uint32_t fg_context_size_[4] = {};
   bool fg_context_hdr_ = false;
   bool fg_failed_ = false;

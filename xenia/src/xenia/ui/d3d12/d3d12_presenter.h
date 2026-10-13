@@ -321,6 +321,9 @@ class D3D12Presenter final : public Presenter {
     // with vsync, three without; 0: not set yet).
     HANDLE frame_latency_waitable = nullptr;
     UINT frame_latency = 0;
+    // A wait for room ended a paint that then presented nothing: that room is
+    // the next paint's (waiting again would lose it for good).
+    bool frame_latency_room_held = false;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, kSwapChainBufferCount>
         swap_chain_buffers;
     // DAO HDR output.

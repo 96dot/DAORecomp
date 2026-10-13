@@ -55,6 +55,11 @@ bool Presenter::DaoKeepAcquired(const GuestOutputProperties& acquired) {
          acquired.dao_serial == t_pacer_serial;
 }
 
+bool Presenter::DaoPacerOutdated(const GuestOutputProperties& consumed) {
+  return DaoPacerStage(t_pacer_stage) != DaoPacerStage::kNone &&
+         consumed.dao_serial != t_pacer_serial;
+}
+
 bool Presenter::DaoGeneratedFramesShown() const {
   return std::chrono::steady_clock::now().time_since_epoch().count() >=
          dao_real_only_until_.load(std::memory_order_relaxed);
@@ -176,7 +181,7 @@ void Presenter::DaoPacerThread() {
   HANDLE timer = CreateWaitableTimerExW(
       nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
       TIMER_ALL_ACCESS);
-  // (Made before the thread, closed after it.)
+  // (The wake event: made before the thread, closed after it.)
   HANDLE wake = dao_pacer_wake_;
   for (;;) {
     DaoPacerStage stage;

@@ -60,7 +60,7 @@ std::string ProxyDllInProgramFolder() {
   const std::wstring_view exe_path(exe, exe_length);
   const std::wstring_view folder =
       exe_path.substr(0, exe_path.rfind(L'\\') + 1);
-  // (A process with more modules isn't searched past these.)
+  // (Only the first modules, as many as the array holds, are searched.)
   HMODULE modules[1024];
   DWORD bytes = 0;
   if (!EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules),
@@ -181,6 +181,7 @@ bool FsrBackend::EnsureContext(const ContextDesc& desc) {
       return false;
     }
     XELOGW("FSR: the upscaler failed, starting it again");
+    restarted_ = true;
   }
   if (context_ && context_desc_ == desc) {
     return true;

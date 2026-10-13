@@ -91,9 +91,10 @@ class XessBackend : public UpscalerBackend {
   bool Load();
   // The flags of a context for HDR or SDR color.
   static uint32_t InitFlags(bool hdr) {
-    // Motion vectors at the render size, in pixels, without the jitter; depth
-    // nearer smaller; the color linear, and SDR (0 to 1, no tonemapping
-    // inside XeSS) without true HDR.
+    // XeSS's defaults (no flag set for them): motion vectors at the render
+    // size, in pixels, without the jitter; depth nearer smaller; the color
+    // linear. LDR_INPUT_COLOR without true HDR: SDR, 0 to 1, no tonemapping
+    // inside XeSS.
     return hdr ? XESS_INIT_FLAG_NONE : XESS_INIT_FLAG_LDR_INPUT_COLOR;
   }
   // Fails the backend for good, with the reason and XeSS's result logged.
@@ -238,8 +239,8 @@ bool XessBackend::EnsureContext(const ContextDesc& desc) {
       break;
     }
   }
-  // (Beyond 3 times, as from 1280x720 to above 3840x2160: FSR instead, for
-  // the rest of the session.)
+  // (Above 3 times, the most a preset covers, as from 1280x720 to above
+  // 3840x2160: FSR instead, for the rest of the session.)
   if (!quality) {
     XELOGE("XeSS: can't upscale {}x{} to {}x{}", desc.render_size[0],
            desc.render_size[1], desc.display_size[0], desc.display_size[1]);

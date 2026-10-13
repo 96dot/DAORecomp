@@ -364,6 +364,7 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
     paint_context_.frame_latency_waitable =
         paint_context_.swap_chain->GetFrameLatencyWaitableObject();
     paint_context_.frame_latency = 0;
+    paint_context_.frame_latency_room_held = false;
     paint_context_.swap_chain_width = new_swap_chain_width;
     paint_context_.swap_chain_height = new_swap_chain_height;
     paint_context_.swap_chain_allows_tearing =
@@ -583,6 +584,14 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
     std::unique_lock<std::mutex> guest_output_consumer_lock(
         ConsumeGuestOutput(guest_output_mailbox_index, &guest_output_properties,
                            &guest_output_paint_config));
+    // DAO: a paint of the frame generation pacer's that got a newer guest
+    // output isn't shown (it would be shown twice).
+    if (guest_output_mailbox_index != UINT32_MAX &&
+        DaoPacerOutdated(guest_output_properties)) {
+      command_list->Close();
+      paint_context_.frame_latency_room_held = true;
+      return PaintResult::kNotPresented;
+    }
     if (guest_output_mailbox_index != UINT32_MAX) {
       guest_output_resource =
           guest_output_resources_[guest_output_mailbox_index].second;

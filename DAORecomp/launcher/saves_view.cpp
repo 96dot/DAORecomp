@@ -49,7 +49,7 @@ namespace dao::launcher
             const SaveBackupRow* selected = SelectedBackup(st);
             const std::string selectedName = selected ? selected->backup.name : std::string();
             st.saveBackups.clear();
-            for (content::SaveBackup& backup : content::ListSaveBackups(st.userRoot))
+            for (content::SaveBackup& backup : content::ListSaveBackups(st.userRoot, !OtherInstanceRunning()))
             {
                 SaveBackupRow row{ std::move(backup) };
                 row.backupText = WhereAndWhen(row.backup.backup);
