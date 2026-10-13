@@ -874,6 +874,8 @@ class D3D12TextureCache final : public TextureCache {
     uint32_t fill[2];
     uint32_t channels;
   };
+  // Creates the pipeline of WriteResolvedTextures (with Initialize).
+  void DaoInitializeResolveTextures();
   // Whether resolves may write the texture directly (as a UAV, the base level
   // at the base address, not in a packed mip tail).
   bool IsResolveWritable(const TextureKey& key) const;
