@@ -34,7 +34,7 @@ ENGINE_MAGIC = python_string("installer/pipeline.py", "ENGINE_MAGIC")
 CHECKS = [
     ("DAORecomp/launcher/install_view.cpp", "kMsvcLicenseUrl", f'"{deps.MSVC_LICENSE_URL}"'),
     ("DAORecomp/launcher/install_runner.cpp", "kEngineMagic", f'"{ENGINE_MAGIC}"'),
-    ("DAORecomp/content/install.cpp", "kTitleId", f"0x{deps.GAME_TITLE_ID:08X}"),
+    ("DAORecomp/content/content.h", "kTitleId", f"0x{deps.GAME_TITLE_ID:08X}"),
     ("DAORecomp/content/install.cpp", "kMediaId", f"0x{deps.GAME_MEDIA_ID:08X}"),
     ("DAORecomp/kernel/title_update.cpp", "kTu6XexpSha1", f'"{deps.TU6_XEXP_SHA1.upper()}"'),
     ("DAORecomp/kernel/title_update.cpp", "kTu7XexpSha1", f'"{deps.TU7_XEXP_SHA1.upper()}"'),
