@@ -73,7 +73,8 @@ if (DAO_LAUNCHER_ONLY)
     return()
 endif()
 
-list(REMOVE_ITEM DAO_RUNTIME_SOURCES ${DAO_SETUP_MAIN})
+# (Neural rendering's runtime is its own DLL, below.)
+list(REMOVE_ITEM DAO_RUNTIME_SOURCES ${DAO_SETUP_MAIN} ${CMAKE_CURRENT_SOURCE_DIR}/neural/lmxxf_runtime.cpp)
 add_executable(DAORecomp ${DAO_RUNTIME_SOURCES} ${DAO_IMGUI_BACKENDS} ${DAO_ICON})
 
 # The release the installer builds (its tag), for the launcher's update check.
@@ -140,3 +141,19 @@ foreach(_src
 endforeach()
 add_custom_target(DAORecompUpscalerDlls DEPENDS ${_upscaler_dlls})
 add_dependencies(DAORecomp DAORecompUpscalerDlls)
+
+# Neural rendering's runtime (lmxxf's HIP port of DLSS 5's neural rendering, MIT), next
+# to the executable too: its own DLL, as lmxxf builds it (C++17, its own error
+# handling), loaded only when neural rendering is on.
+set(_lmxxf ${CMAKE_SOURCE_DIR}/thirdparty/lmxxf-nr)
+add_library(LmxxfNrRuntime SHARED neural/lmxxf_runtime.cpp)
+set_target_properties(LmxxfNrRuntime PROPERTIES CXX_STANDARD 17
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(LmxxfNrRuntime PRIVATE
+    ${_lmxxf}/include ${_lmxxf}/src ${_lmxxf}/Development/HIP)
+target_compile_definitions(LmxxfNrRuntime PRIVATE
+    LMXXF_NR_RUNTIME_EXPORTS _WIN32_WINNT=0x0A00 NOMINMAX)
+# (Their warnings are theirs.)
+target_compile_options(LmxxfNrRuntime PRIVATE /EHsc -w)
+target_link_libraries(LmxxfNrRuntime PRIVATE d3d12 dxgi d3dcompiler dxguid)
+add_dependencies(DAORecomp LmxxfNrRuntime)

@@ -1,0 +1,457 @@
+#pragma once
+#include "native_pso.h"
+#include "native_text_overlay.h"
+#include "native_lab_paths.h"
+#include "native_pinned_resource.h"
+#include <chrono>
+#include "native_device_identity.h"
+#include "native_game_rgb_input.h"
+#include "native_actual_network70.h"
+#ifdef DLSS5_USE_HIP
+#include "native_hip_network.h"
+#endif
+#include "native_rgb_texture.h"
+#include "native_temporal_feed.h"
+#include "native_temporal_experiment.h"
+#include "native_addon_fast_history.h"
+#include "native_low_frequency_temporal.h"
+#include "native_temporal_coordinates.h"
+#include "native_temporal_sample.h"
+#include "native_submitted_readback.h"
+
+// Integration boundary, not a ReShade callback. The caller must establish the
+// correct source/color contract and submit all input producers before Process.
+// Rebind rotating same-size source only after completed frames; recreate on resize.
+// FAST/QUALITY PATH (DLSS5_OUTPUT_SMOOTH="t,s"): output-side temporal smoothing toward the warped previous output where the
+// difference is below t/255 (blend weight s at zero difference, fading to 0 at t). In place on the network RGB buffer.
+/* DLSS5_HISTORY_GUARD=<dark/255>,<bright/255> (Magpie): a warped-history pixel darker than `dark` whose current input is brighter than
+   `bright` is replaced by the current input before the network reads it -- the network's own no-history convention (preblock_input_mix
+   fills the history features with the input colour), applied per pixel. Breaks the self-sustaining black tiles: the temporal branch
+   reproduces a black history tile as a black output tile, which becomes the next history. */
+/* 2026-09-24 (Cyberpunk 2077): scene-linear range differs per game (Cyberpunk's sky reads 6..13 where Stellar Blade's is ~1); DLSS5_PAPER_WHITE
+   scales the codec's normalisation on both the encode and the decode side. Default 1 = previous behaviour. */
+inline float NativePaperWhite(){static const float v=[]{const wchar_t*e=_wgetenv(L"DLSS5_PAPER_WHITE");float f=e?float(wcstod(e,nullptr)):1.f;return (f>0.f&&f<=64.f)?f:1.f;}();return v;}
+class NativeHistoryGuard {
+ bool wide=false; /* DLSS5_NETWORK_FREE_RES: processing surface beyond 65535x64 pixels -> 2D dispatch */
+ ID3D12Resource*warped{},*base{};ID3D12RootSignature*root{};ID3D12PipelineState*pso{};float dark{},bright{};
+public:
+ bool enabled{};
+ ~NativeHistoryGuard(){if(warped)warped->Release();if(base)base->Release();if(root)root->Release();if(pso)pso->Release();}
+ void Create(ID3D12Device*d,ID3D12Resource*warped_history,ID3D12Resource*network_base,const std::wstring&dir){
+  const wchar_t*g=_wgetenv(L"DLSS5_HISTORY_GUARD");if(!g||!*g)return;
+  wchar_t*end=nullptr;dark=float(wcstod(g,&end))/255.f;if(!end||*end!=L','||dark<=0)throw std::runtime_error("invalid history guard flag (dark,bright)");bright=float(wcstod(end+1,nullptr))/255.f;if(bright<=dark)throw std::runtime_error("history guard bright must exceed dark");
+  warped=warped_history;warped->AddRef();base=network_base;base->AddRef();
+  D3D12_ROOT_PARAMETER p[3]{};p[0].ParameterType=D3D12_ROOT_PARAMETER_TYPE_SRV;p[1].ParameterType=D3D12_ROOT_PARAMETER_TYPE_UAV;p[2].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;p[2].Constants={0,0,4};
+  D3D12_ROOT_SIGNATURE_DESC rd{};rd.NumParameters=3;rd.pParameters=p;ID3DBlob*blob=nullptr,*error=nullptr;if(FAILED(D3D12SerializeRootSignature(&rd,D3D_ROOT_SIGNATURE_VERSION_1,&blob,&error)))throw std::runtime_error("history guard root");if(error)error->Release();if(FAILED(d->CreateRootSignature(0,blob->GetBufferPointer(),blob->GetBufferSize(),IID_PPV_ARGS(&root))))throw std::runtime_error("history guard root signature");blob->Release();blob=nullptr;error=nullptr;
+  {const auto ng=NativeCurrentNetworkGeometry();wide=UINT64(ng.processing_width)*ng.processing_height>65535ull*64;}const D3D_SHADER_MACRO wide_macros[]={{"NATIVE_WIDE_ROW","2097152"},{nullptr,nullptr}};auto hr=CompileNativeShader(dir+L"\\native_history_guard.hlsl",wide?wide_macros:nullptr,"main",&blob,&error);if(FAILED(hr)){std::string m=error?std::string((const char*)error->GetBufferPointer(),error->GetBufferSize()):"history guard compilation";if(error)error->Release();throw std::runtime_error(m);}if(error)error->Release();
+  D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};pd.pRootSignature=root;pd.CS={blob->GetBufferPointer(),blob->GetBufferSize()};if(FAILED(NativeCreateComputePipelineState(d,&pd,IID_PPV_ARGS(&pso))))throw std::runtime_error("history guard pipeline");blob->Release();enabled=true;
+ }
+ // after the sampler (warped in SRV state): transition to UAV, patch in place, back to SRV
+ void Record(ID3D12GraphicsCommandList*c){
+  if(!enabled)return;const auto ng=NativeCurrentNetworkGeometry();const UINT pixels=ng.processing_width*ng.processing_height;UINT words[4];std::memcpy(words,&dark,4);std::memcpy(words+1,&bright,4);words[2]=pixels;words[3]=0;
+  D3D12_RESOURCE_BARRIER b{};b.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;b.Transition={warped,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS};c->ResourceBarrier(1,&b);
+  c->SetComputeRootSignature(root);c->SetPipelineState(pso);c->SetComputeRootShaderResourceView(0,base->GetGPUVirtualAddress());c->SetComputeRootUnorderedAccessView(1,warped->GetGPUVirtualAddress());c->SetComputeRoot32BitConstants(2,4,words,0);if(wide)c->Dispatch(32768,(pixels+2097151)/2097152,1);else c->Dispatch((pixels+63)/64,1,1);
+  std::swap(b.Transition.StateBefore,b.Transition.StateAfter);c->ResourceBarrier(1,&b);
+ }
+};
+class NativeOutputSmooth {
+ bool wide=false; /* DLSS5_NETWORK_FREE_RES: valid surface beyond 65535x64 pixels -> 2D dispatch */
+ ID3D12Resource*rgb{};ID3D12Resource*warped{};ID3D12RootSignature*root{};ID3D12PipelineState*pso{};float threshold{},strength{};
+public:
+ bool enabled{};
+ ~NativeOutputSmooth(){if(rgb)rgb->Release();if(warped)warped->Release();if(root)root->Release();if(pso)pso->Release();}
+ void Create(ID3D12Device*d,ID3D12Resource*network_rgb,ID3D12Resource*warped_history,const std::wstring&dir){
+  const wchar_t*v=_wgetenv(L"DLSS5_OUTPUT_SMOOTH");if(!v||!*v)return;
+  wchar_t*end=nullptr;threshold=float(wcstod(v,&end))/255.f;if(!end||*end!=L','||threshold<=0)throw std::runtime_error("invalid output smooth flag (t,s)");strength=float(wcstod(end+1,nullptr));if(strength<=0||strength>1)throw std::runtime_error("output smooth strength must be in (0,1]");
+  rgb=network_rgb;rgb->AddRef();warped=warped_history;warped->AddRef();
+  D3D12_ROOT_PARAMETER p[3]{};p[0].ParameterType=D3D12_ROOT_PARAMETER_TYPE_SRV;p[1].ParameterType=D3D12_ROOT_PARAMETER_TYPE_UAV;p[2].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;p[2].Constants={0,0,4};
+  D3D12_ROOT_SIGNATURE_DESC rd{};rd.NumParameters=3;rd.pParameters=p;ID3DBlob*blob=nullptr,*error=nullptr;if(FAILED(D3D12SerializeRootSignature(&rd,D3D_ROOT_SIGNATURE_VERSION_1,&blob,&error)))throw std::runtime_error("output smooth root");if(error)error->Release();if(FAILED(d->CreateRootSignature(0,blob->GetBufferPointer(),blob->GetBufferSize(),IID_PPV_ARGS(&root))))throw std::runtime_error("output smooth root signature");blob->Release();blob=nullptr;error=nullptr;
+  {const auto ng=NativeCurrentNetworkGeometry();wide=UINT64(ng.valid_width)*ng.valid_height>65535ull*64;}const D3D_SHADER_MACRO wide_macros[]={{"NATIVE_WIDE_ROW","2097152"},{nullptr,nullptr}};auto hr=CompileNativeShader(dir+L"\\native_output_smooth.hlsl",wide?wide_macros:nullptr,"main",&blob,&error);if(FAILED(hr)){std::string m=error?std::string((const char*)error->GetBufferPointer(),error->GetBufferSize()):"output smooth compilation";if(error)error->Release();throw std::runtime_error(m);}if(error)error->Release();
+  D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};pd.pRootSignature=root;pd.CS={blob->GetBufferPointer(),blob->GetBufferSize()};if(FAILED(NativeCreateComputePipelineState(d,&pd,IID_PPV_ARGS(&pso))))throw std::runtime_error("output smooth pipeline");blob->Release();enabled=true;
+ }
+ // rgb is in SRV state after post70; transitioned to UAV for the pass and back. warped must be SRV-readable.
+ void Record(ID3D12GraphicsCommandList*c){
+  if(!enabled)return;const auto ng=NativeCurrentNetworkGeometry();const UINT pixels=ng.valid_width*ng.valid_height;UINT words[4];std::memcpy(words,&threshold,4);std::memcpy(words+1,&strength,4);words[2]=pixels;words[3]=0;
+  D3D12_RESOURCE_BARRIER b{};b.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;b.Transition={rgb,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS};c->ResourceBarrier(1,&b);
+  c->SetComputeRootSignature(root);c->SetPipelineState(pso);c->SetComputeRootShaderResourceView(0,warped->GetGPUVirtualAddress());c->SetComputeRootUnorderedAccessView(1,rgb->GetGPUVirtualAddress());c->SetComputeRoot32BitConstants(2,4,words,0);if(wide)c->Dispatch(32768,(pixels+2097151)/2097152,1);else c->Dispatch((pixels+63)/64,1,1);
+  std::swap(b.Transition.StateBefore,b.Transition.StateAfter);c->ResourceBarrier(1,&b);
+ }
+};
+/* Diagnostic (DLSS5_BLACK_PROBE=1): per-frame statistics of the network RGB residual (native_black_probe.hlsl), read back asynchronously
+   through a ring of fence-tagged slots (no Flush). The network output is also copied into a two-slot ring each frame; when a frame's
+   statistics are abnormal (non-finite values, or |v|>1.5 in more than 1% of the values) the frame's residual is dumped from the ring together
+   with the current history/motion/color (DumpTemporalNow) to logs\black-<frame>-*, at most 3 times per run, and a line goes to
+   native-submission-order.txt. A summary line every 300 frames. Costs one small dispatch and a 25MB copy per frame. */
+class NativeBlackProbe {
+ ID3D12Resource*rgb{};ID3D12Resource*stats{};ID3D12Resource*zero{};ID3D12Resource*readback{};ID3D12Resource*ring[2]{};ID3D12RootSignature*root{};ID3D12PipelineState*pso{};
+ UINT values{};UINT64 slot_fence[8]{};UINT slot_frame[8]{};bool slot_valid[8]{};UINT frame{},next_read{},dumps{};double sum_mean{},sum_max{};UINT summary_n{};
+ static ID3D12Resource*Buffer(ID3D12Device*d,UINT64 bytes,D3D12_HEAP_TYPE type,D3D12_RESOURCE_STATES state,bool uav=false){D3D12_HEAP_PROPERTIES hp{};hp.Type=type;D3D12_RESOURCE_DESC rd{};rd.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;rd.Width=bytes;rd.Height=1;rd.DepthOrArraySize=rd.MipLevels=1;rd.SampleDesc.Count=1;rd.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;rd.Flags=uav?D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS:D3D12_RESOURCE_FLAG_NONE;ID3D12Resource*r=nullptr;if(FAILED(NativeCreateCommittedResource(d,&hp,D3D12_HEAP_FLAG_NONE,&rd,state,nullptr,IID_PPV_ARGS(&r))))throw std::runtime_error("black probe buffer");return r;}
+ static void Log(const char*line){if(FILE*f=_wfopen(NativeLabPath(L"logs\\native-submission-order.txt").c_str(),L"ab")){fprintf(f,"pid=%lu tick=%llu %s\n",GetCurrentProcessId(),GetTickCount64(),line);fclose(f);}}
+public:
+ bool enabled{};
+ ~NativeBlackProbe(){for(auto*r:ring)if(r)r->Release();if(readback)readback->Release();if(zero)zero->Release();if(stats)stats->Release();if(rgb)rgb->Release();if(root)root->Release();if(pso)pso->Release();}
+ void Create(ID3D12Device*d,ID3D12Resource*network_rgb,UINT pixels,const std::wstring&dir){
+  const wchar_t*v=_wgetenv(L"DLSS5_BLACK_PROBE");if(!v||wcscmp(v,L"1"))return;
+  rgb=network_rgb;rgb->AddRef();values=pixels*3;
+  stats=Buffer(d,16,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,true);readback=Buffer(d,16*8,D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
+  zero=Buffer(d,16,D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ);{void*p=nullptr;D3D12_RANGE none{};if(FAILED(zero->Map(0,&none,&p)))throw std::runtime_error("black probe zero");std::memset(p,0,16);zero->Unmap(0,nullptr);}
+  for(auto&r:ring)r=Buffer(d,UINT64(values)*4,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);
+  D3D12_ROOT_PARAMETER p[3]{};p[0].ParameterType=D3D12_ROOT_PARAMETER_TYPE_SRV;p[1].ParameterType=D3D12_ROOT_PARAMETER_TYPE_UAV;p[2].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;p[2].Constants={0,0,4};
+  D3D12_ROOT_SIGNATURE_DESC rd{};rd.NumParameters=3;rd.pParameters=p;ID3DBlob*blob=nullptr,*error=nullptr;if(FAILED(D3D12SerializeRootSignature(&rd,D3D_ROOT_SIGNATURE_VERSION_1,&blob,&error)))throw std::runtime_error("black probe root");if(error)error->Release();if(FAILED(d->CreateRootSignature(0,blob->GetBufferPointer(),blob->GetBufferSize(),IID_PPV_ARGS(&root))))throw std::runtime_error("black probe root signature");blob->Release();blob=nullptr;error=nullptr;
+  auto hr=CompileNativeShader(dir+L"\\native_black_probe.hlsl",nullptr,"main",&blob,&error);if(FAILED(hr)){std::string m=error?std::string((const char*)error->GetBufferPointer(),error->GetBufferSize()):"black probe compilation";if(error)error->Release();throw std::runtime_error(m);}if(error)error->Release();
+  D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};pd.pRootSignature=root;pd.CS={blob->GetBufferPointer(),blob->GetBufferSize()};if(FAILED(NativeCreateComputePipelineState(d,&pd,IID_PPV_ARGS(&pso))))throw std::runtime_error("black probe pipeline");blob->Release();enabled=true;Log("black_probe enabled");
+ }
+ /* after the network (rgb in SRV state): stats dispatch, copy stats to the frame's readback slot, copy the residual into the ring */
+ void Record(ID3D12GraphicsCommandList*c){
+  if(!enabled)return;const UINT slot=frame%8;
+  D3D12_RESOURCE_BARRIER b{};b.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  b.Transition={stats,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_DEST};c->ResourceBarrier(1,&b);c->CopyBufferRegion(stats,0,zero,0,16);std::swap(b.Transition.StateBefore,b.Transition.StateAfter);c->ResourceBarrier(1,&b);
+  UINT words[4]={values,0,0,0};c->SetComputeRootSignature(root);c->SetPipelineState(pso);c->SetComputeRootShaderResourceView(0,rgb->GetGPUVirtualAddress());c->SetComputeRootUnorderedAccessView(1,stats->GetGPUVirtualAddress());c->SetComputeRoot32BitConstants(2,4,words,0);c->Dispatch(256,1,1);
+  b.Transition={stats,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE};c->ResourceBarrier(1,&b);c->CopyBufferRegion(readback,slot*16,stats,0,16);std::swap(b.Transition.StateBefore,b.Transition.StateAfter);c->ResourceBarrier(1,&b);
+  b.Transition={rgb,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE};c->ResourceBarrier(1,&b);c->CopyBufferRegion(ring[frame%2],0,rgb,0,UINT64(values)*4);std::swap(b.Transition.StateBefore,b.Transition.StateAfter);c->ResourceBarrier(1,&b);
+ }
+ /* after the Submit that recorded this frame: remember the fence value the slot completes with */
+ void Submitted(UINT64 fence_value){if(!enabled)return;const UINT slot=frame%8;slot_fence[slot]=fence_value;slot_frame[slot]=frame;slot_valid[slot]=true;frame++;}
+ /* at the start of the next frame (before anything of it is recorded): read every completed slot in order; returns the frame index of an
+    abnormal frame whose residual is still in the ring (or UINT_MAX) so the caller can dump it, and clears that slot */
+ UINT Poll(UINT64 completed){
+  if(!enabled)return UINT_MAX;UINT bad=UINT_MAX;
+  while(slot_valid[next_read%8]&&completed>=slot_fence[next_read%8]){
+   const UINT slot=next_read%8;slot_valid[slot]=false;next_read++;
+   UINT s[4]{};{void*p=nullptr;D3D12_RANGE range{slot*16,slot*16+16},none{};if(FAILED(readback->Map(0,&range,&p)))continue;std::memcpy(s,(const char*)p+slot*16,16);readback->Unmap(0,&none);}
+   float mx;std::memcpy(&mx,&s[2],4);const double mean=double(s[3])/64.0/values;sum_mean+=mean;sum_max+=mx;
+   if(++summary_n%300==0){char line[256];snprintf(line,sizeof line,"black_probe summary frames=%u mean_abs=%.4f max_abs=%.3f",slot_frame[slot],sum_mean/300,sum_max/300);Log(line);sum_mean=sum_max=0;}
+   const bool abnormal=s[0]>0||s[1]>values/100;
+   if(abnormal){char line[256];snprintf(line,sizeof line,"black_probe abnormal frame=%u nonfinite=%u big=%u max_abs=%.3f mean_abs=%.4f ring_has_frame=%u",slot_frame[slot],s[0],s[1],mx,mean,frame-slot_frame[slot]<=2?1u:0u);Log(line);if(bad==UINT_MAX&&frame-slot_frame[slot]<=2&&dumps<3)bad=slot_frame[slot];}
+  }
+  return bad;
+ }
+ ID3D12Resource*RingSlot(UINT f)const{return ring[f%2];}UINT64 RingBytes()const{return UINT64(values)*4;}void CountDump(){dumps++;}
+};
+/* DLSS5_DIRECT_IO (2026-09-28, pure data movement; network input/output bytes unchanged): bit 1 = the RGB input pass writes the
+   network input straight into the HIP bridge's shared buffer (no 35 MB copy, no unused tile copy); bit 2 = the pre-upscale route
+   feeds the decoder output to FSR directly instead of copying it back into the private colour texture (RGBA16F games only).
+   Temporal (history) sessions and DLSS5_OVERLAP keep the old path. Default 1; 0 = previous behaviour. */
+inline unsigned NativeDirectIo(){static unsigned v=[]{const wchar_t*s=_wgetenv(L"DLSS5_DIRECT_IO");return s?unsigned(wcstoul(s,nullptr,10))&3u:1u;}();return v;}
+inline void NativeGameFrameStep(const char*step,ID3D12Device*d=nullptr){if(FILE*f=_wfopen(NativeLabPath(L"logs\\native-game-oneshot.txt").c_str(),L"ab")){fprintf(f,"pid=%lu tick=%llu event=frame_create_step detail=%s removed=%08x\n",GetCurrentProcessId(),GetTickCount64(),step,d?unsigned(d->GetDeviceRemovedReason()):0u);fclose(f);}}
+class NativeGameFrame {
+ struct Resources {
+  NativeNetworkGeometry geometry=NativeCurrentNetworkGeometry();
+  ID3D12Resource*original{}; // Kept alive by encode/decode resource references.
+  NativeGameSubmission submit;
+  NativeGameCodec encode;
+  NativeGameRgbInput input;
+#ifdef DLSS5_USE_HIP
+  NativeHipNetwork network;
+#else
+  NativeActualNetwork70 network;
+#endif
+  NativeRgbTexture neural;NativeOutputSmooth smooth;NativeHistoryGuard history_guard;NativeBlackProbe black;
+  NativeGameCodec decode;NativeAddonFastHistory fast_history;NativeLowFrequencyTemporal low_temporal;
+  NativeTextOverlay fps_overlay;bool show_fps{};char fps_text[80]{};ULONGLONG fps_tick{};
+  // Temporal path (optional): motion texture -> coordinates -> sampled history -> network temporal input.
+  // Frame-side GPU probe (DLSS5_GAME_PROBE): pre-network passes / network / decode+copy per frame, averaged in the log.
+  NativeNetworkTimestamps probe;bool probe_on{};double probe_sum[8]{};unsigned probe_parts{};double probe_cpu{};unsigned probe_frames{},probe_history{},probe_reset{},probe_nomotion{};
+  NativeTemporalFeed feed;NativeTemporalCoordinates coordinates;NativeTemporalSample sampler;ID3D12Resource*reciprocals{};bool temporal{},experimental_temporal{},experimental_prior_ready{};unsigned experimental_seed{};float experimental_exposure{1.f},experimental_scale_x{},experimental_scale_y{};unsigned experimental_frame_id{};UINT motion_w{},motion_h{},low_render_w{},low_render_h{};ID3D12CommandQueue*queue{};
+  /* FAST PATH (DLSS5_OVERLAP=1): the network runs on its own COMPUTE queue, one frame behind. Per frame the game queue delivers the
+     previous frame's result (decode + copy into this frame's target), then captures this frame (original copy, encode, motion) and
+     signals; the compute queue waits for that and runs input -> network -> history -> neural. The game's next frame renders while the
+     network runs. Costs one frame of latency and a 16MB copy of the original (decode composes against the frame the network saw). */
+  NativeGameSubmission compute;ID3D12CommandQueue*compute_queue{};ID3D12Resource*original_copy{};bool overlap{},have_result{},io_fuse{};UINT64 net_value{};
+  UINT feed_motion_width()const{return motion_w;}UINT feed_motion_height()const{return motion_h;}ID3D12CommandQueue*submit_queue()const{return queue;}
+  ~Resources(){if(reciprocals)reciprocals->Release();if(original_copy)original_copy->Release();if(compute_queue)compute_queue->Release();}
+ };
+public:
+ struct TemporalConfig {UINT motion_width{},motion_height{},render_width{},render_height{};bool experimental_ffx{};float motion_scale_x{},motion_scale_y{};};
+private:
+ Resources*resources{};bool ready{},failed{};std::mutex mutex;NativeTemporalFrameMetadata experimental_metadata{};
+public:
+ void ExperimentalFrameMetadata(const NativeTemporalFrameMetadata&m){std::lock_guard<std::mutex>g(mutex);experimental_metadata=m;}
+ NativeGameFrame()=default;NativeGameFrame(const NativeGameFrame&)=delete;
+ ~NativeGameFrame(){
+  // Failure may mean an unfinished GPU submission. Retain the entire graph,
+  // not just the command allocator, until process exit rather than risk UAF.
+  if(!failed&&resources){try{resources->submit.Flush();if(resources->overlap)resources->compute.Flush();}catch(...){return;}delete resources;}
+ }
+ void Create(ID3D12CommandQueue*queue,ID3D12Resource*source,
+             const std::vector<float>&noise,const std::wstring&directory,ID3D12Resource*temporal_rgb=nullptr,const TemporalConfig*temporal_config=nullptr){
+  std::lock_guard<std::mutex>guard(mutex);
+  if(resources||!queue||!source)throw std::runtime_error("frame initialization contract");
+  {auto sd=source->GetDesc();NativeResolveNetworkGeometry(unsigned(sd.Width),sd.Height);}
+  resources=new Resources;
+  try{
+   resources->submit.Create(queue);auto*d=resources->submit.Device();resources->queue=queue;
+   {const wchar_t*pf=_wgetenv(L"DLSS5_GAME_PROBE");resources->probe_on=pf&&!wcscmp(pf,L"1");if(resources->probe_on)resources->probe.Create(d);}
+   {const wchar_t*ov=_wgetenv(L"DLSS5_OVERLAP");if(ov&&wcscmp(ov,L"0")&&wcscmp(ov,L"1")&&wcscmp(ov,L"2"))throw std::runtime_error("invalid overlap flag");resources->overlap=ov&&wcscmp(ov,L"0");
+    if(resources->overlap){
+     if(!resources->submit.Deferred())throw std::runtime_error("overlap needs DLSS5_TEST_ASYNC_SUBMIT=1");
+     /* 2 = the compute queue at HIGH priority (the network first, the game's graphics fill the gaps) */
+     D3D12_COMMAND_QUEUE_DESC qd{};qd.Type=D3D12_COMMAND_LIST_TYPE_COMPUTE;qd.Priority=!wcscmp(ov,L"2")?D3D12_COMMAND_QUEUE_PRIORITY_HIGH:D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;if(FAILED(d->CreateCommandQueue(&qd,IID_PPV_ARGS(&resources->compute_queue))))throw std::runtime_error("overlap compute queue");
+     resources->compute.Create(resources->compute_queue);
+     auto cd=source->GetDesc();cd.Flags=D3D12_RESOURCE_FLAG_NONE;D3D12_HEAP_PROPERTIES hp{};hp.Type=D3D12_HEAP_TYPE_DEFAULT;
+     if(FAILED(NativeCreateCommittedResource(d,&hp,D3D12_HEAP_FLAG_NONE,&cd,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,nullptr,IID_PPV_ARGS(&resources->original_copy))))throw std::runtime_error("overlap original copy");
+     NativeGameFrameStep("overlap",d);
+    }}
+   NativeGameFrameStep("encode",d);resources->encode.Create(d,{source},directory);
+   resources->original=source;
+   {const auto&g=resources->encode.Geometry();char info[160];snprintf(info,sizeof info,"input=%ux%u network=%ux%u viewport=%u,%u,%u,%u output=%ux%u",g.width,g.height,g.network_width,g.network_height,g.x,g.y,g.fit_width,g.fit_height,g.width,g.height);NativeGameFrameStep(info,d);}
+ #ifdef DLSS5_USE_HIP
+   const bool direct_input=(NativeDirectIo()&1)&&!resources->overlap&&!temporal_config&&!temporal_rgb&&NativeSelectedTemporalMode()!=NativeTemporalMode::FastHistory;
+#else
+   const bool direct_input=false;
+#endif
+   NativeGameFrameStep("input",d);resources->input.Create(d,resources->encode.Output(),directory,!direct_input);
+   const auto temporal_mode=NativeSelectedTemporalMode();const bool fast_history=temporal_mode==NativeTemporalMode::FastHistory,low_temporal=NativeOutputTemporalMode(temporal_mode);
+   if(temporal_mode!=NativeTemporalMode::Off&&NativeTemporalExperimentRequested())throw std::runtime_error("temporal mode and reference experiment are mutually exclusive");
+   if(low_temporal&&(resources->overlap||temporal_rgb))throw std::runtime_error("output temporal modes require no overlap or external history");
+#ifdef DLSS5_USE_HIP
+   NativeFastHistoryPolicy::RequireSinglePass(fast_history||low_temporal,hip_reference::MultiPassFromEnvironment());
+#endif
+   if(fast_history&&(resources->overlap||temporal_rgb||NativeTemporalExperimentRequested()))throw std::runtime_error("fast history requires no overlap/reference history; undeclared guides use static fallback");
+   if(temporal_config&&!temporal_rgb&&temporal_mode==NativeTemporalMode::Off){
+    const bool experiment=NativeTemporalExperimentRequested()&&NativeTemporalExperimentUnjittered()&&temporal_config->experimental_ffx&&!resources->overlap;
+    // Motion vectors arrive in UV units of the render grid; the coordinate pass uses the captured
+    // NGX contract (subrect 0,0..render extent over the motion texture; displacement scale 1/1920,1/1080).
+    auto&t=*temporal_config;auto&r=*resources;
+    /* raster motion -> pixels of the 1080p output: value * mvscale = render-grid pixels (FFX contract), * 1920/render_w = output pixels. Stellar Blade declares
+       mvscale = render size (UV units) -> 1920 exactly as before; Magpie declares (1,1) with a 1920 render grid (pixel units) -> 1. No declaration (XeSS): UV units. */
+    const auto fit=resources->encode.Geometry();const auto ng=resources->geometry;
+    const float*mvs=NativeMotionVectorScale();const float sx=experiment?t.motion_scale_x*float(fit.fit_width)/float(t.render_width):(mvs[0]!=0.f&&t.render_width)?mvs[0]*float(fit.fit_width)/float(t.render_width):float(fit.fit_width),sy=experiment?t.motion_scale_y*float(fit.fit_height)/float(t.render_height):(mvs[1]!=0.f&&t.render_height)?mvs[1]*float(fit.fit_height)/float(t.render_height):float(fit.fit_height);
+    r.feed.Create(d,t.motion_width,t.motion_height,sx*(experiment?1.f:NativeMotionSign()),sy*(experiment?1.f:NativeMotionSign()),directory);r.motion_w=t.motion_width;r.motion_h=t.motion_height;
+    const float rx=float(t.render_width)/float(fit.fit_width),ry=float(t.render_height)/float(fit.fit_height);
+    const float transform[6]={-float(fit.x)*rx,-float(fit.y)*ry,fit.Adapted()?float(ng.valid_width)*rx:float(t.render_width),fit.Adapted()?float(ng.valid_height)*ry:float(t.render_height),1.f/float(ng.valid_width),1.f/float(ng.valid_height)};
+    const float viewport[4]={float(fit.x),float(fit.y),float(fit.fit_width),float(fit.fit_height)};
+    r.coordinates.Create(d,r.feed.Motion(),ng.valid_width,ng.valid_height,ng.processing_width,ng.processing_height,t.motion_width,t.motion_height,transform,directory,true,fit.Adapted()?viewport:nullptr);
+    if(!experiment){
+    std::ifstream f((directory+L"\\normalized-output.f32").c_str(),std::ios::binary|std::ios::ate);if(!f||f.tellg()!=33554432)throw std::runtime_error("reciprocal table missing");
+    std::vector<float>table(8388608);f.seekg(0);if(!f.read(reinterpret_cast<char*>(table.data()),33554432))throw std::runtime_error("reciprocal table read");
+    D3D12_HEAP_PROPERTIES hp{};hp.Type=D3D12_HEAP_TYPE_UPLOAD;D3D12_RESOURCE_DESC rd{};rd.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;rd.Width=33554432;rd.Height=1;rd.DepthOrArraySize=rd.MipLevels=1;rd.SampleDesc.Count=1;rd.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    ID3D12Resource*upload=nullptr;if(FAILED(NativeCreateCommittedResource(d,&hp,D3D12_HEAP_FLAG_NONE,&rd,D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(&upload))))throw std::runtime_error("reciprocal upload");
+    void*p=nullptr;D3D12_RANGE none{};if(FAILED(upload->Map(0,&none,&p)))throw std::runtime_error("reciprocal map");std::memcpy(p,table.data(),33554432);upload->Unmap(0,nullptr);
+    r.reciprocals=NativeResidentTable(d,upload);
+    r.sampler.Create(d,r.feed.History(),r.coordinates.Output(),ng.valid_width,ng.valid_height,ng.processing_width*ng.processing_height,directory,true,r.reciprocals);
+    temporal_rgb=r.sampler.Output();r.temporal=true;
+    }else{temporal_rgb=r.coordinates.Output();r.temporal=true;r.experimental_temporal=true;r.experimental_scale_x=t.motion_scale_x;r.experimental_scale_y=t.motion_scale_y;}
+   }
+   // Captured original post origin(-4,-4) corresponds to shift3.
+   NativeGameFrameStep("network",d);
+#ifdef DLSS5_USE_HIP
+   resources->network.Create(resources->overlap?resources->compute_queue:resources->queue,resources->input.PostBase(),noise,directory,temporal_rgb,3,direct_input,resources->experimental_temporal,fast_history?NativeAddonFastHistory::Row(directory):std::vector<float>{},low_temporal,temporal_mode==NativeTemporalMode::Off&&!temporal_config&&!temporal_rgb&&!resources->experimental_temporal);
+   if(fast_history){const auto g=resources->geometry;const auto fit=resources->encode.Geometry();if(g.processing_width!=g.valid_width||fit.x||fit.y||fit.fit_width!=g.valid_width||fit.fit_height!=g.valid_height)throw std::runtime_error("fast history requires full network viewport");resources->fast_history.Create(d,g.valid_width,g.valid_height,g.processing_height,temporal_config?temporal_config->render_width:g.valid_width,temporal_config?temporal_config->render_height:g.valid_height,resources->network.PostAuxiliary().offset,resources->network.DirectHistory());}if(direct_input){resources->input.RedirectOutput(resources->network.DirectInput());NativeGameFrameStep("direct_input",d);}
+#else
+   if(fast_history)throw std::runtime_error("fast history requires HIP backend");
+   resources->network.Create(d,resources->input.Tiles(),resources->input.PostBase(),noise,directory,temporal_rgb,3);
+#endif
+   if(low_temporal&&temporal_config){resources->low_render_w=temporal_config->render_width;resources->low_render_h=temporal_config->render_height;}
+   if(low_temporal)resources->low_temporal.Create(d,resources->geometry.valid_width,resources->geometry.valid_height,resources->geometry.processing_height,temporal_mode==NativeTemporalMode::Enhance,temporal_mode==NativeTemporalMode::Enhance?NativeTemporalEnhancementStrength():1.f);
+   NativeGameFrameStep("neural",d);resources->neural.Create(d,resources->network.Output(),directory);
+   if(resources->temporal&&!resources->experimental_temporal)resources->smooth.Create(d,resources->network.Output(),resources->sampler.Output(),directory);
+   if(resources->temporal&&!resources->experimental_temporal)resources->history_guard.Create(d,resources->sampler.Output(),resources->input.PostBase(),directory);
+   resources->black.Create(d,resources->network.Output(),resources->geometry.valid_width*resources->geometry.valid_height,directory);
+   if(resources->temporal&&!resources->experimental_temporal)resources->feed.BindNetworkOutput(resources->network.Output());
+   {const wchar_t*v=_wgetenv(L"DLSS5_SHOW_FPS");const wchar_t*n=_wgetenv(L"DLSS5_NOTICE");resources->show_fps=v&&wcstoul(v,nullptr,10)!=0&&(!n||wcstoul(n,nullptr,10)>=2);if(resources->show_fps)resources->fps_overlay.Prepare(source);}
+   /* DLSS5_IO_FUSE=1 (2026-10-01, input-slim; bit-exact data movement): the decoder reads the network's f32 output buffer itself (same
+      f32->f16 rounding the neural texture store did) and the neural pass is skipped. Plain sessions only (no temporal feed, no overlap),
+      where nothing else reads the neural texture. Default 0. */
+   {const wchar_t*v=_wgetenv(L"DLSS5_IO_FUSE");resources->io_fuse=v&&wcstoul(v,nullptr,10)==1&&!resources->overlap&&!resources->temporal&&!temporal_rgb;
+    if(v&&wcscmp(v,L"0")&&wcscmp(v,L"1"))throw std::runtime_error("DLSS5_IO_FUSE must be 0 or 1");
+    /* 2026-10-01 bitexact-pm guard: an older native_codec_decode.hlsl ignores NATIVE_CODEC_NEURAL_BUFFER and would silently decode
+       garbage (fast-tier 35 dB note in results/input-slim-20261001); refuse the fusion unless the installed shader knows the macro. */
+    if(resources->io_fuse){bool knows=false;if(FILE*f=_wfopen((directory+L"\\native_codec_decode.hlsl").c_str(),L"rb")){std::string t;char b[4096];size_t n;while((n=fread(b,1,sizeof b,f))>0)t.append(b,n);fclose(f);knows=t.find("NATIVE_CODEC_NEURAL_BUFFER")!=std::string::npos;}
+     if(!knows){resources->io_fuse=false;NativeGameFrameStep("io_fuse_refused_old_decode_shader",d);}}
+    if(resources->io_fuse){resources->decode.UseNeuralBuffer(resources->network.Output());NativeGameFrameStep("io_fuse",d);}}
+   NativeGameFrameStep("decode",d);resources->decode.Create(d,{resources->encode.Output(),resources->neural.Output(),resources->overlap?resources->original_copy:source},directory);NativeGameFrameStep("ready",d);ready=true;
+  }catch(...){failed=true;throw;}
+ }
+ void RebindSourceAfterCompletion(ID3D12Resource*source){
+  // CPU serialization does not imply GPU completion in deferred mode.
+  // Immutable cached bindings need no wait; eviction requires GPU completion.
+  std::lock_guard<std::mutex>guard(mutex);
+  if(!ready||failed||!source)throw std::runtime_error("frame rebind unavailable");
+  if(source==resources->original)return;
+  try{if(resources->encode.RebindNeedsCompletion(0,source)||(!resources->overlap&&resources->decode.RebindNeedsCompletion(2,source))){resources->submit.Flush();if(resources->overlap)resources->compute.Flush();}resources->encode.RebindInputAfterCompletion(0,source);if(!resources->overlap)resources->decode.RebindInputAfterCompletion(2,source);resources->original=source;}
+  catch(...){failed=true;throw;}
+ }
+ // Synchronizes encode -> network -> FP16 bridge -> decode -> FP16 copy on the
+ // supplied queue. Both source and destination return to their original states.
+ // Caller must serialize other users and supply the captured linear mode1 input.
+ // This is NOT a swapchain present hook. Target is the game's float16 NR result.
+ // Temporal sampler producer, if enabled, must already be submitted on this queue;
+ // history provenance/reset policy remain the caller's responsibility.
+ /* Keep the displayed number stable for at least three seconds. No GPU work here. */
+ void UpdateFps(double ms){
+  std::lock_guard<std::mutex>guard(mutex);if(!resources||!resources->show_fps||ms<=0)return;
+  auto&r=*resources;const auto now=GetTickCount64();if(r.fps_text[0]&&now-r.fps_tick<3000)return;
+  snprintf(r.fps_text,sizeof r.fps_text,"DLSS5-AMD %.0f FPS (%.1f MS) %uX%u",1000.0/ms,ms,r.geometry.valid_width,r.geometry.valid_height);
+#ifdef DLSS5_USE_HIP
+  if(const char*v=std::getenv("DLSS5_VIT_REUSE_HOTKEY");v&&!strcmp(v,"1")){size_t used=strlen(r.fps_text);snprintf(r.fps_text+used,sizeof(r.fps_text)-used," %s",hip_reference::AdaptivePreviewState.load()?"AE":"EXACT");}
+#endif
+  r.fps_tick=now;
+ }
+ /* Pre-upscale integration draws its overlay on the final output, never into the color fed to FSR. */
+ void SuppressFps(){std::lock_guard<std::mutex>guard(mutex);if(resources){resources->show_fps=false;resources->fps_text[0]=0;}}
+ bool TemporalReady()const{return resources&&resources->temporal;}
+ // Diagnostic: write the previous-output history buffer, the motion buffer and the current
+ // encoded color (RGBA16F) to files so motion-vector sign/units can be checked offline.
+ void RequestTemporalDump(const std::wstring&prefix){std::lock_guard<std::mutex>guard(mutex);dump_prefix=prefix;}
+private:
+ std::wstring dump_prefix;
+ // Called inside ProcessSubmittedFrame after the input producers ran: history = previous output,
+ // motion = this frame's vectors, color = this frame's encoded input, warped = sampler output.
+ void DumpTemporalNow(const std::wstring&prefix){
+  auto&r=*resources;auto*d=r.submit.Device();
+  if(r.experimental_temporal){if(FILE*f=_wfopen(NativeLabPath(L"logs\\temporal-history-experiment.txt").c_str(),L"ab")){fprintf(f,"legacy_temporal_dump_skipped=1 reason=experiment-owns-history-no-legacy-sampler\n");fclose(f);}return;}
+  auto dump_buffer=[&](ID3D12Resource*src,UINT64 bytes,const std::wstring&name){
+   D3D12_HEAP_PROPERTIES hp{};hp.Type=D3D12_HEAP_TYPE_READBACK;D3D12_RESOURCE_DESC rd{};rd.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;rd.Width=bytes;rd.Height=1;rd.DepthOrArraySize=rd.MipLevels=1;rd.SampleDesc.Count=1;rd.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+   ID3D12Resource*rb=nullptr;if(FAILED(NativeCreateCommittedResource(d,&hp,D3D12_HEAP_FLAG_NONE,&rd,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&rb))))throw std::runtime_error("dump readback");
+   r.submit.Submit([&](ID3D12GraphicsCommandList*c){D3D12_RESOURCE_BARRIER b{};b.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;b.Transition={src,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE};c->ResourceBarrier(1,&b);c->CopyBufferRegion(rb,0,src,0,bytes);std::swap(b.Transition.StateBefore,b.Transition.StateAfter);c->ResourceBarrier(1,&b);});
+   r.submit.Flush();void*p=nullptr;D3D12_RANGE range{0,SIZE_T(bytes)},none{};if(FAILED(rb->Map(0,&range,&p)))throw std::runtime_error("dump map");
+   FILE*f=_wfopen((prefix+name).c_str(),L"wb");if(f){fwrite(p,1,size_t(bytes),f);fclose(f);}rb->Unmap(0,&none);rb->Release();
+  };
+  dump_buffer(r.feed.History(),UINT64(r.geometry.valid_width)*r.geometry.valid_height*16,L"-history.f32");
+  dump_buffer(r.feed.Motion(),UINT64(r.feed_motion_width())*r.feed_motion_height()*16,L"-motion.f32");
+  dump_buffer(r.sampler.Output(),UINT64(r.geometry.processing_width)*r.geometry.processing_height*16,L"-warped.f32");
+  auto color=NativeReadSubmittedFrame(r.submit_queue(),r.encode.Output(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  FILE*f=_wfopen((prefix+L"-color.rgba16f").c_str(),L"wb");if(f){fwrite(color.data(),1,color.size(),f);fclose(f);}
+ }
+ /* DLSS5_OVERLAP=1 frame (see Resources): game queue = deliver previous result + capture this frame; compute queue = the network.
+    Hand-offs are in NON_PIXEL_SHADER_RESOURCE on both sides; encode/motion/original_copy are rewritten only after the compute queue
+    finished the previous frame (game queue waits on net_value), and the compute queue reads them only after the capture (waits on
+    the game queue's fence). Dumps and the black-probe dump are not supported here (the flag is diagnostic); the probe measures the
+    compute part (pre = input/sampler, network, post = history/neural) and, like the synchronous probe, waits every frame. */
+ void ProcessOverlap(Resources&r,ID3D12Resource*target,D3D12_RESOURCE_STATES source_state,D3D12_RESOURCE_STATES target_state,UINT seed,bool temporal_enabled,ID3D12Resource*motion_texture,bool reset,bool use_history){
+  dump_prefix.clear();
+  if(r.black.enabled)r.black.Poll(r.compute.Completed());
+  const auto cpu_start=std::chrono::steady_clock::now();
+  r.submit.WaitOn(r.compute.Fence(),r.net_value);
+  r.submit.Submit([&](ID3D12GraphicsCommandList*c){
+   D3D12_RESOURCE_BARRIER b[2]{};for(auto&v:b)v.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+   /* 1. decode the previous frame's result into our buffer (reads proxy/neural/original of that frame, all still intact) */
+   if(r.have_result)r.decode.Record(c,{D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE},NativePaperWhite());
+   /* 2. capture this frame from the untouched target: the original for its later decode, the encoded proxy, this frame's motion */
+   b[0].Transition={target,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,source_state,D3D12_RESOURCE_STATE_COPY_SOURCE};
+   b[1].Transition={r.original_copy,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST};
+   if(source_state!=D3D12_RESOURCE_STATE_COPY_SOURCE)c->ResourceBarrier(1,b);c->ResourceBarrier(1,b+1);
+   c->CopyResource(r.original_copy,target);
+   for(auto&v:b)std::swap(v.Transition.StateBefore,v.Transition.StateAfter);
+   if(source_state!=D3D12_RESOURCE_STATE_COPY_SOURCE)c->ResourceBarrier(1,b);c->ResourceBarrier(1,b+1);
+   r.encode.Record(c,{source_state},NativePaperWhite());
+   if(use_history)r.feed.RecordMotion(c,motion_texture);
+   /* 3. deliver the previous frame's result into the target */
+   if(r.have_result){
+    b[0].Transition={r.decode.Output(),D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE};
+    b[1].Transition={target,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,target_state,D3D12_RESOURCE_STATE_COPY_DEST};
+    c->ResourceBarrier(1,b);if(target_state!=D3D12_RESOURCE_STATE_COPY_DEST)c->ResourceBarrier(1,b+1);
+    if(r.decode.BufferOutput()){D3D12_TEXTURE_COPY_LOCATION dst{},src{};dst.pResource=target;dst.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;src.pResource=r.decode.Output();src.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;src.PlacedFootprint.Footprint=r.decode.BufferFootprint();c->CopyTextureRegion(&dst,0,0,0,&src,nullptr);}
+    else c->CopyResource(target,r.decode.Output());
+    for(auto&v:b)std::swap(v.Transition.StateBefore,v.Transition.StateAfter);
+    c->ResourceBarrier(1,b);if(target_state!=D3D12_RESOURCE_STATE_COPY_DEST)c->ResourceBarrier(1,b+1);
+   }
+   if(r.have_result&&r.fps_text[0])r.fps_overlay.Draw(c,target,r.fps_text,24,96,3,target_state);
+  });
+  const UINT64 captured=r.submit.LastValue();
+  r.compute.WaitOn(r.submit.Fence(),captured);
+  if(r.probe_on)r.probe.Reset();
+  r.compute.Submit([&](ID3D12GraphicsCommandList*c){if(r.probe_on)r.probe.Mark(c,"t0");r.input.Record(c,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+   if(use_history){r.coordinates.Record(c);if(!r.experimental_temporal){r.sampler.Record(c);r.history_guard.Record(c);}}if(r.probe_on)r.probe.Mark(c,"t1");});
+  r.network.Run(r.compute,seed,r.temporal?use_history:temporal_enabled);
+  r.compute.Submit([&](ID3D12GraphicsCommandList*c){if(r.probe_on)r.probe.Mark(c,"t2");
+   if(use_history&&!r.experimental_temporal)r.smooth.Record(c);r.black.Record(c);
+   if(r.temporal&&!r.experimental_temporal)r.feed.RecordHistory(c);
+   r.neural.Record(c);if(r.probe_on){r.probe.Mark(c,"t3");r.probe.Resolve(c);}});
+  r.net_value=r.compute.LastValue();r.have_result=true;r.black.Submitted(r.net_value);
+  if(r.probe_on){r.compute.Flush();std::vector<double>iv;if(r.probe.Intervals(r.compute.TimestampFrequency(),iv)&&iv.size()==3){for(int i=0;i<3;i++)r.probe_sum[i]+=iv[i];}
+   r.probe_cpu+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-cpu_start).count();
+   if(use_history)r.probe_history++;if(reset)r.probe_reset++;if(!motion_texture)r.probe_nomotion++;
+   if(++r.probe_frames%100==0){if(FILE*f=_wfopen(NativeLabPath(L"logs\\native-game-probe.txt").c_str(),L"ab")){fprintf(f,"frames=%u avg_ms pre=%.2f network=%.2f post=%.2f gpu_total=%.2f cpu_frame=%.2f history=%u reset=%u nomotion=%u overlap=1\n",r.probe_frames,r.probe_sum[0]/100,r.probe_sum[1]/100,r.probe_sum[2]/100,(r.probe_sum[0]+r.probe_sum[1]+r.probe_sum[2])/100,r.probe_cpu/100,r.probe_history,r.probe_reset,r.probe_nomotion);fclose(f);}for(auto&v:r.probe_sum)v=0;r.probe_cpu=0;r.probe_history=r.probe_reset=r.probe_nomotion=0;}}
+ }
+public:
+#if defined(DLSS5_BENCH_BRIDGE_ISOLATE) && defined(DLSS5_USE_HIP)
+ // Diagnostic caller must own a quiescent frame; returned objects are borrowed.
+ auto DiagnosticNetworkTiming(){return resources->network.PollNetworkTiming();}
+ hip_reference::Network& DiagnosticNetwork(){resources->submit.Flush();return resources->network.DiagnosticNetwork();}
+ ID3D12Resource* DiagnosticInput(){return resources->input.PostBase();}
+ ID3D12Resource* DiagnosticOutput(){return resources->network.Output();}
+#endif
+ // motion_texture: this frame's FSR motion vectors (compute-read state). reset: FFX reset flag.
+ // History is the previous processed frame's network output; the first frame and reset frames run without it.
+ /* DLSS5_DIRECT_IO bit 2: the decoder's RGBA16F output texture, when the caller may hand it to the upscaler in place of the target
+    (same size and exact format as the source, texture output, no overlap). Rests in NON_PIXEL_SHADER_RESOURCE between frames; the next
+    frame's decode rewrites it later on the same queue. nullptr = deliver by copy as before. */
+ ID3D12Resource*DirectOutput(){
+  std::lock_guard<std::mutex>guard(mutex);
+  if(!(NativeDirectIo()&2)||!ready||failed||!resources||resources->overlap||resources->decode.BufferOutput()||!resources->original)return nullptr;
+  auto o=resources->decode.Output()->GetDesc(),t=resources->original->GetDesc();
+  return o.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D&&o.Width==t.Width&&o.Height==t.Height&&o.Format==t.Format&&t.Format==DXGI_FORMAT_R16G16B16A16_FLOAT?resources->decode.Output():nullptr;
+ }
+ // deliver=false: skip the copy into target (the caller consumes DirectOutput() instead); only valid when DirectOutput() is non-null.
+ void ProcessSubmittedFrame(ID3D12Resource*target,D3D12_RESOURCE_STATES source_state,
+                            D3D12_RESOURCE_STATES target_state,UINT seed,bool temporal_enabled=false,ID3D12Resource*motion_texture=nullptr,bool reset=false,bool deliver=true,ID3D12Resource*depth=nullptr,D3D12_RESOURCE_STATES depth_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE){
+  std::lock_guard<std::mutex>guard(mutex);
+  if(!ready||failed||!target)throw std::runtime_error("frame unavailable");
+  if(target==resources->original&&source_state!=target_state)throw std::runtime_error("aliased frame texture states disagree");
+  auto desc=target->GetDesc();
+  if(desc.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||desc.Width!=resources->encode.Geometry().width||desc.Height!=resources->encode.Geometry().height||desc.DepthOrArraySize!=1||desc.MipLevels!=1||desc.SampleDesc.Count!=1||!NativeIsGameColor(desc.Format))throw std::runtime_error(std::string("frame target must match the initialized input geometry/format (")+NativeDxgiFormatName(desc.Format)+" "+std::to_string(unsigned(desc.Format))+")");
+  ID3D12Device*owner=nullptr;auto hr=target->GetDevice(IID_PPV_ARGS(&owner));if(FAILED(hr))throw std::runtime_error("frame target device query");bool same=NativeSameDevice(owner,resources->submit.Device());owner->Release();if(!same)throw std::runtime_error("frame target device mismatch");
+  try{
+   auto&r=*resources;
+   if(r.low_temporal.enabled){r.submit.Flush();r.low_temporal.Prepare(r.submit.Queue(),experimental_metadata.frame_id,experimental_metadata.ffx_pre,experimental_metadata.pre_exposure,reset,motion_texture,r.low_render_w,r.low_render_h,experimental_metadata.motion_scale[0],experimental_metadata.motion_scale[1],NativeTemporalExperimentUnjittered()&&experimental_metadata.ffx_pre);}
+   const bool fast_use=r.fast_history.Prepare(r.submit,motion_texture,depth,experimental_metadata,reset);
+   if(r.fast_history.enabled)seed=r.fast_history.Seed();
+   bool experimental_active=false;
+#ifdef DLSS5_USE_HIP
+   if(r.experimental_temporal)experimental_active=r.network.ExperimentalTemporalActive(); // apply F9/hot options BEFORE selecting input/seed
+#endif
+   if(r.experimental_temporal){
+    const bool metadata_ok=experimental_metadata.Valid()&&NativeTemporalExperimentUnjittered()&&experimental_metadata.motion_scale[0]==r.experimental_scale_x&&experimental_metadata.motion_scale[1]==r.experimental_scale_y;
+    reset=reset||!experimental_active||!metadata_ok||!motion_texture||(r.experimental_prior_ready&&(experimental_metadata.pre_exposure!=r.experimental_exposure||experimental_metadata.frame_id!=r.experimental_frame_id+1));
+    if(reset){r.experimental_seed=0;r.experimental_prior_ready=false;}
+    seed=experimental_active?r.experimental_seed:0;
+   }
+   const bool use_history=r.temporal&&motion_texture&&!reset&&(r.experimental_temporal?(experimental_active&&r.experimental_prior_ready):r.feed.HasHistory());
+   if(use_history&&r.feed.NeedsMotionRebind(motion_texture)){r.submit.Flush();if(r.overlap)r.compute.Flush();}
+   {static unsigned every=[]{const wchar_t*v=_wgetenv(L"DLSS5_MAKE_RESIDENT_EVERY");return v?unsigned(wcstoul(v,nullptr,10)):0u;}();static unsigned frames=0;static unsigned fails=0;
+    if(every&&++frames%every==0){HRESULT mr=NativeMakeAllResident(r.submit.Device());if(FAILED(mr)&&++fails<=5)if(FILE*f=_wfopen(NativeLabPath(L"logs\\native-submission-order.txt").c_str(),L"ab")){fprintf(f,"pid=%lu make_resident_failed hr=%08x tracked=%u\n",GetCurrentProcessId(),unsigned(mr),unsigned(NativeTrackedResources().size()));fclose(f);}}}
+   if(!deliver&&(r.overlap||r.decode.BufferOutput()))throw std::runtime_error("direct output unavailable");
+   if(r.overlap){ProcessOverlap(r,target,source_state,target_state,seed,temporal_enabled,motion_texture,reset,use_history);return;}
+   if(r.black.enabled){const UINT bad=r.black.Poll(r.submit.Completed());if(bad!=UINT_MAX){r.submit.Flush();const std::wstring prefix=NativeLabPath((L"logs\\black-"+std::to_wstring(bad)).c_str());
+     auto*dev=r.submit.Device();D3D12_HEAP_PROPERTIES hp{};hp.Type=D3D12_HEAP_TYPE_READBACK;D3D12_RESOURCE_DESC rd{};rd.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;rd.Width=r.black.RingBytes();rd.Height=1;rd.DepthOrArraySize=rd.MipLevels=1;rd.SampleDesc.Count=1;rd.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+     ID3D12Resource*rb=nullptr;if(SUCCEEDED(NativeCreateCommittedResource(dev,&hp,D3D12_HEAP_FLAG_NONE,&rd,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&rb)))){r.submit.Submit([&](ID3D12GraphicsCommandList*c){c->CopyBufferRegion(rb,0,r.black.RingSlot(bad),0,r.black.RingBytes());});r.submit.Flush();void*p=nullptr;D3D12_RANGE range{0,SIZE_T(r.black.RingBytes())},none{};if(SUCCEEDED(rb->Map(0,&range,&p))){if(FILE*f=_wfopen((prefix+L"-residual.f32").c_str(),L"wb")){fwrite(p,1,size_t(r.black.RingBytes()),f);fclose(f);}rb->Unmap(0,&none);}rb->Release();}
+     r.black.CountDump();dump_prefix=prefix;}}
+   const auto cpu_start=std::chrono::steady_clock::now();if(r.probe_on)r.probe.Reset();
+   r.submit.Submit([&](ID3D12GraphicsCommandList*c){if(r.probe_on)r.probe.Mark(c,"t0");r.encode.Record(c,{source_state},NativePaperWhite());if(r.probe_on)r.probe.Mark(c,"encode");r.input.Record(c,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    r.fast_history.Inputs(c,r.input.PostBase(),r.network.Output(),depth_state);
+    if(use_history){r.feed.RecordMotion(c,motion_texture);r.coordinates.Record(c);if(!r.experimental_temporal){r.sampler.Record(c);r.history_guard.Record(c);}}if(r.probe_on)r.probe.Mark(c,"t1");});
+   if(!dump_prefix.empty()&&(use_history||(r.temporal&&r.black.enabled))){r.submit.Flush();DumpTemporalNow(dump_prefix);{char line[160];snprintf(line,sizeof line,"black_probe dumped history=%u reset=%u motion=%u",use_history?1u:0u,reset?1u:0u,motion_texture?1u:0u);if(FILE*f=_wfopen(NativeLabPath(L"logs\\native-submission-order.txt").c_str(),L"ab")){fprintf(f,"pid=%lu %s\n",GetCurrentProcessId(),line);fclose(f);}}dump_prefix.clear();}
+   r.network.Run(r.submit,seed,r.fast_history.enabled?fast_use:r.temporal?use_history:temporal_enabled);
+   if(r.experimental_temporal){r.experimental_exposure=experimental_metadata.pre_exposure;r.experimental_frame_id=experimental_metadata.frame_id;
+    r.experimental_prior_ready=experimental_active&&motion_texture&&experimental_metadata.Valid()&&experimental_metadata.motion_scale[0]==r.experimental_scale_x&&experimental_metadata.motion_scale[1]==r.experimental_scale_y;if(r.experimental_prior_ready)++r.experimental_seed;else r.experimental_seed=0;
+    static unsigned logged=0;if(logged++<8||reset||logged%100==0)if(FILE*f=_wfopen(NativeLabPath(L"logs\\temporal-history-experiment.txt").c_str(),L"ab")){fprintf(f,"frame=%u requested=1 active=%u history=%u reset=%u seed=%u pre_exposure=%.9g jitter=%.9g,%.9g mvscale=%.9g,%.9g mv_unjittered_assumed=1 depth_gate=0 reason=%s\n",experimental_metadata.frame_id,unsigned(experimental_active),unsigned(use_history),unsigned(reset),seed,experimental_metadata.pre_exposure,experimental_metadata.jitter[0],experimental_metadata.jitter[1],experimental_metadata.motion_scale[0],experimental_metadata.motion_scale[1],!experimental_active?"backend-condition-fallback":!experimental_metadata.Valid()?"missing-invalid-ffx-metadata":reset?"first-reset-or-exposure-gap":"history-eligible");fclose(f);}
+   }
+   r.submit.Submit([&](ID3D12GraphicsCommandList*c){if(r.probe_on)r.probe.Mark(c,"t2");
+    r.fast_history.Outputs(c,r.input.PostBase(),r.network.Output(),depth_state);
+    if(r.low_temporal.enabled)r.low_temporal.Record(c,r.input.PostBase(),r.network.Output(),r.network.DirectInput()?D3D12_RESOURCE_STATE_COMMON:D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    if(use_history&&!r.experimental_temporal)r.smooth.Record(c);r.black.Record(c);
+    if(r.temporal&&!r.experimental_temporal)r.feed.RecordHistory(c);
+    if(!r.io_fuse)r.neural.Record(c);if(r.probe_on)r.probe.Mark(c,"neural");r.decode.Record(c,{D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,source_state});if(r.probe_on)r.probe.Mark(c,"decode");
+    if(deliver){
+    D3D12_RESOURCE_BARRIER b[2]{};for(auto&v:b)v.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b[0].Transition={r.decode.Output(),D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE};
+    b[1].Transition={target,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,target_state,D3D12_RESOURCE_STATE_COPY_DEST};
+    c->ResourceBarrier(1,b);if(target_state!=D3D12_RESOURCE_STATE_COPY_DEST)c->ResourceBarrier(1,b+1);
+    if(r.decode.BufferOutput()){D3D12_TEXTURE_COPY_LOCATION dst{},src{};dst.pResource=target;dst.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;src.pResource=r.decode.Output();src.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;src.PlacedFootprint.Footprint=r.decode.BufferFootprint();c->CopyTextureRegion(&dst,0,0,0,&src,nullptr);}
+    else c->CopyResource(target,r.decode.Output());
+    for(auto&v:b)std::swap(v.Transition.StateBefore,v.Transition.StateAfter);
+    c->ResourceBarrier(1,b);if(target_state!=D3D12_RESOURCE_STATE_COPY_DEST)c->ResourceBarrier(1,b+1);
+    if(r.fps_text[0])r.fps_overlay.Draw(c,target,r.fps_text,24,96,3,target_state);
+    }
+    if(r.probe_on){r.probe.Mark(c,"t3");r.probe.Resolve(c);}
+   });if(r.low_temporal.enabled){r.submit.Flush();r.low_temporal.Submitted(r.submit.Queue());}r.black.Submitted(r.submit.LastValue());r.fast_history.Submitted(r.submit.LastValue());
+   /* 2026-10-01 input-slim: finer marks (encode | input(+history) | network+handoff | neural | decode | copy+overlay), per-step µs averaged per 100 frames */
+   if(r.probe_on){r.submit.Flush();std::vector<double>iv;if(r.probe.Intervals(r.submit.TimestampFrequency(),iv)&&iv.size()<=8){r.probe_parts=unsigned(iv.size());for(size_t i=0;i<iv.size();i++)r.probe_sum[i]+=iv[i];}
+    r.probe_cpu+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-cpu_start).count();
+    if(use_history)r.probe_history++;if(reset)r.probe_reset++;if(!motion_texture)r.probe_nomotion++;
+    if(++r.probe_frames%100==0){if(FILE*f=_wfopen(NativeLabPath(L"logs\\native-game-probe.txt").c_str(),L"ab")){double t=0;for(unsigned i=0;i<r.probe_parts;i++)t+=r.probe_sum[i];fprintf(f,"frames=%u avg_us",r.probe_frames);static const char*names[]={"encode","input","network","neural","decode","copy","x6","x7"};for(unsigned i=0;i<r.probe_parts;i++)fprintf(f," %s=%.1f",names[i],r.probe_sum[i]*10);fprintf(f," gpu_total=%.1f cpu_frame_ms=%.3f history=%u reset=%u nomotion=%u\n",t*10,r.probe_cpu/100,r.probe_history,r.probe_reset,r.probe_nomotion);fclose(f);}for(auto&v:r.probe_sum)v=0;r.probe_cpu=0;r.probe_history=r.probe_reset=r.probe_nomotion=0;}}
+  }catch(...){failed=true;throw;}
+ }
+};

@@ -27,10 +27,12 @@
 #include "xenia/gpu/d3d12/pipeline_cache.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
 
+#include "LmxxfNrApi.h"
 #include "ffx_api.h"
 #include "ffx_framegeneration.h"
 
 DECLARE_double(present_hdr_gamma);
+DECLARE_bool(dao_neural_rendering);
 
 namespace xe {
 namespace gpu {
@@ -130,6 +132,9 @@ enum CompositeMode : uint32_t {
   // The scene alone, motion-blurred, as the upscaler output it (frame
   // generation's input).
   kCompositeScene,
+  // One source (t1, linear) to the destination at its size, gamma-encoded as
+  // the game's output.
+  kCompositeGamma,
 };
 
 // SDR white in nits; at least the scRGB unit, as in the presenter.
@@ -262,7 +267,52 @@ class UpscalerBackend {
 std::unique_ptr<UpscalerBackend> CreateFsrBackend(DaoUpscalerImpl& upscaler);
 std::unique_ptr<UpscalerBackend> CreateXessBackend(DaoUpscalerImpl& upscaler);
 
+// Neural rendering of the 3D scene before the upscaler (dao_upscale_neural.cc):
+// lmxxf's HIP port of DLSS 5's neural rendering (AMD RDNA 4), its runtime
+// loaded when first used. Used on the command processor's thread only.
+class NeuralRendering {
+ public:
+  explicit NeuralRendering(DaoUpscalerImpl& upscaler) : upscaler_(upscaler) {}
+  ~NeuralRendering();
+  // Whether it can't be used: its runtime, weights or kernels are missing, or
+  // it failed. Not tried again.
+  bool failed() const { return failed_; }
+  // Runs the network on `color` (the scene at the render size, SDR, in
+  // NON_PIXEL_SHADER_RESOURCE): records what's before it, ends the open
+  // submission, has the queue wait for the network, and begins the next.
+  // Returns its output at the render size (in NON_PIXEL_SHADER_RESOURCE when
+  // read), or null if it doesn't run this frame (the open submission as it
+  // was, unless it failed).
+  ID3D12Resource* Run(ID3D12Resource* color, uint32_t width, uint32_t height,
+                      bool reset);
+
+ private:
+  bool Load();
+  // Logs the runtime's error and turns it off; false.
+  bool Fail(const char* what);
+  static void ExecuteInputs(void* context,
+                            ID3D12GraphicsCommandList* command_list);
+  static void ExecuteOutputs(void* context,
+                             ID3D12GraphicsCommandList* command_list);
+
+  DaoUpscalerImpl& upscaler_;
+  HMODULE module_ = nullptr;
+  LmxxfNrApi api_ = {};
+  void* session_ = nullptr;
+  LmxxfNrJob job_ = {};
+  // The job's outputs are recorded: retired before the next frame's.
+  bool job_pending_ = false;
+  // Set while the submission with its inputs is executed.
+  bool inputs_recorded_ = false;
+  // A history reset to do on the next frame it runs on.
+  bool reset_pending_ = false;
+  bool failed_ = false;
+  uint64_t frame_ = 0;
+};
+
 class DaoUpscalerImpl {
+  friend class NeuralRendering;
+
  public:
   DaoUpscalerImpl(D3D12CommandProcessor& command_processor,
                   D3D12RenderTargetCache& render_target_cache)
@@ -511,9 +561,9 @@ class DaoUpscalerImpl {
   // guest output, in SDR: true HDR frames are output in SDR meanwhile.
   bool OverlayShown() const;
   // The linear scene in hdr_, for the upscaler (true HDR, or a backend's
-  // LinearSdrColor) or CompositeHdr: with true HDR the tonemapping pass redone
-  // (unless it isn't the image before the UI: a pass after it, or none), else
-  // the image before the UI linearized.
+  // LinearSdrColor), neural rendering or CompositeHdr: with true HDR the
+  // tonemapping pass redone (unless it isn't the image before the UI: a pass
+  // after it, or none), else the image before the UI linearized.
   bool EnsureHdrScene();
   // A frame not upscaled: with true HDR, the front buffer HDR-encoded into
   // encoded_ (all true HDR frames are), else nullptr (the front buffer).
@@ -521,8 +571,8 @@ class DaoUpscalerImpl {
       const char* reason, ID3D12Resource* frontbuffer,
       const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
       D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& hdr_out);
-  // The composite shader with one source, in kCompositeEncode or
-  // kCompositeLinearize mode, into dest (left readable).
+  // The composite shader with one source, in kCompositeEncode,
+  // kCompositeLinearize or kCompositeGamma mode, into dest (left readable).
   bool ConvertImage(ID3D12Resource* source,
                     const D3D12_SHADER_RESOURCE_VIEW_DESC& source_srv,
                     Texture& dest, CompositeMode mode);
@@ -608,6 +658,12 @@ class DaoUpscalerImpl {
   // destroyed after them.)
   FfxApi ffx_;
   std::unique_ptr<UpscalerBackend> backend_;
+  // With dao_neural_rendering (dao_upscale_neural.cc), created when first used.
+  std::unique_ptr<NeuralRendering> neural_;
+  // Paused with F6 since it last ran: its history restarts when it resumes.
+  bool neural_paused_ = false;
+  // Whether the last upscaled frame was the network's output.
+  bool neural_used_ = false;
   // Whether backend_ is FSR's (which the others fall back to).
   bool backend_fsr_ = false;
   // A backend replaced by FSR, kept until the GPU is done with the
@@ -672,8 +728,11 @@ class DaoUpscalerImpl {
   Texture fg_composite_;
   // The upscaler's input when it's linear (EnsureHdrScene): with true HDR
   // the game's tonemapping pass redone, or the image before the UI
-  // linearized.
+  // linearized. Neural rendering's input too.
   Texture hdr_;
+  // Neural rendering's output (linear) gamma-encoded, for a backend taking
+  // SDR (color_'s format).
+  Texture neural_sdr_;
   // Size of the render resolution textures (the front buffer of the last
   // frame, the scaled 1280x720 normally).
   uint32_t render_size_[2] = {};

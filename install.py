@@ -16,4 +16,6 @@ if sys.version_info < (3, 10):
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from installer.__main__ import main  # noqa: E402
 
-sys.exit(main())
+# (The kernel compiler's processes import this file again: they mustn't install.)
+if __name__ == "__main__":
+    sys.exit(main())

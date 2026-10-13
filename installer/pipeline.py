@@ -12,7 +12,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import deps, shortcuts, sources, toolchain
+from . import deps, neural, shortcuts, sources, toolchain
 from .util import (BUNDLE, EXE, BUNDLED, GIT, IS_WINDOWS, REPO, SCRIPTS, SOURCE, VERSION, InstallError, check_host,
                    clean_env, human_size, run)
 
@@ -476,7 +476,7 @@ def install(reporter, built, dest, with_shortcuts=False):
     dest.mkdir(parents=True, exist_ok=True)
     # The DLLs first: while the game runs they can't be replaced, and the exe is left as it was.
     for name in ("amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll",
-                 "amd_fidelityfx_framegeneration_dx12.dll", "libxess.dll"):
+                 "amd_fidelityfx_framegeneration_dx12.dll", "libxess.dll", "LmxxfNrRuntime.dll"):
         _copy_when_free(reporter, built / name, dest / name)
     _replace_exe(reporter, built / "DAORecomp.exe", dest / "DAORecomp.exe")
     ffx = REPO / "tools" / "FidelityFX-SDK" / "Kits" / "FidelityFX" / "docs" / "license.md"
@@ -485,6 +485,7 @@ def install(reporter, built, dest, with_shortcuts=False):
     # libxess.dll's license and third-party notices go with it (its license's terms).
     shutil.copy2(toolchain.XESS_DIR / "LICENSE.txt", dest / "intel_xess_license.txt")
     shutil.copy2(toolchain.XESS_DIR / "third-party-programs.txt", dest / "intel_xess_third_party_programs.txt")
+    neural.install(reporter, BUILD / "neural", dest)
     for folder in ("userdata", "mods"):
         (dest / folder).mkdir(exist_ok=True)
     shutil.copy2(REPO / "mods" / "README.txt", dest / "mods" / "README.txt")

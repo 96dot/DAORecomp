@@ -15,23 +15,24 @@ namespace dao::launcher
         // the game downloads (installer/deps.py MSVC_LICENSE_URL).
         constexpr const char* kMsvcLicenseUrl = "https://go.microsoft.com/fwlink/?LinkId=2086102";
 
-        std::string& FieldText(State& st, InstallField field)
+        std::string& FieldText(State& st, PathField field)
         {
-            return field == InstallField::DiscImage ? st.installIso
-                : field == InstallField::TitleUpdate ? st.installUpdate
+            return field == PathField::DiscImage ? st.installIso
+                : field == PathField::TitleUpdate ? st.installUpdate
+                : field == PathField::NeuralWeights ? st.settings.neuralWeights
                 : st.installDest;
         }
 
         struct DialogRequest
         {
             std::shared_ptr<DialogChoices> results;
-            InstallField field;
+            PathField field;
             std::string start;
         };
 
         // Opens Windows' file or folder dialog for a field. Its choice comes on SDL's
         // dialog thread, into st.dialogs, which the next frame takes it from.
-        void Browse(State& st, InstallField field)
+        void Browse(State& st, PathField field)
         {
             static const SDL_DialogFileFilter kDiscImage[] = { { "Xbox 360 disc image", "iso" },
                 { "All files", "*" } };
@@ -49,21 +50,53 @@ namespace dao::launcher
                 request->results->open--;
             };
             const char* start = request->start.empty() ? nullptr : request->start.c_str();
-            if (field == InstallField::Folder)
+            if (field == PathField::Folder || field == PathField::NeuralWeights)
                 SDL_ShowOpenFolderDialog(chosen, request, st.window, start, false);
-            else if (field == InstallField::DiscImage)
+            else if (field == PathField::DiscImage)
                 SDL_ShowOpenFileDialog(chosen, request, st.window, kDiscImage, 2, start, false);
             else
                 SDL_ShowOpenFileDialog(chosen, request, st.window, kAnyFile, 1, start, false);
         }
+    }
 
-        void TakeDialogChoices(State& st)
+    void TakeDialogChoices(State& st)
+    {
+        std::lock_guard lock(st.dialogs->mutex);
+        for (auto& [field, path] : st.dialogs->chosen)
+        {
+            // The weights' folder in lmxxf's package, or the package itself.
+            if (field == PathField::NeuralWeights)
+            {
+                if (const auto weights = FindNeuralWeights(FromUtf8(path)))
+                    path = Utf8(*weights);
+            }
+            FieldText(st, field) = std::move(path);
+        }
+        st.dialogs->chosen.clear();
+    }
+
+    // A path: typed, pasted, or chosen with Browse.
+    void PathRow(State& st, const char* label, PathField field, bool enabled)
+    {
+        Label(label);
+        ImGui::PushID(int(field));
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const float button = ImGui::CalcTextSize("Browse...").x + style.FramePadding.x * 2.0f;
+        ImGui::BeginDisabled(!enabled);
+        ImGui::SetNextItemWidth(RowWidth() - button - style.ItemSpacing.x);
+        ImGui::InputText("##path", &FieldText(st, field));
+        ImGui::SameLine();
+        bool dialogOpen = false;
         {
             std::lock_guard lock(st.dialogs->mutex);
-            for (auto& [field, path] : st.dialogs->chosen)
-                FieldText(st, field) = std::move(path);
-            st.dialogs->chosen.clear();
+            dialogOpen = st.dialogs->open > 0;
         }
+        ImGui::BeginDisabled(dialogOpen);
+        if (ImGui::Button("Browse..."))
+            Browse(st, field);
+        ImGui::EndDisabled();
+        ImGui::EndDisabled();
+        ImGui::PopID();
     }
 
     // Files dropped on the Install view: a disc image (.iso), or else the title
@@ -75,8 +108,8 @@ namespace dao::launcher
             std::error_code ec;
             if (!fs::is_regular_file(path, ec))
                 continue;
-            FieldText(st, Lower(Utf8(path.extension())) == ".iso" ? InstallField::DiscImage
-                                                                   : InstallField::TitleUpdate) = Utf8(path);
+            FieldText(st, Lower(Utf8(path.extension())) == ".iso" ? PathField::DiscImage
+                                                                   : PathField::TitleUpdate) = Utf8(path);
         }
         st.dropped.clear();
     }
@@ -154,30 +187,6 @@ namespace dao::launcher
             });
         }
 
-        // A path: typed, pasted, or chosen with Browse.
-        void PathRow(State& st, const char* label, InstallField field, bool enabled = true)
-        {
-            Label(label);
-            ImGui::PushID(int(field));
-            const ImGuiStyle& style = ImGui::GetStyle();
-            const float button = ImGui::CalcTextSize("Browse...").x + style.FramePadding.x * 2.0f;
-            ImGui::BeginDisabled(!enabled);
-            ImGui::SetNextItemWidth(RowWidth() - button - style.ItemSpacing.x);
-            ImGui::InputText("##path", &FieldText(st, field));
-            ImGui::SameLine();
-            bool dialogOpen = false;
-            {
-                std::lock_guard lock(st.dialogs->mutex);
-                dialogOpen = st.dialogs->open > 0;
-            }
-            ImGui::BeginDisabled(dialogOpen);
-            if (ImGui::Button("Browse..."))
-                Browse(st, field);
-            ImGui::EndDisabled();
-            ImGui::EndDisabled();
-            ImGui::PopID();
-        }
-
         // The installer's output, kept scrolled to the end unless scrolled up.
         void InstallLog(const InstallRunner& installer, float height)
         {
@@ -234,19 +243,19 @@ namespace dao::launcher
             }
             const bool update = HasGameFiles(st);
             Section("Your copy of the game");
-            PathRow(st, "Disc image", InstallField::DiscImage, !update);
+            PathRow(st, "Disc image", PathField::DiscImage, !update);
             HelpText(update ? "Not needed: this folder already has the game's files. Installing again updates it, "
                               "keeping your saves, settings and mods."
                             : "Your Xbox 360 disc image (.iso) of Dragon Age: Origins. Its game files are copied out "
                               "and its code is recompiled for this PC: nothing of the game is downloaded. You can "
                               "also drop it on this window.");
             ImGui::Spacing();
-            PathRow(st, "Title Update 6 or 7 (optional)", InstallField::TitleUpdate);
+            PathRow(st, "Title Update 6 or 7 (optional)", PathField::TitleUpdate);
             HelpText("Needed by Awakening and the DLC campaigns: its package (tu00000001_00000000). It can also be "
                      "added later, by dropping it on the launcher.");
 
             Section("Install");
-            PathRow(st, "Folder", InstallField::Folder);
+            PathRow(st, "Folder", PathField::Folder);
             HelpText("Gets the game's files, your saves, settings and mods. The build tools and the build go to "
                      "%LOCALAPPDATA%\\DAORecomp-build (about 12 GB).");
             ImGui::Checkbox("Start menu and desktop shortcuts", &st.installShortcuts);

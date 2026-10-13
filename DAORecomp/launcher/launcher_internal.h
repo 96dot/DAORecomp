@@ -194,12 +194,14 @@ namespace dao::launcher
         int shots = 0;
     };
 
-    // The Install view's paths.
-    enum class InstallField
+    // The paths chosen with Browse: the Install view's, and neural rendering's
+    // weights (Configure).
+    enum class PathField
     {
         DiscImage,
         TitleUpdate,
         Folder,
+        NeuralWeights,
     };
 
     // What file and folder dialogs chose, from SDL's dialog thread; shared with
@@ -207,7 +209,7 @@ namespace dao::launcher
     struct DialogChoices
     {
         std::mutex mutex;
-        std::vector<std::pair<InstallField, std::string>> chosen;
+        std::vector<std::pair<PathField, std::string>> chosen;
         int open = 0;
     };
 
@@ -320,6 +322,11 @@ namespace dao::launcher
         float padScroll = 0.0f, padScrollCarry = 0.0f;
         // Configure: give the selected tab the focus (switched with LB or RB).
         bool focusConfigureTab = false;
+        // Neural rendering: whether the install has its runtime and kernels (checked
+        // once), and whether settings.neuralWeights has the weights, as of checkedWeights.
+        std::optional<bool> neuralInstalled;
+        std::string checkedWeights;
+        bool weightsFound = false;
         // Whether Escape and the gamepad's B mean Back this frame: not closing a popup,
         // ending an edit or leaving a child window navigated on its own (not
         // NavFlattened, as the views' contents and their tables are).
@@ -418,6 +425,11 @@ namespace dao::launcher
 
     // configure_view.cpp: Configure, its tabs.
     void ConfigureView(State& st, const Layout& layout);
+    // The first of neural rendering's weights, which marks their folder.
+    constexpr const char* kNeuralWeightsFile = "block0-ffn.f16";
+    // The folder with them in `folder` or below (a package's); also used by
+    // install_view.cpp's TakeDialogChoices when one is chosen.
+    std::optional<fs::path> FindNeuralWeights(const fs::path& folder);
 
     // mods_view.cpp: Mods, and adding, converting and reading mods in the background.
     bool AddingMods(const State& st);
@@ -454,6 +466,8 @@ namespace dao::launcher
 
     // install_view.cpp: Install, setup's view.
     void TakeDroppedInstallFiles(State& st);
+    void TakeDialogChoices(State& st);
+    void PathRow(State& st, const char* label, PathField field, bool enabled = true);
     bool HasGameFiles(State& st);
     fs::path SetupArtRoot();
     void StartInstall(State& st);

@@ -13,7 +13,20 @@
 
 # Downloaded and built by install.py
 /tools/
-/thirdparty/
+/thirdparty/*
+# Except lmxxf's neural rendering sources (scripts/vendor_lmxxf.py), which the
+# installer builds from: the bundle is the checkout's tracked files.
+!/thirdparty/lmxxf-nr/
+# Never its weights (NVIDIA's) or binaries, should a package be unpacked there.
+/thirdparty/lmxxf-nr/**/*.f16
+/thirdparty/lmxxf-nr/**/*.f32
+/thirdparty/lmxxf-nr/**/*.i32
+/thirdparty/lmxxf-nr/**/*.fp8
+/thirdparty/lmxxf-nr/**/*.bin
+/thirdparty/lmxxf-nr/**/*.hsaco
+/thirdparty/lmxxf-nr/**/*.dll
+/thirdparty/lmxxf-nr/**/*.exe
+/thirdparty/lmxxf-nr/**/*.zip
 /build/
 /build-*/
 /xenia/third_party

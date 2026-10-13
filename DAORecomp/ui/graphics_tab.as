@@ -7,6 +7,7 @@
 // section headers, pickers, checkboxes, sliders). Values go through the host:
 //   ExternalCommands.GetNumber("DAORecomp.<Key>")      the current value
 //   ExternalCommands.GetNumber("DAORecomp.Pending.<Key>")  1 if it needs a restart
+//   ExternalCommands.GetNumber("DAORecomp.Available.<Key>")  0 if it's hidden
 //   ExternalCommands.SendMessage("DAORecomp.Set <Key> <value>")
 //   ExternalCommands.SendMessage("DAORecomp.RestoreDefaults")
 //   ExternalCommands.SendMessage("DAORecomp.OpenMods")  ends the game for the
@@ -92,7 +93,8 @@ function OpenMods() {
 // The rows in order: a header, a button (its action), or a setting shown as a
 // picker (values and their labels), a checkbox (toggle) or a slider. A value not
 // in a picker's list (from config.toml, such as a resolution scale above 4) shows
-// as the closest one.
+// as the closest one. An optional setting is shown only where the host has it
+// (DAORecomp.Available.<key>).
 var ROWS = [
     { header: "Display" },
     { key: "Fullscreen", label: "Display mode", values: [0, 1], labels: ["Windowed", "Fullscreen"] },
@@ -106,6 +108,17 @@ var ROWS = [
       labels: ["Off", "Auto", "FidelityFX FSR 4", "FidelityFX FSR 3.1", "Intel XeSS-SR"] },
     { key: "TemporalSharpness", label: "Temporal sharpening (FSR)", slider: SLIDER_STEPS },
     { key: "FrameGeneration", label: "Frame generation (with temporal upscaling)", toggle: true },
+    { key: "NeuralRendering", label: "Neural rendering (with temporal upscaling)", restart: true, toggle: true,
+      optional: true },
+    { key: "NeuralStrength", label: "Neural rendering strength", slider: SLIDER_STEPS, optional: true },
+    { key: "NeuralNetwork", label: "Neural rendering quality", restart: true, optional: true,
+      values: [0, 1080, 900, 720], labels: ["Auto", "Quality (1080)", "Balanced (900)", "Performance (720)"] },
+    { key: "NeuralPasses", label: "Neural rendering passes", restart: true, optional: true, values: [1, 2, 3],
+      labels: ["1x", "2x (stronger)", "3x (strongest)"] },
+    { key: "NeuralSkinProtect", label: "Protect skin from the extra passes", restart: true, toggle: true,
+      optional: true },
+    { key: "NeuralStyle", label: "Neural rendering style", restart: true, optional: true, values: [0, 1, 2],
+      labels: ["0 (NVIDIA's default)", "1 (lmxxf's default)", "2 (NVIDIA's third)"] },
     { key: "Upscaler", label: "Output upscaler", values: [0, 1, 2],
       labels: ["Bilinear", "FidelityFX CAS", "FidelityFX FSR 1"] },
     { key: "Sharpness", label: "Output sharpening", slider: SLIDER_STEPS },
@@ -274,7 +287,9 @@ function BuildRows(scrollable) {
     var y = 0;
     for (var i = 0; i < ROWS.length; i++) {
         var row = ROWS[i];
-        if (row.header != undefined) {
+        if (row.optional && Get("Available." + row.key) == 0) {
+            // Not shown.
+        } else if (row.header != undefined) {
             AddHeader(group, i, row.header, y);
             y += HEADER_STEP;
         } else if (row.button != undefined) {

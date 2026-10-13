@@ -60,6 +60,7 @@ struct MemExportRange {
 };
 class D3D12CommandProcessor final : public CommandProcessor {
   friend class DaoUpscalerImpl;
+  friend class NeuralRendering;
   friend class dao_timing::GpuTiming;
 
  protected:

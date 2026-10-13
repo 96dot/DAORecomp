@@ -420,18 +420,26 @@ void DaoUpscalerImpl::OnDraw(const RegisterFile& regs,
     return;
   }
   const auto surface = regs.Get<reg::RB_SURFACE_INFO>();
-  // The scene: depth-tested multisampled draws (the depth prepass and both
-  // tiles of the main pass; shadow maps and the UI are single-sampled). Single-
-  // sampled, the depth-tested draws as wide as the screen (not the shadow
-  // maps) until the scene's color is resolved (after it, effects drawn over
-  // it).
+  // The scene: depth-tested multisampled draws at least half the screen wide.
+  // The main pass draws the screen in two tiles of half its width each (and
+  // the depth prepass the whole of it); shadow maps and the UI are single-
+  // sampled. The minimap is also drawn depth-tested and multisampled, in
+  // pieces narrower than that: it isn't jittered, which would open seams
+  // between them. Single-sampled, the depth-tested draws as wide as the screen
+  // (not the shadow maps) until the scene's color is resolved (after it,
+  // effects drawn over it).
   const bool single_sample_scene_draw =
       single_sample_scene_ && !scene_texture_ &&
       surface.msaa_samples == xenos::MsaaSamples::k1X &&
       surface.surface_pitch * rtc_.draw_resolution_scale_x() ==
           render_size_[0];
+  // (Before the render size is known, any.)
+  const bool scene_wide =
+      !render_size_[0] ||
+      2 * surface.surface_pitch * rtc_.draw_resolution_scale_x() >=
+          render_size_[0];
   if (jitter_active_ && depth_control.z_enable &&
-      (surface.msaa_samples != xenos::MsaaSamples::k1X ||
+      ((surface.msaa_samples != xenos::MsaaSamples::k1X && scene_wide) ||
        single_sample_scene_draw)) {
     ++scene_draws_;
     single_sample_scene_drawn_ |= single_sample_scene_draw;
@@ -848,9 +856,52 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   // Linear color: true HDR's, or the SDR image linearized for a backend
   // taking it so (upscaled linear, then encoded again in the composite).
   const bool linear_color = true_hdr_ || backend_->LinearSdrColor();
-  if (linear_color && !EnsureHdrScene()) {
+  // Neural rendering of the scene before the UI, in linear light (with true
+  // HDR, above paper white too, as DLSS 5 takes HDR): its output is what's
+  // upscaled. The composite finds the UI by comparing the game's image with
+  // the one before the UI as the game drew it, not the network's.
+  const bool neural_on = cvars::dao_neural_rendering &&
+                         !(neural_ && neural_->failed());
+  // Paused (F6): the session stays, to resume at once.
+  const bool run_neural =
+      neural_on && !dao_live::Load(dao_live::values.neural_paused);
+  if (neural_on && !run_neural) {
+    neural_paused_ = true;
+  }
+  if ((linear_color || run_neural) && !EnsureHdrScene()) {
     return NotUpscaled("no linear scene", frontbuffer, frontbuffer_srv,
                        srv_out, hdr_out);
+  }
+  ID3D12Resource* neural_color = nullptr;
+  if (run_neural) {
+    if (!neural_) {
+      neural_ = std::make_unique<NeuralRendering>(*this);
+    }
+    Transition(hdr_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    cp_.SubmitBarriers();
+    neural_color = neural_->Run(hdr_.resource.Get(), render_width,
+                                render_height,
+                                reset_history_ || neural_paused_);
+    neural_paused_ = false;
+    if (neural_color && dao_timing::GpuTiming::Enabled()) {
+      dao_timing::GpuTiming::Get().Mark(cp_, "neural rendering");
+    }
+    // For a backend taking SDR, encoded as the game's output.
+    if (neural_color && !linear_color) {
+      D3D12_SHADER_RESOURCE_VIEW_DESC neural_srv = {};
+      neural_srv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      neural_srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      neural_srv.Shader4ComponentMapping =
+          D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      neural_srv.Texture2D.MipLevels = 1;
+      neural_color =
+          EnsureTexture(neural_sdr_, color_.format, render_width,
+                        render_height, "neural rendering SDR") &&
+                  ConvertImage(neural_color, neural_srv, neural_sdr_,
+                               kCompositeGamma)
+              ? neural_sdr_.resource.Get()
+              : nullptr;
+    }
   }
   // Motion vectors, then the upscaler, recorded into the command list when
   // it's executed.
@@ -860,15 +911,22 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
       dao_timing::GpuTiming::Get().Mark(cp_, "motion vectors");
     }
   }
-  Texture& upscaler_color = linear_color ? hdr_ : color_;
-  Transition(upscaler_color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  if (linear_color) {
+    Transition(hdr_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  }
   Transition(color_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(depth_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(motion_vectors_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(upscaled_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   cp_.SubmitBarriers();
   UpscalerBackend::Frame frame = {};
-  frame.color = upscaler_color.resource.Get();
+  if (neural_color) {
+    frame.color = neural_color;
+  } else if (linear_color) {
+    frame.color = hdr_.resource.Get();
+  } else {
+    frame.color = color_.resource.Get();
+  }
   frame.depth = depth_.resource.Get();
   frame.motion_vectors = motion_vectors_.resource.Get();
   frame.output = upscaled_.resource.Get();
@@ -881,7 +939,11 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   frame.sharpness = float(std::clamp(
       dao_live::Load(dao_live::values.temporal_sharpness), 0.0, 1.0));
   frame.frame_ms = std::clamp(frame_ms, 1.0f, 100.0f);
-  frame.reset = reset_history_;
+  // The history isn't of the same image when the network's output comes or
+  // goes (paused, resumed, or failed).
+  const bool neural_used = neural_color != nullptr;
+  frame.reset = reset_history_ || neural_used != neural_used_;
+  neural_used_ = neural_used;
   backend_->RecordDispatch(frame);
   InvalidateCommandProcessorState();
   if (dao_timing::GpuTiming::Enabled()) {

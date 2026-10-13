@@ -43,13 +43,15 @@ cbuffer DaoCompositeConstants : register(b0) {
 // The HDR scene with the UI, output in SDR.
 #define DAO_MODE_HDR_TO_SDR 2
 // One source (dao_final) to the destination at its size: HDR-encoded (true HDR
-// frames not upscaled), or linear (FSR's HDR input without the game's
-// tonemapping pass).
+// frames not upscaled), linear (FSR's HDR input without the game's tonemapping
+// pass), or a linear one gamma-encoded as the game's output (neural rendering's
+// output, for an upscaler taking SDR).
 #define DAO_MODE_ENCODE 3
 #define DAO_MODE_LINEARIZE 4
 // The scene alone, motion-blurred (not under opaque UI), as dao_upscaled is
 // (frame generation's input).
 #define DAO_MODE_SCENE 5
+#define DAO_MODE_GAMMA 6
 
 // PQ (SMPTE ST 2084) from linear (1 = paper white); the inverse of PqToNits in
 // dao_hdr_output.ps.
@@ -158,6 +160,11 @@ void main(uint3 id : SV_DispatchThreadID) {
     float3 color = pow(saturate(dao_final.Load(int3(id.xy, 0)).rgb), dao_gamma);
     dao_dest[id.xy] =
         float4(dao_mode == DAO_MODE_ENCODE ? EncodeHdr(color) : color, 1.0);
+    return;
+  }
+  if (dao_mode == DAO_MODE_GAMMA) {
+    dao_dest[id.xy] = float4(
+        pow(saturate(dao_final.Load(int3(id.xy, 0)).rgb), 1.0 / dao_gamma), 1.0);
     return;
   }
   // The four render pixels that bilinear filtering of this pixel reads (only

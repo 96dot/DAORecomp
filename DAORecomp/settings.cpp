@@ -101,7 +101,7 @@ namespace dao
         const Settings defaults;
         for (auto [value, fallback] : { std::pair{ &s.sharpness, defaults.sharpness },
                  { &s.temporalSharpness, defaults.temporalSharpness }, { &s.hdrPaperWhite, defaults.hdrPaperWhite },
-                 { &s.hdrPeak, defaults.hdrPeak } })
+                 { &s.hdrPeak, defaults.hdrPeak }, { &s.neuralStrength, defaults.neuralStrength } })
         {
             if (!std::isfinite(*value))
                 *value = fallback;
@@ -109,6 +109,11 @@ namespace dao
         s.resolutionScale = std::clamp(s.resolutionScale, 1, kMaxResolutionScale);
         s.sharpness = std::clamp(s.sharpness, 0.0f, 2.0f);
         s.temporalSharpness = std::clamp(s.temporalSharpness, 0.0f, 1.0f);
+        s.neuralStrength = std::clamp(s.neuralStrength, 0.0f, 1.0f);
+        if (std::ranges::find(kNeuralNetworks, s.neuralNetwork) == std::end(kNeuralNetworks))
+            s.neuralNetwork = 0;
+        s.neuralPasses = std::clamp(s.neuralPasses, 1, kMaxNeuralPasses);
+        s.neuralStyle = std::clamp(s.neuralStyle, 0, kMaxNeuralStyle);
         if (std::ranges::find(kAnisotropicLevels, s.anisotropicFiltering) == std::end(kAnisotropicLevels))
             s.anisotropicFiltering = 0;
         if (std::ranges::find(kFrameRates, s.frameRate) == std::end(kFrameRates))
@@ -177,6 +182,13 @@ namespace dao
                                                : TemporalUpscaler::Auto;
         s.temporalSharpness = video["temporal_sharpness"].value_or(s.temporalSharpness);
         s.frameGeneration = video["frame_generation"].value_or(s.frameGeneration);
+        s.neuralRendering = video["neural_rendering"].value_or(s.neuralRendering);
+        s.neuralWeights = video["neural_weights"].value_or(s.neuralWeights);
+        s.neuralStrength = video["neural_strength"].value_or(s.neuralStrength);
+        s.neuralNetwork = video["neural_network"].value_or(s.neuralNetwork);
+        s.neuralPasses = video["neural_passes"].value_or(s.neuralPasses);
+        s.neuralSkinProtect = video["neural_skin_protect"].value_or(s.neuralSkinProtect);
+        s.neuralStyle = video["neural_style"].value_or(s.neuralStyle);
         s.vsync = video["vsync"].value_or(s.vsync);
         // (Before frame_rate, unlock_frame_rate chose between 60 and 30.)
         s.frameRate = video["frame_rate"].value_or(video["unlock_frame_rate"].value_or(true) ? 60 : 30);
@@ -263,6 +275,25 @@ temporal_sharpness = {}
 # frame_rate at half the display's refresh rate (60 fps on a 120 Hz display): when the
 # display can't show twice the frame rate, only the real frames are shown.
 frame_generation = {}
+# Neural rendering (lmxxf's HIP port of DLSS 5's neural rendering): the 3D scenes run
+# through NVIDIA's neural rendering network before temporal upscaling. AMD RDNA 4
+# (RX 9000 series) with a current AMD driver and temporal upscaling, in SDR or HDR; on an
+# RX 9070 XT it costs about 9.5 ms a frame at 1080 lines, 7 ms at 900. The network's
+# weights don't come with the game:
+# neural_weights is the folder with them (block0-ffn.f16) in lmxxf's package.
+# Strength 0..1. The options of lmxxf's packages: neural_network is the network's size,
+# 0 (Auto: 720 lines at resolution_scale 1, 1080 above), 1080, 900 or 720 (smaller is
+# faster; the scenes are fitted to it); neural_passes runs it 1 to 3 times a frame (a
+# stronger look; each pass costs as much as the first), and with more than one
+# neural_skin_protect keeps skin as the first pass made it; neural_style is one of
+# NVIDIA's three styles, 0 (NVIDIA's default), 1 (lmxxf's default) or 2.
+neural_rendering = {}
+neural_weights = {}
+neural_strength = {}
+neural_network = {}
+neural_passes = {}
+neural_skin_protect = {}
+neural_style = {}
 # Wait for the display's refresh when presenting: no tearing, and no more frames shown
 # than the display refreshes.
 vsync = {}
@@ -301,7 +332,9 @@ window_height = {}
 [patches]
 )",
             s.showLauncher, s.checkForUpdates, s.modsWarningSeen, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
-            TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.frameGeneration, s.vsync, s.frameRate,
+            TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.frameGeneration, s.neuralRendering,
+            Quote(s.neuralWeights), s.neuralStrength, s.neuralNetwork, s.neuralPasses, s.neuralSkinProtect,
+            s.neuralStyle, s.vsync, s.frameRate,
             s.hdr, s.hdrPaperWhite, s.hdrPeak, HdrQualityName(s.hdrHighQuality), s.anisotropicFiltering, s.shadows, s.postProcessing,
             MotionBlurName(s.motionBlur), s.fov, s.conversationFov, s.fullscreen,
             s.windowWidth, s.windowHeight);
@@ -353,6 +386,14 @@ window_height = {}
         SetXeniaCvar("dao_temporal_upscaler", toml::value<std::string>(std::string(TemporalUpscalerName(s.temporalUpscaler))));
         SetXeniaCvar("dao_temporal_sharpness", toml::value<double>(s.temporalSharpness));
         SetXeniaCvar("dao_frame_generation", toml::value<bool>(s.frameGeneration));
+        SetXeniaCvar("dao_neural_rendering", toml::value<bool>(s.neuralRendering && !s.neuralWeights.empty()));
+        SetXeniaCvar("dao_neural_weights", toml::value<std::string>(s.neuralWeights));
+        SetXeniaCvar("dao_neural_strength", toml::value<double>(s.neuralStrength));
+        SetXeniaCvar("dao_neural_network",
+            toml::value<std::string>(s.neuralNetwork ? std::to_string(s.neuralNetwork) : "auto"));
+        SetXeniaCvar("dao_neural_passes", toml::value<int64_t>(s.neuralPasses));
+        SetXeniaCvar("dao_neural_skin_protect", toml::value<bool>(s.neuralSkinProtect));
+        SetXeniaCvar("dao_neural_style", toml::value<int64_t>(s.neuralStyle));
         // (Not Xenia's own vsync cvar: the guest's vblanks stay at the console's 60 Hz.)
         SetXeniaCvar("dao_present_vsync", toml::value<bool>(s.vsync));
         SetXeniaCvar("present_hdr", toml::value<bool>(s.hdr));
@@ -382,6 +423,10 @@ window_height = {}
             s.vsync ? ", vsync" : "");
         if (s.frameGeneration)
             LOGI("Settings: frame generation");
+        if (s.neuralRendering)
+            LOGI("Settings: neural rendering, strength {}, network {}, {} pass(es){}, style {}, weights in {}",
+                s.neuralStrength, s.neuralNetwork ? std::to_string(s.neuralNetwork) : "auto", s.neuralPasses,
+                s.neuralSkinProtect ? " (skin protected)" : "", s.neuralStyle, s.neuralWeights);
         if (s.motionBlur)
             LOGI("Settings: motion blur {}", MotionBlurName(s.motionBlur));
         if (s.fov != kOriginalFov || s.conversationFov != kOriginalFov)

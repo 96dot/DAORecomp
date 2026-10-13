@@ -1,0 +1,455 @@
+# 每个 DLSS5_ 选项上方有中英注释（详见 CONFIGURATION.md）；以 # 开头的行会被忽略。
+# Each DLSS5_ key has a zh/en comment above it (see CONFIGURATION.md); lines starting with # are ignored.
+# 中：本文件随包发布为 default-config.txt，升级会覆盖；自己的改动写进 custom-config.txt（逐行覆盖本文件，升级不动）。
+# EN: Shipped as default-config.txt and overwritten on upgrade; put your own changes in custom-config.txt (overrides per key, never overwritten).
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_BLOCKED_C32_FFN=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_BLOCKED_FFN=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_BLOCKED_VIT=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_C32_FFN_RAW_STORE=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_CACHE_C32_INPUT=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_COALESCED_FINISH=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_COALESCED_MULTIHEAD_SHIFT=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_DIRECT_ATTENTION=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_FUSED_SHIFT=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_LOCAL_C32_ATTENTION=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_MATRIX_C128=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_MATRIX_C256=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_MATRIX_C64=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_MATRIX_SPLIT_ATTENTION=1
+# 中：实验脚本用的诊断开关，运行时代码不读取；默认 1；诊断用，保持默认；RE9 runtime 不读此键
+# EN: Diagnostic switch of experiment scripts, not read at runtime; default 1; keep default; not read by the RE9 runtime
+DLSS5_TEST_MULTIHEAD_EIGHT_WAVES=1
+# 中：实验脚本用的诊断开关，运行时代码不读取；默认 1；诊断用，保持默认；RE9 runtime 不读此键
+# EN: Diagnostic switch of experiment scripts, not read at runtime; default 1; keep default; not read by the RE9 runtime
+DLSS5_TEST_MULTIHEAD_FOUR_WAVES=1
+# 中：实验脚本用的诊断开关，运行时代码不读取；默认 0；诊断用，保持默认；RE9 runtime 不读此键
+# EN: Diagnostic switch of experiment scripts, not read at runtime; default 0; keep default; not read by the RE9 runtime
+DLSS5_TEST_PARALLEL_MULTIHEAD_NORM=0
+# 中：实验脚本用的诊断开关，运行时代码不读取；默认 1；诊断用，保持默认；RE9 runtime 不读此键
+# EN: Diagnostic switch of experiment scripts, not read at runtime; default 1; keep default; not read by the RE9 runtime
+DLSS5_TEST_PARALLEL_MULTIHEAD_SOFTMAX=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_PAD_C32_LDS=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_PAD_MULTIHEAD_LDS=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_PARALLEL_SPLIT_FFWD=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_RESIDENT_NOISE=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_RESIDENT_WAVE_VIT_EXPAND=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_RESIDENT_WEIGHTS=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_SHARED_C32=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_SHARED_C32_SCRATCH=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_SHARED_MATRIX_WORKSPACE=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_SHARED_SCRATCH=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_SPLIT_C32_ATTENTION=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_SPLIT_FFWD=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_SPLIT_PREBLOCK_FFN=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_SPLIT_PROJECTION=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_TILED_C64=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_TILED_QKV=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_VIT_EXPAND_CHUNK2=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_C128=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_C256=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_C32_AV=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_C32_FFN=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_C32_FFN_LOCAL=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_C32_PROJECTION=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_C32_QKV=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_C32_SCORES=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_C64=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_DECODER_LINEAR=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_DOWNSAMPLE=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_HEAD=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_MULTIHEAD_AV=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_PROJECT=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 0；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 0; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_SPLIT_FFWD=0
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_SPLIT_PROJECT=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_VIT_ATTENTION=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_VIT_ATTENTION_HALF=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_VIT_EXPAND=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_VIT_QKV=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TEST_WAVE_VIT_REDUCE=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_FP8_OPERANDS=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_FP8_QKV=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_FP8_HIDDEN=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_FP8_LDS=1
+# 中：时序坐标用浮点双线性（仅时序会话）；默认 1；有损：数值近似，非逐位；无实测数字；保持默认；RE9 runtime 不读此键
+# EN: Float bilinear temporal passes (history sessions only); default 1; LOSSY: numeric approx; not measured; not read by the RE9 runtime
+DLSS5_FAST_TEMPORAL=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_FUSED_QKV_NORMALIZE=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_FUSED_FFN=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_FP8_ACTIVATIONS=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_FP8_QKV_NORM=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_FAST_PREFIX=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_C32_FUSED_ATTENTION=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_VIT_SPLIT_K=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_VIT_PACKED_INPUT=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 4；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 4; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_VIT_BLOCK_M=4
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_C32_MAPPED_INPUT=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_FP8_STREAM=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_SPLIT_DIRECT_ATTENTION=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_FFN_TILED_WEIGHTS=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_TILED_WEIGHTS=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_C32_FFN_FAST3=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_C32_ATTN_FAST2=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_POST70_DIRECT=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_C32_CHAIN_RAW=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_WAVE_C32_DS=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_VIT_ATTN_FP8=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_POST70_MERGE_FOLD=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_C32_ATTN_FAST3=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_INLINE_PREFIX=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 2；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 2; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_BATCH_SUBMITS=2
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_C32_ATTN_FAST4=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_VIT_QKV_FUSED=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_PREBLOCK_MAIN8=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_C32_SKIP8=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 2；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 2; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_POST70_LOW_RAW=2
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_C32_HALF_STREAM=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_C32_EPILOGUE=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_C32_FUSED_FFN=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_VIT_TILED=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_SPLIT_TILED=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_DECODER_TILED=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_SPLIT_FFWD_TILED=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_SPLIT_STREAM8=1
+# 中：旧 DX12 网络路线（≤0.15）的内核开关，HIP 包不走该路线；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Kernel switch of the old DX12 network route (<=0.15); default 1; HIP packages do not use it. Keep default; not read by the RE9 runtime
+DLSS5_DECODER_OUT16=1
+# 中：跳过的网络块；默认空值 = 全 71 块都算（配合 FAST_NUMERIC=1，对 NVIDIA 47.55 dB）
+# 中：想追帧率写 42,43,46：每帧快 900 约 0.20 / 1080 约 0.32 ms，对 NVIDIA 掉约 3.3 dB（有损，结构性，每帧独立）
+# EN: Blocks to skip; default empty = all 71 blocks (with FAST_NUMERIC=1: 47.55 dB vs NVIDIA)
+# EN: For frame rate write 42,43,46: about 0.20 (900) / 0.32 (1080) ms faster, about -3.3 dB vs NVIDIA (LOSSY, structural, per frame)
+DLSS5_SKIP_BLOCKS=
+# 中：接受不超过 1920×1080 的非档位输入尺寸（0 则只认精确档位尺寸）；默认 1；保持默认；RE9 runtime 不读此键
+# EN: Accept non-tier input sizes up to 1920x1080 (0 = exact tier sizes only); default 1; keep default; not read by the RE9 runtime
+DLSS5_FIT_INPUT=1
+# 中：1 = 超过 1080p 的输入缩到 1080 档再还原（0 则回退原超分）；默认 1；缩放属几何改动，代价未实测
+# EN: 1 = inputs above 1080p are fitted onto the 1080 tier (else fall back); default 1; scaling = geometry, cost not measured
+DLSS5_FIT_LARGE=1
+# 中：启用 HIP 生产选项组合；默认 1；内部调优开关，保持默认
+# EN: Enables the production HIP option set; default 1; internal switch, keep default
+DLSS5_HIP_FAST=1
+# 中：延迟提交（命令列表环形缓冲）；默认 1；内部调优开关，保持默认；RE9 runtime 不读此键
+# EN: Deferred submission ring; default 1; internal tuning switch, keep default; not read by the RE9 runtime
+DLSS5_TEST_ASYNC_SUBMIT=1
+# 中：挂哪个超分：ffx 或 xess；默认 ffx；游戏用 XeSS 时才改；RE9 runtime 不读此键
+# EN: Which upscaler to hook: ffx or xess; default ffx; Change only for XeSS titles; not read by the RE9 runtime
+DLSS5_UPSCALER=ffx
+# 中：内部调优开关（HIP 内核选择），保持默认；默认 1
+# EN: Internal tuning switch (HIP kernel selection); default 1; keep default
+DLSS5_HIP_MH_FEATURE_BYTE=1
+# 中：内部调优开关（HIP 内核选择），保持默认；默认 1
+# EN: Internal tuning switch (HIP kernel selection); default 1; keep default
+DLSS5_HIP_MH_PROJ_DIAG_FB=1
+# 中：内部调优开关（HIP 内核选择），保持默认；默认 1
+# EN: Internal tuning switch (HIP kernel selection); default 1; keep default
+DLSS5_HIP_MH_BYTE_STREAM=1
+# 中：内部调优开关（HIP 内核选择），保持默认；默认 0
+# EN: Internal tuning switch (HIP kernel selection); default 0; keep default
+DLSS5_HIP_VIT_BYTE_STREAM=0
+# 中：内部调优开关（HIP 内核选择），保持默认；默认 1
+# EN: Internal tuning switch (HIP kernel selection); default 1; keep default
+DLSS5_HIP_DECODER_BYTE=1
+# 中：内部调优开关（HIP 内核选择），保持默认；默认 1
+# EN: Internal tuning switch (HIP kernel selection); default 1; keep default
+DLSS5_HIP_MH_FFN_FRAG256=1
+# 中：HIP graph 发射；默认 0；内部调优开关，保持默认（0）
+# EN: HIP graph launch; default 0; internal tuning switch, keep default (0)
+DLSS5_HIP_GRAPH=0
+# 中：网络档位：auto 按输入选 720/900/1080；默认 auto；固定 900 有损（几何，代价未实测）；详见 CONFIGURATION.md
+# EN: Network tier: auto picks 720/900/1080 by input; default auto; fixed 900 is LOSSY (geometry, cost not measured)
+DLSS5_NETWORK_HEIGHT=auto
+# 1080 tier rows: 1152 = NVIDIA geometry (default, bit-exact); 1088 = compact, LOSSY, not NVIDIA's geometry (faster, 1080 tier only)
+# 中：1080 档行数：1152 = NVIDIA 几何，逐位；默认 1152；1088 有损（几何，对 NVIDIA 47.4→45.8 dB），快约 0.45 ms
+# EN: 1080-tier rows: 1152 = NVIDIA geometry, bit-exact; default 1152; 1088 LOSSY (geometry, 47.4->45.8 dB), ~0.45 ms faster
+DLSS5_NETWORK_1080_ROWS=1152
+# 1 = network runs on the game's own size (padded like NVIDIA) instead of snapping to the 720/900/1080 tiers; slower above 1080p, see CONFIGURATION.md
+# 中：1 = 按游戏原尺寸跑网络（不吸附档位）；默认 0；非档位尺寸输出改变（几何，更接近 NVIDIA）；更慢；详见 CONFIGURATION.md
+# EN: 1 = run at the input size instead of tiers; default 0; output changes for non-tier sizes (geometry); slower; see CONFIGURATION.md
+DLSS5_NETWORK_FREE_RES=0
+# 1 = fast numeric path (LOSSY, errors pass through all blocks; needs the -fast modules), see CONFIGURATION.md
+# 中：1 = 快速数值路径；默认 1；有损：对逐位输出最差帧 52.1 dB（数值近似，误差逐层传播）；0 = 逐位
+# 中：覆盖：C32/C64/C128 激活 f32 化 + softmax rcp；ViT attention 裸 rcp 分母 + epilogue 去半舍入；
+# 中：ViT contract/projection 与 C512 FFN 投影去 RNE 半舍入；缺 -fast 模块自动退回逐位
+# 中：选它做默认：配合全 71 块，比旧默认（跳 42,43,46）每帧只慢 900 约 0.12 / 1080 约 0.19 ms，
+# 中：对 NVIDIA 44.26→47.55 dB，运动帧偏差比跳块小约 3 dB（NVIDIA 数字为 c32/c64 版，ViT 加深后未重测）
+# EN: covers C32/C64/C128 f32 activations + rcp softmax; ViT attention bare-rcp denominator + no-half epilogue;
+# EN: ViT contract/projection and C512 FFN projection without the RNE half round trip; missing -fast falls back
+# EN: 1 = fast numeric path; default 1; LOSSY: worst frame 52.1 dB vs bit-exact (numeric, carried through blocks); 0 = bit-exact
+# EN: Default because with all 71 blocks it is only about 0.12 (900) / 0.19 (1080) ms slower than the old default
+# EN: (skip 42,43,46) for 44.26->47.55 dB vs NVIDIA (c32/c64-era numbers), ~3 dB less error than block skip on motion
+DLSS5_FAST_NUMERIC=1
+# 中：叠层：整个网络每帧跑 N 遍（1/2/3），上一遍的输出图当下一遍的输入；风格逐遍加强，网络耗时约 N 倍；默认 1
+# EN: Multi pass: run the whole network N times per frame (1/2/3), each pass fed the previous output; stronger style, ~N x network time; default 1
+DLSS5_MULTI_PASS=1
+# 中：肤色保护：叠层>1时肤色区域保留第一遍，其余用最终遍；肤色启发式非分割；默认0
+# EN: Skin protect at MULTI_PASS>1: skin uses pass 1, elsewhere final pass; color heuristic, not segmentation; default 0
+DLSS5_MULTI_PASS_SKIN_PROTECT=0
+# 中：第三遍预测：仅叠层=3时跑两遍再局部预测第三遍；有损预测，默认1；0用真3遍，1/2遍不变
+# EN: Predict pass 3 locally after two real passes, only with MULTI_PASS=3; LOSSY; default 1; 0 runs real pass 3; passes 1/2 unchanged
+DLSS5_MULTI_PASS_PREDICT=1
+# 中：叠层减负：只在第 2 遍及以后跳过的块（写法同 SKIP_BLOCKS），第 1 遍永远全网；默认空；非空即有损
+# EN: Multi-pass skip: blocks skipped only in passes 2..N (same list as SKIP_BLOCKS); pass 1 always full; default empty; LOSSY if set
+DLSS5_MULTI_PASS_SKIP_BLOCKS=
+# 中：编解码按 sRGB 显示图处理（Magpie 必须 1，游戏包 0）；默认 1；按包型设定，不要改；RE9 runtime 不读此键
+# EN: Codec treats input as display sRGB (Magpie 1, game packages 0); default 1; set per package, do not change; not read by the RE9 runtime
+DLSS5_CODEC_SRGB=1
+# 中：1 = 网络放在 FSR 超分之前（前置路线）；默认 0；auto = 首帧探测自动选前置/后置；按包型设定，保持默认；RE9 runtime 不读此键
+# EN: 1 = network runs before the FSR upscale (pre-upscale route); default 0; auto = first-frame probe picks pre/post; set per package, keep default; not read by the RE9 runtime
+DLSS5_PRE_UPSCALE=0
+# 中：前置路线异步提交；默认 0；auto 按游戏查表（2077 同步）；1/0 强制；不影响画面数值；RE9 runtime 不读此键
+# EN: Async submission on the pre-upscale route; default 0; auto = per-title table (Cyberpunk sync); 1/0 force; not read by the RE9 runtime
+DLSS5_PRE_UPSCALE_ASYNC=0
+# 中：1 = 左上角显示 FPS 与档位；默认 1；0 = 隐藏数字；可热重载；RE9 runtime 不读此键
+# EN: 1 = show FPS and tier top-left; default 1; 0 = hide; hot-reloadable; not read by the RE9 runtime
+DLSS5_SHOW_FPS=1
+# 中：状态提示行：0 = 隐藏；默认 2；可热重载；RE9 runtime 不读此键
+# EN: Status line: 0 = hidden; default 2; hot-reloadable; not read by the RE9 runtime
+DLSS5_NOTICE=2
+# 中：当前代码不读取（历史遗留）；默认 0；保持默认；RE9 runtime 不读此键
+# EN: Not read by current code (legacy line); default 0; keep default; not read by the RE9 runtime
+DLSS5_RE9_SNAPSHOT=0
+# 中：ViT 自适应复用；默认 0；1 有损（跨帧复用，最多沿用 REUSE_PERIOD 帧），快约 5～11%；运动场景 PSNR 未实测；RE9 runtime 不读此键
+# EN: ViT adaptive reuse; default 0; 1 is LOSSY (cross-frame reuse), ~5-11% faster; PSNR in motion not measured; not read by the RE9 runtime
+DLSS5_VIT_ADAPTIVE=0
+# The RE9 runtime reads DLSS5_HIP_*, SKIP_BLOCKS, FIT_LARGE, NETWORK_HEIGHT, NETWORK_1080_ROWS, NETWORK_FREE_RES,
+# FAST_NUMERIC, MULTI_PASS, MULTI_PASS_SKIP_BLOCKS, MULTI_PASS_PREDICT, MULTI_PASS_SKIN_PROTECT, DIRECT_IO and STYLE.
+# FORMAT_FALLBACK is read directly; other keys have no effect on this runtime.
+# Kernel groups: set to 0 to return to the 0.30 path; each falls back automatically when its module is missing.
+# 中：每个 wave 负责一个注意力头（C32/C64/C128/C256）；默认 1；逐位；0 = 回 0.30 路径
+# EN: One head per wave (C32..C256 attention); default 1; bit-exact; 0 = 0.30 path
+DLSS5_HIP_WAVE_OWNED=1
+# 中：C512 QKV/mix 每 wave 32 token；默认 1；逐位；0 = 回 0.30 路径
+# EN: C512 QKV/mix at 32 tokens per wave; default 1; bit-exact; 0 = 0.30 path
+DLSS5_HIP_C512_M32=1
+# 中：ViT 投影每 wave 64 列；默认 1；逐位；0 = 回 0.30 路径
+# EN: ViT projection 64 columns per wave; default 1; bit-exact; 0 = 0.30 path
+DLSS5_HIP_VIT_PROJ_N64=1
+# 中：链式内核乱序发射 + 逐块标志等待；默认 1；逐位；900p 约 -1.6%；0 = 顺序发射
+# EN: Any-order chain launches with per-tile flags; default 1; bit-exact; 900p ~-1.6%; 0 = in-order
+DLSS5_HIP_PDL=1
+
+# ViT typed edges: 1=FP8 AV, 2=F16 contract, 3=both; exact in AE and EXACT.
+# 中：ViT 类型化边（1=FP8 AV，2=F16 contract，3=两者）；默认 3；逐位；0 = 旧 f32 路径
+# EN: ViT typed edges (1 FP8 AV, 2 F16 contract, 3 both); default 3; bit-exact; 0 = old f32 path
+DLSS5_HIP_VIT_STREAM=3
+# 2026-09-28: frame-time log. DLSS5_FRAME_STATS=<seconds> appends one line per window to DLSS5-AMD\logs\frame-stats.txt
+# (frame interval avg/p50/p99/max, 1% low, why NR did or did not run). 0 = off (no cost).
+# 中：诊断用：帧时间日志窗口秒数，写 logs\frame-stats.txt；默认 0；0 = 关、无开销；保持默认
+# EN: Diagnostic: frame-time log window in seconds (logs\frame-stats.txt); default 0; 0 = off; keep default
+DLSS5_FRAME_STATS=0
+
+# C256 internal-stage ready queue; bounded GPU recovery (on by default since 0.37).
+# 中：C256 内部阶段就绪队列，带超时恢复；默认 1；逐位；0 = 旧发射方式
+# EN: C256 internal-stage ready queue with bounded recovery; default 1; bit-exact; 0 = old launches
+DLSS5_HIP_SWIN_RUN=1
+
+# 0.38: colour-format fallback (RE9 runtime: private FP16 output route, as RGB9E5 since 0.28). Colour formats outside the original table that the GPU reads as float (R9G9B9E5 linear HDR,
+# B8G8R8X8, R10G10B10A2, R32G32B32(A32), SNORM, 5:6:5 ...) are converted into RGBA16F and take the usual route; formats that
+# worked before are untouched (bit-exact). A rejected format is logged by name. 0 = original table only.
+# 中：原表外的颜色格式转 RGBA16F 再处理；默认 1；原有格式不受影响（逐位）；0 = 只认原表
+# EN: Convert colour formats outside the original table to RGBA16F; default 1; old formats untouched (bit-exact)
+DLSS5_FORMAT_FALLBACK=1
+# DLSS5_HOT_RELOAD does not apply to the RE9 runtime (strength/detail are live in the OptiScaler menu).
+
+# Style (NVIDIA NGX Style control, 0/1/2). 1 = the style the original runtime used in Stellar Blade (default, as in every
+# package so far); 0 = NVIDIA's default and closest to its reference output; 2 = third style. Anything else falls back to 1.
+# Needs a game restart. Read from this file by the RE9 runtime built after 0.39 (0.39's runtime ignored this line;
+# a system environment variable DLSS5_STYLE still wins over it).
+# 中：NVIDIA Style 0/1/2：1 = 剑星原版风格；默认 1；0 = NVIDIA 默认、最接近参考输出；改了输出风格就变；需重启
+# EN: NVIDIA Style 0/1/2: 1 = Stellar Blade style; default 1; 0 = NVIDIA default, closest to reference; restart needed
+DLSS5_STYLE=1
+
+# 中：亮度/细节,颜色强度，各0..1；auto沿宿主；数值优先菜单；改文件需重启
+# EN: transfer,colour strengths, each 0..1; auto keeps host values; numeric overrides menu; file edits need restart
+DLSS5_STRENGTH=auto
+
+# Temporal output selection: 0 off(default), 1 TheAutomatic Fast History, 2 independent low-frequency EMA. Restart required; modes 1/2 require MP1.
+# 时域选择：0关闭，1 TheAutomatic，2低频时域，3低高频增强；需重启，开启要求单遍。模式1/2/3未知MV明确静态降级；模式1另需logit模块与row。
+DLSS5_TEMPORAL_MODE=0
+# Mode3 only: 0 original NN identity, 1 default enhancement, 2 stronger; range0..2; restart required.
+DLSS5_TEMPORAL_ENHANCE_STRENGTH=1

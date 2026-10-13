@@ -24,6 +24,9 @@ struct Values {
   std::atomic<int32_t> motion_blur{0};            // dao_motion_blur
   std::atomic<double> hdr_paper_white{200.0};     // present_hdr_paper_white
   std::atomic<double> hdr_peak{1000.0};           // present_hdr_peak
+  std::atomic<double> neural_strength{1.0};       // dao_neural_strength
+  // Not a setting: F6 pauses neural rendering and resumes it (DAORecomp/main.cpp).
+  std::atomic<bool> neural_paused{false};
 };
 
 inline Values values;

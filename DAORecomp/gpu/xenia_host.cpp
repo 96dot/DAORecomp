@@ -36,6 +36,7 @@ DECLARE_bool(log_to_stdout);
 DECLARE_bool(dao_present_vsync);
 DECLARE_double(dao_temporal_sharpness);
 DECLARE_bool(dao_frame_generation);
+DECLARE_double(dao_neural_strength);
 DECLARE_int32(anisotropic_override);
 DECLARE_int32(dao_motion_blur);
 DECLARE_double(present_hdr_paper_white);
@@ -139,6 +140,7 @@ namespace dao::gpu
         live.motion_blur = cvars::dao_motion_blur;
         live.hdr_paper_white = cvars::present_hdr_paper_white;
         live.hdr_peak = cvars::present_hdr_peak;
+        live.neural_strength = cvars::dao_neural_strength;
     }
 
     bool InitializeXeniaGraphics(const std::filesystem::path& userRoot)

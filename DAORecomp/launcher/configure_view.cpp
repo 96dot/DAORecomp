@@ -2,6 +2,8 @@
 #include "launcher/launcher_internal.h"
 
 #include "patches/patches.h"
+#include "program.h"
+#include "text.h"
 #include "version.h"
 
 namespace dao::launcher
@@ -32,6 +34,15 @@ namespace dao::launcher
         static_assert(std::size(kFrameRateNames) == std::size(kFrameRates));
         constexpr const char* kMotionBlurNames[] = { "Off", "Low", "High" };
         static_assert(std::size(kMotionBlurNames) == kMaxMotionBlur + 1);
+        // The names of kNeuralNetworks, and of the passes and styles.
+        constexpr const char* kNeuralNetworkNames[] = { "Auto (720 at 1x, 1080 above)",
+            "Quality (1080-line network)", "Balanced (900-line network)", "Performance (720-line network)" };
+        static_assert(std::size(kNeuralNetworkNames) == std::size(kNeuralNetworks));
+        constexpr const char* kNeuralPassNames[] = { "1x", "2x (stronger)", "3x (strongest)" };
+        static_assert(std::size(kNeuralPassNames) == kMaxNeuralPasses);
+        constexpr const char* kNeuralStyleNames[] = { "0 (NVIDIA's default)", "1 (lmxxf's default)",
+            "2 (NVIDIA's third)" };
+        static_assert(std::size(kNeuralStyleNames) == kMaxNeuralStyle + 1);
 
         // A setting as the game's menus show it: the name above the picker or slider,
         // which `widget` adds as "##value", returning whether it changed.
@@ -78,6 +89,79 @@ namespace dao::launcher
             return changed;
         }
 
+        // Whether the install has neural rendering's runtime and the kernels the
+        // installer compiled for this PC's AMD RDNA 4 GPU.
+        bool NeuralInstalled(State& st)
+        {
+            if (!st.neuralInstalled)
+            {
+                const fs::path here = ProgramPath().parent_path();
+                std::error_code ec;
+                st.neuralInstalled = fs::is_regular_file(here / "LmxxfNrRuntime.dll", ec) &&
+                    fs::is_regular_file(here / "neural" / "HIP" / "SHA256SUMS", ec);
+            }
+            return *st.neuralInstalled;
+        }
+
+        // Whether settings.neuralWeights has the weights (checked when it changes).
+        bool WeightsFound(State& st)
+        {
+            const std::string& weights = st.settings.neuralWeights;
+            if (weights != st.checkedWeights)
+            {
+                st.checkedWeights = weights;
+                std::error_code ec;
+                st.weightsFound =
+                    !weights.empty() && fs::is_regular_file(FromUtf8(weights) / kNeuralWeightsFile, ec);
+            }
+            return st.weightsFound;
+        }
+
+        void NeuralRenderingRows(State& st)
+        {
+            Settings& s = st.settings;
+            const bool installed = NeuralInstalled(st);
+            ImGui::BeginDisabled(!installed || s.temporalUpscaler == TemporalUpscaler::Off);
+            ImGui::Checkbox("Neural rendering (AMD RDNA 4, experimental)", &s.neuralRendering);
+            ImGui::BeginDisabled(!s.neuralRendering);
+            PathRow(st, "Neural rendering weights", PathField::NeuralWeights);
+            if (s.neuralRendering && !WeightsFound(st))
+                ColoredText(kWarning, s.neuralWeights.empty()
+                        ? "Choose the folder of lmxxf's package (or its weights folder)."
+                        : "No weights (block0-ffn.f16) in this folder: it stays off.");
+            SliderRow("Neural rendering strength", &s.neuralStrength, 0.0f, 1.0f, "%.2f");
+            int network = int(std::ranges::find(kNeuralNetworks, s.neuralNetwork) - std::begin(kNeuralNetworks));
+            if (network >= int(std::size(kNeuralNetworks)))
+                network = 0;
+            if (ComboRow("Neural rendering quality", &network, kNeuralNetworkNames,
+                    int(std::size(kNeuralNetworkNames))))
+                s.neuralNetwork = kNeuralNetworks[network];
+            int passes = std::clamp(s.neuralPasses, 1, kMaxNeuralPasses) - 1;
+            if (ComboRow("Neural rendering passes", &passes, kNeuralPassNames, kMaxNeuralPasses))
+                s.neuralPasses = passes + 1;
+            ImGui::BeginDisabled(s.neuralPasses < 2);
+            ImGui::Checkbox("Protect skin from the extra passes", &s.neuralSkinProtect);
+            ImGui::EndDisabled();
+            int style = std::clamp(s.neuralStyle, 0, kMaxNeuralStyle);
+            if (ComboRow("Neural rendering style", &style, kNeuralStyleNames, kMaxNeuralStyle + 1))
+                s.neuralStyle = style;
+            ImGui::EndDisabled();
+            ImGui::EndDisabled();
+            HelpText(installed
+                    ? "Runs the 3D scenes through the neural rendering network of NVIDIA's DLSS 5 before "
+                      "temporal upscaling, with lmxxf's port of it to AMD RDNA 4 (MIT). Its weights are "
+                      "NVIDIA's and don't come with the game: download lmxxf's package from "
+                      "github.com/lmxxf/dlss5-on-amd-9070xt-porting and choose its folder. With HDR "
+                      "output, it keeps the highlights above paper white. The quality is the network's "
+                      "size, which the 3D scenes are fitted to: on an RX 9070 XT about 9.5 ms of GPU time "
+                      "a frame at 1080 lines, 7 ms at 900, less at 720 (Auto: 720 at 1x, 1080 above). "
+                      "Each pass costs that again and strengthens the look; skin protection keeps skin as "
+                      "the first pass made it. The styles are NVIDIA's three (0 is NVIDIA's default, 1 "
+                      "lmxxf's). Strength applies at once in the game; the rest on restart."
+                    : "Needs an AMD Radeon RX 9000 series GPU (RDNA 4) and the AMD driver on Windows: the "
+                      "installer compiles its kernels for it. Install again with that GPU to get it.");
+        }
+
         bool PatchOn(const Settings& settings, const patches::Patch& patch)
         {
             const auto it = settings.patches.find(patch.id);
@@ -86,6 +170,7 @@ namespace dao::launcher
 
         void GraphicsTab(State& st)
         {
+            TakeDialogChoices(st);
             Settings& s = st.settings;
 
             Section("Resolution");
@@ -117,6 +202,8 @@ namespace dao::launcher
                      "half a frame more latency. Best with the frame rate at half the display's refresh rate "
                      "(60 fps on a 120 Hz display); when the display can't show twice the frame rate, only the "
                      "real frames are shown.");
+            ImGui::Spacing();
+            NeuralRenderingRows(st);
             ImGui::Spacing();
             int upscaler = int(s.upscaler);
             if (ComboRow("Upscaler", &upscaler, kUpscalers, int(std::size(kUpscalers))))
@@ -291,6 +378,13 @@ namespace dao::launcher
             s.temporalUpscaler = defaults.temporalUpscaler;
             s.temporalSharpness = defaults.temporalSharpness;
             s.frameGeneration = defaults.frameGeneration;
+            // (Not the weights' folder: it's where the player's download is.)
+            s.neuralRendering = defaults.neuralRendering;
+            s.neuralStrength = defaults.neuralStrength;
+            s.neuralNetwork = defaults.neuralNetwork;
+            s.neuralPasses = defaults.neuralPasses;
+            s.neuralSkinProtect = defaults.neuralSkinProtect;
+            s.neuralStyle = defaults.neuralStyle;
             s.upscaler = defaults.upscaler;
             s.sharpness = defaults.sharpness;
             s.anisotropicFiltering = defaults.anisotropicFiltering;
@@ -329,6 +423,35 @@ namespace dao::launcher
             { "Advanced", AdvancedTab, nullptr },
         };
         static_assert(std::size(kTabs) == kConfigureTabs);
+    }
+
+    // The weights' folder in `folder` (lmxxf's package or a folder in it): the one
+    // with block0-ffn.f16, `folder` or up to kMaxDepth levels down.
+    std::optional<fs::path> FindNeuralWeights(const fs::path& folder)
+    {
+        constexpr int kMaxDepth = 4;
+        // (A folder as large as a drive isn't searched through.)
+        constexpr int kMaxEntries = 20000;
+        std::error_code ec;
+        if (fs::is_regular_file(folder / kNeuralWeightsFile, ec))
+            return folder;
+        int entries = 0;
+        for (fs::recursive_directory_iterator it(folder, fs::directory_options::skip_permission_denied, ec), end;
+             !ec && it != end; it.increment(ec))
+        {
+            if (++entries > kMaxEntries)
+                break;
+            // (Links to folders aren't followed.)
+            std::error_code entryEc;
+            if (!it->is_directory(entryEc))
+                continue;
+            if (fs::is_regular_file(it->path() / kNeuralWeightsFile, entryEc))
+                return it->path();
+            // (Its contents would be a level deeper.)
+            if (it.depth() + 1 >= kMaxDepth)
+                it.disable_recursion_pending();
+        }
+        return std::nullopt;
     }
 
     void ConfigureView(State& st, const Layout& layout)

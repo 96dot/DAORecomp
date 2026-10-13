@@ -26,6 +26,7 @@
 #include <fstream>
 
 #include "gpu/video.h"
+#include "xenia/dao_live_settings.h"
 #include "gpu/frame_history.h"
 
 using namespace dao::kernel;
@@ -409,26 +410,34 @@ int main(int argc, char** argv)
     if (frameHistory)
         dao::gpu::StartFrameHistory(userRoot);
 
-    // Debug hotkeys (game window focused): F10 switches between the game's own 30
-    // fps and the frame rate set, F12 saves the frame history. Polled at 20 Hz: each poll is a few window system
-    // calls (round trips to wineserver on Proton), and a key press is longer.
-    std::thread([frameHistory] {
-        bool wasDown[2] = {};
+    // Hotkeys (game window focused): F6 pauses neural rendering and resumes it, F10
+    // switches between the game's own 30 fps and the frame rate set, F12 saves the
+    // frame history (DAO_FRAME_HISTORY). Polled at 20 Hz: each poll is a few window
+    // system calls (round trips to wineserver on Proton), and a key press is longer.
+    std::thread([frameHistory, neural = dao::GetSettings().neuralRendering] {
+        constexpr int keys[] = { VK_F6, VK_F10, VK_F12 };
+        bool wasDown[std::size(keys)] = {};
         for (;;)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             DWORD process = 0;
             GetWindowThreadProcessId(GetForegroundWindow(), &process);
             const bool focused = process == GetCurrentProcessId();
-            const int keys[2] = { VK_F10, VK_F12 };
-            for (int i = 0; i < 2; i++)
+            for (size_t i = 0; i < std::size(keys); i++)
             {
                 const bool down = focused && (GetAsyncKeyState(keys[i]) & 0x8000);
                 if (down && !wasDown[i])
                 {
-                    if (keys[i] == VK_F10)
+                    if (keys[i] == VK_F6 && neural)
+                    {
+                        auto& paused = xe::dao_live::values.neural_paused;
+                        const bool pause = !paused.load(std::memory_order_relaxed);
+                        paused.store(pause, std::memory_order_relaxed);
+                        LOGI("Neural rendering: {} (F6)", pause ? "paused" : "resumed");
+                    }
+                    else if (keys[i] == VK_F10)
                         dao::gpu::ToggleGameFrameRate();
-                    else if (frameHistory)
+                    else if (keys[i] == VK_F12 && frameHistory)
                         dao::gpu::SaveFrameHistory();
                 }
                 wasDown[i] = down;

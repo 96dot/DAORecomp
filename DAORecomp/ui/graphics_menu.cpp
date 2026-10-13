@@ -32,6 +32,12 @@ namespace dao::ui
             TemporalUpscaler,
             TemporalSharpness,
             FrameGeneration,
+            NeuralRendering,
+            NeuralStrength,
+            NeuralNetwork,
+            NeuralPasses,
+            NeuralSkinProtect,
+            NeuralStyle,
             Upscaler,
             Sharpness,
             AnisotropicFiltering,
@@ -61,6 +67,12 @@ namespace dao::ui
             { "TemporalUpscaler", true },
             { "TemporalSharpness", false },
             { "FrameGeneration", false },
+            { "NeuralRendering", true },
+            { "NeuralStrength", false },
+            { "NeuralNetwork", true },
+            { "NeuralPasses", true },
+            { "NeuralSkinProtect", true },
+            { "NeuralStyle", true },
             { "Upscaler", false },
             { "Sharpness", false },
             { "AnisotropicFiltering", false },
@@ -78,6 +90,8 @@ namespace dao::ui
 
         constexpr std::string_view kPrefix = "DAORecomp.";
         constexpr std::string_view kPendingPrefix = "Pending.";
+        // "Available.<Key>": 0 if the tab hides the setting.
+        constexpr std::string_view kAvailablePrefix = "Available.";
         // The slider steps of the sharpness settings (0 to 10).
         constexpr double kSliderSteps = 10.0;
 
@@ -165,6 +179,12 @@ namespace dao::ui
             case Key::TemporalUpscaler: return int(s.temporalUpscaler);
             case Key::TemporalSharpness: return std::round(s.temporalSharpness * kSliderSteps);
             case Key::FrameGeneration: return s.frameGeneration;
+            case Key::NeuralRendering: return s.neuralRendering;
+            case Key::NeuralStrength: return std::round(s.neuralStrength * kSliderSteps);
+            case Key::NeuralNetwork: return s.neuralNetwork;
+            case Key::NeuralPasses: return s.neuralPasses;
+            case Key::NeuralSkinProtect: return s.neuralSkinProtect;
+            case Key::NeuralStyle: return s.neuralStyle;
             case Key::Upscaler: return int(s.upscaler);
             case Key::Sharpness: return std::round(SharpnessSteps(s));
             case Key::AnisotropicFiltering: return s.anisotropicFiltering;
@@ -199,6 +219,12 @@ namespace dao::ui
                 s.temporalSharpness = float(value / kSliderSteps);
                 break;
             case Key::FrameGeneration: s.frameGeneration = whole != 0; break;
+            case Key::NeuralRendering: s.neuralRendering = whole != 0; break;
+            case Key::NeuralStrength: s.neuralStrength = float(value / kSliderSteps); break;
+            case Key::NeuralNetwork: s.neuralNetwork = whole; break;
+            case Key::NeuralPasses: s.neuralPasses = whole; break;
+            case Key::NeuralSkinProtect: s.neuralSkinProtect = whole != 0; break;
+            case Key::NeuralStyle: s.neuralStyle = whole; break;
             case Key::Upscaler:
             {
                 // The sharpening slider keeps its position.
@@ -244,6 +270,12 @@ namespace dao::ui
             case Key::TemporalUpscaler: to.temporalUpscaler = from.temporalUpscaler; break;
             case Key::TemporalSharpness: to.temporalSharpness = from.temporalSharpness; break;
             case Key::FrameGeneration: to.frameGeneration = from.frameGeneration; break;
+            case Key::NeuralRendering: to.neuralRendering = from.neuralRendering; break;
+            case Key::NeuralStrength: to.neuralStrength = from.neuralStrength; break;
+            case Key::NeuralNetwork: to.neuralNetwork = from.neuralNetwork; break;
+            case Key::NeuralPasses: to.neuralPasses = from.neuralPasses; break;
+            case Key::NeuralSkinProtect: to.neuralSkinProtect = from.neuralSkinProtect; break;
+            case Key::NeuralStyle: to.neuralStyle = from.neuralStyle; break;
             case Key::Upscaler:
             case Key::Sharpness:
                 to.upscaler = from.upscaler;
@@ -275,6 +307,7 @@ namespace dao::ui
             case Key::VSync: live.present_vsync = s.vsync; break;
             case Key::TemporalSharpness: live.temporal_sharpness = s.temporalSharpness; break;
             case Key::FrameGeneration: live.frame_generation = s.frameGeneration; break;
+            case Key::NeuralStrength: live.neural_strength = s.neuralStrength; break;
             case Key::Upscaler:
             case Key::Sharpness: gpu::XeniaSetOutputScaling(s.upscaler, s.sharpness); break;
             case Key::AnisotropicFiltering:
@@ -291,11 +324,48 @@ namespace dao::ui
             }
         }
 
+        // Neural rendering's settings are shown where it can run: the install has its
+        // runtime and kernels (for an AMD RDNA 4 GPU), the launcher was given the
+        // weights, and temporal upscaling is on (it runs before it), as in the launcher.
+        bool NeuralAvailable(const Settings& s)
+        {
+            static const bool installed = [] {
+                const std::filesystem::path here = ProgramPath().parent_path();
+                std::error_code ec;
+                return std::filesystem::is_regular_file(here / "LmxxfNrRuntime.dll", ec) &&
+                    std::filesystem::is_regular_file(here / "neural" / "HIP" / "SHA256SUMS", ec);
+            }();
+            return installed && !s.neuralWeights.empty() &&
+                s.temporalUpscaler != TemporalUpscaler::Off;
+        }
+
+        bool Available(const Settings& s, Key key)
+        {
+            switch (key)
+            {
+            case Key::NeuralRendering:
+            case Key::NeuralStrength:
+            case Key::NeuralNetwork:
+            case Key::NeuralPasses:
+            case Key::NeuralSkinProtect:
+            case Key::NeuralStyle: return NeuralAvailable(s);
+            default: break;
+            }
+            return true;
+        }
+
         // The value the script reads for "DAORecomp.<name>", if it's a setting.
         std::optional<double> MenuNumber(std::string_view name)
         {
             std::lock_guard lock(s_menuMutex);
             const Settings& s = Menu();
+            if (name.starts_with(kAvailablePrefix))
+            {
+                const auto key = FindKey(name.substr(kAvailablePrefix.size()));
+                if (!key)
+                    return std::nullopt;
+                return Available(s, *key) ? 1.0 : 0.0;
+            }
             if (name.starts_with(kPendingPrefix))
             {
                 const auto key = FindKey(name.substr(kPendingPrefix.size()));
