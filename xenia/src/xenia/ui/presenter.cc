@@ -82,6 +82,9 @@ Presenter::~Presenter() {
   // it if needed.
   assert_false(is_executing_ui_drawers_);
 
+  // DAO: normally stopped by the implementation already.
+  DaoStopPacer();
+
 #if XE_PLATFORM_WIN32
   if (dxgi_ui_tick_thread_.joinable()) {
     {
@@ -353,7 +356,7 @@ bool Presenter::RefreshGuestOutput(
     uint32_t frontbuffer_width, uint32_t frontbuffer_height,
     uint32_t display_aspect_ratio_x, uint32_t display_aspect_ratio_y,
     std::function<bool(GuestOutputRefreshContext& context)> refresher,
-    bool sharpened, bool game_hdr) {
+    bool sharpened, bool game_hdr, bool dao_generated) {
   GuestOutputProperties& writable_properties =
       guest_output_properties_[guest_output_mailbox_writable_];
   writable_properties.frontbuffer_width = frontbuffer_width;
@@ -363,11 +366,14 @@ bool Presenter::RefreshGuestOutput(
   writable_properties.is_8bpc = false;
   writable_properties.sharpened = sharpened;
   writable_properties.game_hdr = game_hdr;
+  writable_properties.dao_generated = dao_generated;
+  writable_properties.dao_serial = ++dao_serial_;
   bool is_active = writable_properties.IsActive();
   if (is_active) {
     if (!RefreshGuestOutputImpl(guest_output_mailbox_writable_,
                                 frontbuffer_width, frontbuffer_height,
-                                refresher, writable_properties.is_8bpc)) {
+                                refresher, writable_properties.is_8bpc,
+                                writable_properties.dao_generated)) {
       // If failed to refresh, don't send the currently writable image to the
       // mailbox as it may be in an undefined state. Don't disable the guest
       // output either though because the failure may be something transient.
@@ -420,6 +426,12 @@ bool Presenter::RefreshGuestOutput(
     // currently not accessible to the host presentation.
     guest_output_mailbox_writable_ =
         (3 - last_acquired - guest_output_mailbox_writable_) % 3;
+  }
+
+  // DAO: with a generated frame, the frame generation pacer may present it
+  // all (dao_frame_pacer.cc).
+  if (DaoQueueFramePaints(writable_properties)) {
+    return is_active;
   }
 
   // Trigger the presentation on the host.
@@ -627,8 +639,14 @@ std::unique_lock<std::mutex> Presenter::ConsumeGuestOutput(
       guest_output_mailbox_acquired_and_ready_.load(std::memory_order_relaxed);
   // Desired acquired = current ready.
   // Desired ready = current ready (changed only by the producer).
+  // DAO: the frame generation pacer paints the real frame of the acquired
+  // image, keeping it.
+  const bool dao_keep_acquired = DaoKeepAcquired(
+      guest_output_properties_[old_acquired_and_ready & 3]);
   uint32_t desired_acquired_and_ready =
-      (old_acquired_and_ready & ~uint32_t(3)) | (old_acquired_and_ready >> 2);
+      dao_keep_acquired ? old_acquired_and_ready
+                        : (old_acquired_and_ready & ~uint32_t(3)) |
+                              (old_acquired_and_ready >> 2);
   // Either the same image as during the last consumption, or a new one, is
   // satisfying. However, if it's new, using memory_order_acq_rel to acquire the
   // new ready image (to make it acquired) and to release the old acquired image

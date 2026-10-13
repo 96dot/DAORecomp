@@ -19,6 +19,7 @@ namespace xe::dao_live {
 struct Values {
   std::atomic<bool> present_vsync{true};          // dao_present_vsync
   std::atomic<double> temporal_sharpness{0.3};    // dao_temporal_sharpness
+  std::atomic<bool> frame_generation{false};      // dao_frame_generation
   std::atomic<int32_t> anisotropic_override{-1};  // anisotropic_override
   std::atomic<int32_t> motion_blur{0};            // dao_motion_blur
   std::atomic<double> hdr_paper_white{200.0};     // present_hdr_paper_white

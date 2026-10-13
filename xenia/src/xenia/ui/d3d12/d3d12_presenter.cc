@@ -53,6 +53,9 @@ namespace shaders {
 }  // namespace shaders
 
 D3D12Presenter::~D3D12Presenter() {
+  // DAO: the frame generation pacer stopped before what it paints with is
+  // destroyed.
+  DaoStopPacer();
   // Await completion of the usage of everything before destroying anything,
   // irrespective of the declaration order in the class.
   // From most likely the latest to most likely the earliest to be signaled, so
@@ -416,11 +419,14 @@ bool D3D12Presenter::RefreshGuestOutputImpl(
     uint32_t mailbox_index, uint32_t frontbuffer_width,
     uint32_t frontbuffer_height,
     std::function<bool(GuestOutputRefreshContext& context)> refresher,
-    bool& is_8bpc_out_ref) {
+    bool& is_8bpc_out_ref, bool& dao_generated_ref) {
   assert_not_zero(frontbuffer_width);
   assert_not_zero(frontbuffer_height);
   std::pair<uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>>&
       guest_output_resource_ref = guest_output_resources_[mailbox_index];
+  // DAO: and the slot's generated frame (frame generation), refreshed with it.
+  Microsoft::WRL::ComPtr<ID3D12Resource>& dao_generated_resource =
+      dao_generated_resources_[mailbox_index];
   if (guest_output_resource_ref.second) {
     D3D12_RESOURCE_DESC guest_output_resource_current_desc =
         guest_output_resource_ref.second->GetDesc();
@@ -431,6 +437,7 @@ bool D3D12Presenter::RefreshGuestOutputImpl(
       guest_output_resource_refresher_completion_timeline_
           ->AwaitSubmissionAndUpdateCompleted(guest_output_resource_ref.first);
       guest_output_resource_ref.second.Reset();
+      dao_generated_resource.Reset();
     }
   }
   if (!guest_output_resource_ref.second) {
@@ -459,9 +466,37 @@ bool D3D12Presenter::RefreshGuestOutputImpl(
       return false;
     }
   }
-  D3D12GuestOutputRefreshContext context(is_8bpc_out_ref,
-                                         guest_output_resource_ref.second.Get(),
-                                         GuestOutputFormat());
+  // DAO: the same, for the generated frame: none shown if it can't be made
+  // (not tried again at this size); released when frame generation is off.
+  if (dao_generated_ref && !dao_generated_resource &&
+      (dao_generated_failed_size_[0] != frontbuffer_width ||
+       dao_generated_failed_size_[1] != frontbuffer_height)) {
+    const D3D12_RESOURCE_DESC dao_generated_desc =
+        guest_output_resource_ref.second->GetDesc();
+    if (FAILED(provider_.GetDevice()->CreateCommittedResource(
+            &util::kHeapPropertiesDefault,
+            provider_.GetHeapFlagCreateNotZeroed(), &dao_generated_desc,
+            kGuestOutputInternalState, nullptr,
+            IID_PPV_ARGS(&dao_generated_resource)))) {
+      XELOGE(
+          "D3D12Presenter: Failed to create the generated frame {}x{} texture",
+          frontbuffer_width, frontbuffer_height);
+      dao_generated_resource.Reset();
+      dao_generated_failed_size_[0] = frontbuffer_width;
+      dao_generated_failed_size_[1] = frontbuffer_height;
+    }
+  } else if (!dao_generated_ref && dao_generated_resource &&
+             !dao_live::Load(dao_live::values.frame_generation)) {
+    // As on a resize (painting has its own references).
+    guest_output_resource_refresher_completion_timeline_
+        ->AwaitSubmissionAndUpdateCompleted(guest_output_resource_ref.first);
+    dao_generated_resource.Reset();
+  }
+  dao_generated_ref = dao_generated_ref && dao_generated_resource;
+  D3D12GuestOutputRefreshContext context(
+      is_8bpc_out_ref, guest_output_resource_ref.second.Get(),
+      GuestOutputFormat(),
+      dao_generated_ref ? dao_generated_resource.Get() : nullptr);
   bool refresher_succeeded = refresher(context);
   // Even if the refresher has returned false, it still might have submitted
   // some commands referencing the resource. It's better to put an excessive
@@ -551,6 +586,12 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
     if (guest_output_mailbox_index != UINT32_MAX) {
       guest_output_resource =
           guest_output_resources_[guest_output_mailbox_index].second;
+      // DAO: frame generation: the generated frame (dao_frame_pacer.cc).
+      if (DaoPacerPainting() == DaoPacerStage::kGenerated &&
+          guest_output_properties.dao_generated) {
+        guest_output_resource =
+            dao_generated_resources_[guest_output_mailbox_index];
+      }
     }
     // Incremented the reference count of the guest output resource - safe to
     // leave the consumer critical section now as everything here either will be

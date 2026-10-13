@@ -83,6 +83,7 @@ DaoUpscalerImpl::~DaoUpscalerImpl() {
     stream_out_cv_.notify_one();
     stream_out_thread_.join();
   }
+  DestroyFrameGeneration();
   DestroyContext();
   if (ffx_module_) {
     FreeLibrary(ffx_module_);
@@ -258,6 +259,15 @@ bool DaoUpscalerImpl::Initialize() {
   return true;
 }
 
+void DaoUpscalerImpl::ReleaseTexture(Texture& texture) {
+  if (texture.resource) {
+    texture.resource->AddRef();
+    cp_.resources_for_deletion_.emplace_back(cp_.GetCurrentSubmission(),
+                                             texture.resource.Get());
+  }
+  texture = {};
+}
+
 bool DaoUpscalerImpl::EnsureTexture(Texture& texture, DXGI_FORMAT format,
                                     uint32_t width, uint32_t height,
                                     const char* name,
@@ -266,13 +276,7 @@ bool DaoUpscalerImpl::EnsureTexture(Texture& texture, DXGI_FORMAT format,
       texture.height == height) {
     return true;
   }
-  if (texture.resource) {
-    // Release once the GPU is done with it.
-    texture.resource->AddRef();
-    cp_.resources_for_deletion_.emplace_back(cp_.GetCurrentSubmission(),
-                                             texture.resource.Get());
-    texture.resource.Reset();
-  }
+  ReleaseTexture(texture);
   const ui::d3d12::D3D12Provider& provider = cp_.GetD3D12Provider();
   D3D12_RESOURCE_DESC desc = {};
   desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -689,9 +693,19 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
     const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
     uint32_t render_width, uint32_t render_height,
     D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& hdr_out,
-    bool& upscaled_out) {
+    bool& upscaled_out, ID3D12Resource*& generated_out) {
   hdr_out = false;
   upscaled_out = false;
+  generated_out = nullptr;
+  // Whether the previous frame was given to frame generation (this one is
+  // given only if it's upscaled).
+  const bool fg_previous = fg_previous_;
+  fg_previous_ = false;
+  const bool fg_enabled = dao_live::Load(dao_live::values.frame_generation);
+  if (fg_enabled != fg_enabled_) {
+    fg_enabled_ = fg_enabled;
+    OnFrameGenerationToggled(fg_enabled);
+  }
   const auto now = std::chrono::steady_clock::now();
   const float frame_ms =
       std::chrono::duration<float, std::milli>(now - last_swap_).count();
@@ -812,10 +826,41 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
     blur_failed_size_[1] = render_height;
     blur = {};
   }
+  // Frame generation (dao_upscale_fg.cc), from the scene before the UI
+  // (motion-blurred first, into fg_scene_): the UI goes over the generated
+  // frame as over this one. Not while the presenter shows only real frames.
+  ui::Presenter* const presenter = cp_.graphics_system_->presenter();
+  bool generate =
+      FrameGenerationWanted() && presenter &&
+      presenter->DaoGeneratedFramesShown() &&
+      (fg_failed_size_[0] != display_width ||
+       fg_failed_size_[1] != display_height) &&
+      EnsureFrameGeneration(render_width, render_height, display_width,
+                            display_height);
+  if (generate &&
+      !(EnsureTexture(fg_generated_, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                      display_width, display_height, "generated") &&
+        EnsureTexture(fg_composite_, composite_.format, display_width,
+                      display_height, "generated composite") &&
+        (!blur.samples ||
+         EnsureTexture(fg_scene_, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                       display_width, display_height,
+                       "motion-blurred scene")))) {
+    // Not trying again every frame: until the display size changes.
+    fg_failed_size_[0] = display_width;
+    fg_failed_size_[1] = display_height;
+    generate = false;
+  }
+  // Its views: the scene's SRV and UAV, the generated frame's SRV, the
+  // generated composite's UAV.
+  constexpr uint32_t kFrameGenerationViews = 4;
   ui::d3d12::util::DescriptorCpuGpuHandlePair
-      descriptors[kCompositeTables + kBlurViews];
+      descriptors[kCompositeTables + kBlurViews + kFrameGenerationViews];
+  const uint32_t blur_views = blur.samples ? kBlurViews : 0;
   if (!cp_.RequestOneUseSingleViewDescriptors(
-          kCompositeTables + (blur.samples ? kBlurViews : 0), descriptors)) {
+          kCompositeTables + blur_views +
+              (generate ? kFrameGenerationViews : 0),
+          descriptors)) {
     return NotUpscaled("no descriptors", frontbuffer, frontbuffer_srv, srv_out,
                        hdr_out);
   }
@@ -860,7 +905,6 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   device->CreateUnorderedAccessView(composite_.resource.Get(), nullptr, &uav,
                                     descriptors[6].first);
   Transition(upscaled_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  Transition(composite_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   CompositeConstants constants = {};
   constants.dest_size[0] = display_width;
   constants.dest_size[1] = display_height;
@@ -872,6 +916,59 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
                                     : kCompositeHdr;
   constants.blur_samples = blur.samples;
   constants.blur_tile = blur.tile;
+  if (generate) {
+    ui::d3d12::util::DescriptorCpuGpuHandlePair* fg_views =
+        descriptors + kCompositeTables + blur_views;
+    ui::d3d12::util::DescriptorCpuGpuHandlePair tables[kCompositeTables];
+    std::copy_n(descriptors, kCompositeTables, tables);
+    Texture* scene = &upscaled_;
+    if (blur.samples) {
+      // The scene blurred, then the composites without blurring again.
+      srv.Format = fg_scene_.format;
+      device->CreateShaderResourceView(fg_scene_.resource.Get(), &srv,
+                                       fg_views[0].first);
+      uav.Format = fg_scene_.format;
+      device->CreateUnorderedAccessView(fg_scene_.resource.Get(), nullptr,
+                                        &uav, fg_views[1].first);
+      tables[kCompositeTables - 1] = fg_views[1];
+      CompositeConstants scene_constants = constants;
+      scene_constants.mode = kCompositeScene;
+      scene_constants.show_motion = 0;
+      Transition(fg_scene_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      DispatchComposite(tables, scene_constants);
+      Transition(fg_scene_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      // Both composites below (this frame's too) from the blurred scene.
+      descriptors[0] = fg_views[0];
+      constants.blur_samples = 0;
+      scene = &fg_scene_;
+    }
+    Transition(fg_generated_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    cp_.SubmitBarriers();
+    const bool generated = RecordFrameGeneration(
+        *scene, render_width, render_height, frame_ms, fg_previous);
+    if (dao_timing::GpuTiming::Enabled()) {
+      dao_timing::GpuTiming::Get().Mark(cp_, "frame generation");
+    }
+    Transition(fg_generated_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    if (generated) {
+      srv.Format = fg_generated_.format;
+      device->CreateShaderResourceView(fg_generated_.resource.Get(), &srv,
+                                       fg_views[2].first);
+      uav.Format = fg_composite_.format;
+      device->CreateUnorderedAccessView(fg_composite_.resource.Get(), nullptr,
+                                        &uav, fg_views[3].first);
+      // (Again: the scene pass changed its destination.)
+      std::copy_n(descriptors, kCompositeTables, tables);
+      tables[0] = fg_views[2];
+      tables[kCompositeTables - 1] = fg_views[3];
+      Transition(fg_composite_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      DispatchComposite(tables, constants);
+      Transition(fg_composite_,
+                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      generated_out = fg_composite_.resource.Get();
+    }
+  }
+  Transition(composite_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   DispatchComposite(descriptors, constants);
   Transition(composite_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
@@ -1139,11 +1236,12 @@ ID3D12Resource* DaoUpscaler::OnSwap(
     const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
     uint32_t frontbuffer_width, uint32_t frontbuffer_height,
     D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& hdr_out,
-    bool& upscaled_out) {
+    bool& upscaled_out, ID3D12Resource*& generated_out) {
   hdr_out = upscaled_out = false;
+  generated_out = nullptr;
   return impl_ ? impl_->OnSwap(frontbuffer, frontbuffer_srv, frontbuffer_width,
                                frontbuffer_height, srv_out, hdr_out,
-                               upscaled_out)
+                               upscaled_out, generated_out)
                : nullptr;
 }
 

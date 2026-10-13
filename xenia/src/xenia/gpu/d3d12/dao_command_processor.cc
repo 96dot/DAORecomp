@@ -12,6 +12,7 @@
 #include "xenia/dao_live_settings.h"
 #include "xenia/gpu/d3d12/dao_gpu_timing.h"
 #include "xenia/gpu/d3d12/dao_upscale.h"
+#include "xenia/ui/d3d12/d3d12_presenter.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
 
 DECLARE_double(present_hdr_gamma);
@@ -73,17 +74,18 @@ void D3D12CommandProcessor::DaoReplaceSwapTexture(
     ID3D12Resource*& swap_texture_resource,
     D3D12_SHADER_RESOURCE_VIEW_DESC& swap_texture_srv_desc,
     D3D12_RESOURCE_DESC& swap_texture_desc, bool dao_timed,
-    bool& dao_sharpened, bool& dao_hdr) {
+    bool& dao_sharpened, bool& dao_hdr, ID3D12Resource*& dao_generated) {
   if (dao_timed) {
     dao_timing::GpuTiming::Get().Mark(*this, "swap start");
   }
   D3D12_SHADER_RESOURCE_VIEW_DESC dao_upscaled_srv_desc;
   bool dao_upscaled_by_fsr = false;
+  dao_generated = nullptr;
   if (ID3D12Resource* dao_upscaled = DaoUpscaler::OnSwap(
           swap_texture_resource, swap_texture_srv_desc,
           uint32_t(swap_texture_desc.Width),
           uint32_t(swap_texture_desc.Height), dao_upscaled_srv_desc,
-          dao_hdr, dao_upscaled_by_fsr)) {
+          dao_hdr, dao_upscaled_by_fsr, dao_generated)) {
     swap_texture_resource = dao_upscaled;
     swap_texture_srv_desc = dao_upscaled_srv_desc;
     const D3D12_RESOURCE_DESC dao_upscaled_desc = dao_upscaled->GetDesc();
@@ -95,6 +97,35 @@ void D3D12CommandProcessor::DaoReplaceSwapTexture(
       dao_timing::GpuTiming::Get().Mark(*this, "UI composite, motion blur");
     }
   }
+}
+
+void D3D12CommandProcessor::DaoApplyGammaToGenerated(
+    ID3D12Resource* source,
+    const D3D12_SHADER_RESOURCE_VIEW_DESC& source_srv_desc,
+    ID3D12Resource* dest, DXGI_FORMAT dest_format,
+    const D3D12_RESOURCE_DESC& swap_texture_desc,
+    const ui::d3d12::util::DescriptorCpuGpuHandlePair* descriptors) {
+  ID3D12Device* device = GetD3D12Provider().GetDevice();
+  D3D12_UNORDERED_ACCESS_VIEW_DESC dest_uav_desc = {};
+  dest_uav_desc.Format = dest_format;
+  dest_uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+  device->CreateUnorderedAccessView(dest, nullptr, &dest_uav_desc,
+                                    descriptors[0].first);
+  device->CreateShaderResourceView(source, &source_srv_desc,
+                                   descriptors[1].first);
+  PushTransitionBarrier(dest,
+                        ui::d3d12::D3D12Presenter::kGuestOutputInternalState,
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  deferred_command_list_.D3DSetComputeRootDescriptorTable(
+      UINT(ApplyGammaRootParameter::kDestination), descriptors[0].second);
+  deferred_command_list_.D3DSetComputeRootDescriptorTable(
+      UINT(ApplyGammaRootParameter::kSource), descriptors[1].second);
+  SubmitBarriers();
+  deferred_command_list_.D3DDispatch(
+      (uint32_t(swap_texture_desc.Width) + 15) / 16,
+      (uint32_t(swap_texture_desc.Height) + 7) / 8, 1);
+  PushTransitionBarrier(dest, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                        ui::d3d12::D3D12Presenter::kGuestOutputInternalState);
 }
 
 void D3D12CommandProcessor::DaoSetHdrCopyRoot(

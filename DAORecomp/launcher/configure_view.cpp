@@ -82,6 +82,14 @@ namespace dao::launcher
                      "the UI use the upscaler below. In a window no larger than the rendering resolution, it only "
                      "anti-aliases. Off is fastest on a Steam Deck.");
             ImGui::Spacing();
+            ImGui::BeginDisabled(s.temporalUpscaler == TemporalUpscaler::Off);
+            ImGui::Checkbox("Frame generation (FSR 3.1)", &s.frameGeneration);
+            ImGui::EndDisabled();
+            HelpText("Generates a frame between each two of the 3D scenes: twice the frames on the display, for "
+                     "half a frame more latency. Best with the frame rate at half the display's refresh rate "
+                     "(60 fps on a 120 Hz display); when the display can't show twice the frame rate, only the "
+                     "real frames are shown.");
+            ImGui::Spacing();
             int upscaler = int(s.upscaler);
             if (ComboRow("Upscaler", &upscaler, kUpscalers, int(std::size(kUpscalers))))
                 s.upscaler = Upscaler(upscaler);
@@ -248,6 +256,7 @@ namespace dao::launcher
             s.resolutionScale = defaults.resolutionScale;
             s.temporalUpscaler = defaults.temporalUpscaler;
             s.temporalSharpness = defaults.temporalSharpness;
+            s.frameGeneration = defaults.frameGeneration;
             s.upscaler = defaults.upscaler;
             s.sharpness = defaults.sharpness;
             s.anisotropicFiltering = defaults.anisotropicFiltering;

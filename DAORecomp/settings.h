@@ -49,6 +49,11 @@ namespace dao
         // is scaled separately); Auto picks FSR 4 where supported, else FSR 3.1.
         TemporalUpscaler temporalUpscaler = TemporalUpscaler::Auto;
         float temporalSharpness = 0.3f; // 0..1
+        // Frame generation (FSR 3.1): with temporal upscaling, a frame generated
+        // between each two of the 3D scenes, shown half a frame apart: up to twice the
+        // frames on the display (only real ones while it can't show that many), half a
+        // frame more latency.
+        bool frameGeneration = false;
         // Waits for the display's refresh when presenting: no tearing, and no more
         // frames shown than the display refreshes.
         bool vsync = true;

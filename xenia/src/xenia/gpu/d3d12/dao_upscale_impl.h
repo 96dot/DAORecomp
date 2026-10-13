@@ -1,7 +1,8 @@
 // DAO: the temporal upscaler's internals (see dao_upscale.h), shared by its
 // files: dao_upscale.cc (the frame: draws, resolves, the swap and the
-// composite), dao_upscale_fsr.cc (FidelityFX), dao_upscale_motion.cc (motion
-// vectors), dao_upscale_hdr.cc (true HDR) and dao_motion_blur.cc.
+// composite), dao_upscale_fsr.cc (FidelityFX), dao_upscale_fg.cc (frame
+// generation), dao_upscale_motion.cc (motion vectors), dao_upscale_hdr.cc (true
+// HDR) and dao_motion_blur.cc.
 #pragma once
 
 #include <algorithm>
@@ -26,6 +27,7 @@
 
 #include "dx12/ffx_api_dx12.h"
 #include "ffx_api.h"
+#include "ffx_framegeneration.h"
 #include "ffx_upscale.h"
 
 DECLARE_double(present_hdr_gamma);
@@ -124,6 +126,9 @@ enum CompositeMode : uint32_t {
   // or linear.
   kCompositeEncode,
   kCompositeLinearize,
+  // The scene alone, motion-blurred, as FSR output it (frame generation's
+  // input).
+  kCompositeScene,
 };
 
 // SDR white in nits; at least the scRGB unit, as in the presenter.
@@ -165,7 +170,7 @@ class DaoUpscalerImpl {
                          const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
                          uint32_t render_width, uint32_t render_height,
                          D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& hdr_out,
-                         bool& upscaled_out);
+                         bool& upscaled_out, ID3D12Resource*& generated_out);
 
  private:
   struct CopyConstants {
@@ -229,6 +234,13 @@ class DaoUpscalerImpl {
   struct DispatchParams {
     DaoUpscalerImpl* self;
     ffxDispatchDescUpscale desc;
+  };
+  // The same for frame generation's calls.
+  struct FrameGenerationParams {
+    DaoUpscalerImpl* self;
+    ffxConfigureDescFrameGeneration configure;
+    ffxDispatchDescFrameGenerationPrepareV2 prepare;
+    ffxDispatchDescFrameGeneration dispatch;
   };
   // dao_upscale_mv.hlsli.
   struct MotionConstants {
@@ -340,6 +352,8 @@ class DaoUpscalerImpl {
   bool EnsureTexture(Texture& texture, DXGI_FORMAT format, uint32_t width,
                      uint32_t height, const char* name,
                      D3D12_RESOURCE_FLAGS extra_flags = D3D12_RESOURCE_FLAG_NONE);
+  // Released once the GPU is done with it.
+  void ReleaseTexture(Texture& texture);
   void Transition(Texture& texture, D3D12_RESOURCE_STATES state);
   // Copies a rectangle of a render target into one of the FSR input textures.
   void CopyFromRenderTarget(ID3D12Resource* source,
@@ -437,6 +451,22 @@ class DaoUpscalerImpl {
   void InvalidateCommandProcessorState();
   static void ExecuteDispatch(void* context,
                               ID3D12GraphicsCommandList* command_list);
+  // Frame generation (dao_upscale_fg.cc): the live setting, unless it failed.
+  bool FrameGenerationWanted() const;
+  // When the live setting changes: off releases its context and images, on
+  // has the presenter try its frames right away.
+  void OnFrameGenerationToggled(bool enabled);
+  bool EnsureFrameGeneration(uint32_t render_width, uint32_t render_height,
+                             uint32_t display_width, uint32_t display_height);
+  void DestroyFrameGeneration();
+  // The frame between the previous one given and this one's scene (display
+  // size, readable) into fg_generated_ (left in unordered access). False if
+  // it has none to show (the first after a reset, or not previous_given).
+  bool RecordFrameGeneration(const Texture& scene, uint32_t render_width,
+                             uint32_t render_height, float frame_ms,
+                             bool previous_given);
+  static void ExecuteFrameGeneration(void* context,
+                                     ID3D12GraphicsCommandList* command_list);
   void EndFrame(bool upscaled, const char* reason);
 
   D3D12CommandProcessor& cp_;
@@ -447,6 +477,7 @@ class DaoUpscalerImpl {
   PfnFfxDestroyContext ffx_destroy_ = nullptr;
   PfnFfxQuery ffx_query_ = nullptr;
   PfnFfxDispatch ffx_dispatch_ = nullptr;
+  PfnFfxConfigure ffx_configure_ = nullptr;
   bool ffx_failed_ = false;
   ffxContext context_ = nullptr;
   uint32_t context_size_[4] = {};
@@ -499,6 +530,11 @@ class DaoUpscalerImpl {
   Texture composite_;
   // True HDR frames not upscaled: the front buffer HDR-encoded (HdrFormat).
   Texture encoded_;
+  // Frame generation: the motion-blurred scene (its input with motion blur),
+  // the generated frame, and it with the UI (composite_'s format).
+  Texture fg_scene_;
+  Texture fg_generated_;
+  Texture fg_composite_;
   // True HDR: FSR's input, linear: the game's tonemapping pass redone, or
   // the image before the UI linearized when there's no such pass.
   Texture hdr_;
@@ -542,6 +578,20 @@ class DaoUpscalerImpl {
   std::chrono::steady_clock::time_point last_swap_;
 
   DispatchParams dispatch_params_;
+
+  // Frame generation's context, not retried after failing; the display size
+  // its images couldn't be created at; the live setting last seen.
+  ffxContext fg_context_ = nullptr;
+  uint32_t fg_context_size_[4] = {};
+  bool fg_context_hdr_ = false;
+  bool fg_failed_ = false;
+  uint32_t fg_failed_size_[2] = {};
+  bool fg_enabled_ = false;
+  // Its frame IDs (one more for each frame given), and whether the last frame
+  // was given.
+  uint64_t fg_frame_id_ = 0;
+  bool fg_previous_ = false;
+  FrameGenerationParams fg_params_;
 
   // Motion vectors.
   bool motion_available_ = false;

@@ -120,11 +120,13 @@ target_link_options(DAORecomp PRIVATE /STACK:16777216 /MAP /SUBSYSTEM:WINDOWS /E
 
 target_precompile_headers(DAORecomp PRIVATE stdafx.h)
 
-# AMD FidelityFX (FSR 3.1 / FSR 4 temporal upscaling): the signed loader and
-# upscaler DLLs go next to the executable; they're loaded only when enabled.
+# AMD FidelityFX (FSR 3.1 / FSR 4 temporal upscaling, FSR 3.1 frame generation):
+# the signed loader, upscaler and frame generation DLLs go next to the executable;
+# they're loaded only when enabled.
 # (Their own rule, so a missing or changed DLL is copied without relinking the exe.)
 set(_ffx_dlls)
-foreach(dll amd_fidelityfx_loader_dx12.dll amd_fidelityfx_upscaler_dx12.dll)
+foreach(dll amd_fidelityfx_loader_dx12.dll amd_fidelityfx_upscaler_dx12.dll
+        amd_fidelityfx_framegeneration_dx12.dll)
     set(_src ${CMAKE_SOURCE_DIR}/tools/FidelityFX-SDK/Kits/FidelityFX/signedbin/${dll})
     add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${dll}
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_src} ${CMAKE_CURRENT_BINARY_DIR}

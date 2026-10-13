@@ -94,6 +94,7 @@ var ROWS = [
     { key: "TemporalUpscaler", label: "Temporal upscaling", restart: true, values: [0, 1, 2, 3],
       labels: ["Off", "Auto", "FidelityFX FSR 4", "FidelityFX FSR 3.1"] },
     { key: "TemporalSharpness", label: "Temporal sharpening", slider: SLIDER_STEPS },
+    { key: "FrameGeneration", label: "Frame generation (with temporal upscaling)", toggle: true },
     { key: "Upscaler", label: "Output upscaler", values: [0, 1, 2],
       labels: ["Bilinear", "FidelityFX CAS", "FidelityFX FSR 1"] },
     { key: "Sharpness", label: "Output sharpening", slider: SLIDER_STEPS },

@@ -86,10 +86,12 @@ class D3D12Presenter final : public Presenter {
       : public GuestOutputRefreshContext {
    public:
     D3D12GuestOutputRefreshContext(bool& is_8bpc_out_ref,
-                                   ID3D12Resource* resource, DXGI_FORMAT format)
+                                   ID3D12Resource* resource, DXGI_FORMAT format,
+                                   ID3D12Resource* dao_generated = nullptr)
         : GuestOutputRefreshContext(is_8bpc_out_ref),
           resource_(resource),
-          format_(format) {}
+          format_(format),
+          dao_generated_(dao_generated) {}
 
     // format(), supports UAV. The initial state in the callback is
     // kGuestOutputInternalState, and the callback must also transition it back
@@ -97,10 +99,17 @@ class D3D12Presenter final : public Presenter {
     ID3D12Resource* resource_uav_capable() const { return resource_.Get(); }
     // DAO: GuestOutputFormat.
     DXGI_FORMAT format() const { return format_; }
+    // DAO: frame generation: the generated frame's image, as
+    // resource_uav_capable (same size, format and states), or null if the
+    // refresh has none.
+    ID3D12Resource* dao_generated_uav_capable() const {
+      return dao_generated_.Get();
+    }
 
    private:
     Microsoft::WRL::ComPtr<ID3D12Resource> resource_;
     DXGI_FORMAT format_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> dao_generated_;
   };
 
   static std::unique_ptr<D3D12Presenter> Create(
@@ -138,7 +147,7 @@ class D3D12Presenter final : public Presenter {
       uint32_t mailbox_index, uint32_t frontbuffer_width,
       uint32_t frontbuffer_height,
       std::function<bool(GuestOutputRefreshContext& context)> refresher,
-      bool& is_8bpc_out) override;
+      bool& is_8bpc_out, bool& dao_generated_ref) override;
 
   PaintResult PaintAndPresentImpl(bool execute_ui_drawers) override;
 
@@ -207,6 +216,10 @@ class D3D12Presenter final : public Presenter {
     PaintContext& operator=(const PaintContext& paint_context) = delete;
 
     static constexpr uint32_t kSwapChainBufferCount = 3;
+    // DAO: the guest output textures painting may reference: the mailbox's,
+    // and their generated frames (frame generation).
+    static constexpr uint32_t kGuestOutputPaintRefCount =
+        kGuestOutputMailboxSize * 2;
 
     enum RTVIndex : UINT {
       // Swap chain buffers - updated when creating the swap chain
@@ -232,7 +245,7 @@ class D3D12Presenter final : public Presenter {
       // Intermediate textures - the last usage is
       // guest_output_intermediate_texture_paint_last_usage_.
       kViewIndexGuestOutputIntermediate0Srv =
-          kViewIndexGuestOutput0Srv + kGuestOutputMailboxSize,
+          kViewIndexGuestOutput0Srv + kGuestOutputPaintRefCount,
 
       kViewIndexHdrSourceSrv = kViewIndexGuestOutputIntermediate0Srv +
                                kMaxGuestOutputPaintEffects - 1,
@@ -287,7 +300,7 @@ class D3D12Presenter final : public Presenter {
     // needed, is replaced with the new one, awaiting the completion of the last
     // paint usage.
     std::array<std::pair<uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>>,
-               kGuestOutputMailboxSize>
+               kGuestOutputPaintRefCount>
         guest_output_resource_paint_refs;
 
     // Current intermediate textures for guest output painting, refreshed when
@@ -383,6 +396,12 @@ class D3D12Presenter final : public Presenter {
   std::array<std::pair<uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>>,
              kGuestOutputMailboxSize>
       guest_output_resources_;
+  // DAO: frame generation: each mailbox slot's generated frame (the same as
+  // guest_output_resources_, refreshed with it), created when first needed.
+  std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, kGuestOutputMailboxSize>
+      dao_generated_resources_;
+  // The size a generated frame's image last failed to be created at.
+  uint32_t dao_generated_failed_size_[2] = {};
   // The guest output resources are protected by two completion timelines - the
   // refresher one (for writing to them via the guest_output_resources_
   // references) and the paint one (for presenting it via the

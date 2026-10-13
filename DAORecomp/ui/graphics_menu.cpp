@@ -30,6 +30,7 @@ namespace dao::ui
             VSync,
             TemporalUpscaler,
             TemporalSharpness,
+            FrameGeneration,
             Upscaler,
             Sharpness,
             AnisotropicFiltering,
@@ -56,6 +57,7 @@ namespace dao::ui
             { "VSync", false },
             { "TemporalUpscaler", true },
             { "TemporalSharpness", false },
+            { "FrameGeneration", false },
             { "Upscaler", false },
             { "Sharpness", false },
             { "AnisotropicFiltering", false },
@@ -157,6 +159,7 @@ namespace dao::ui
             case Key::VSync: return s.vsync;
             case Key::TemporalUpscaler: return int(s.temporalUpscaler);
             case Key::TemporalSharpness: return std::round(s.temporalSharpness * kSliderSteps);
+            case Key::FrameGeneration: return s.frameGeneration;
             case Key::Upscaler: return int(s.upscaler);
             case Key::Sharpness: return std::round(SharpnessSteps(s));
             case Key::AnisotropicFiltering: return s.anisotropicFiltering;
@@ -188,6 +191,7 @@ namespace dao::ui
             case Key::TemporalSharpness:
                 s.temporalSharpness = float(value / kSliderSteps);
                 break;
+            case Key::FrameGeneration: s.frameGeneration = whole != 0; break;
             case Key::Upscaler:
             {
                 // The sharpening slider keeps its position.
@@ -230,6 +234,7 @@ namespace dao::ui
             case Key::VSync: to.vsync = from.vsync; break;
             case Key::TemporalUpscaler: to.temporalUpscaler = from.temporalUpscaler; break;
             case Key::TemporalSharpness: to.temporalSharpness = from.temporalSharpness; break;
+            case Key::FrameGeneration: to.frameGeneration = from.frameGeneration; break;
             case Key::Upscaler:
             case Key::Sharpness:
                 to.upscaler = from.upscaler;
@@ -258,6 +263,7 @@ namespace dao::ui
             case Key::FrameRate: gpu::SetFrameRate(s.frameRate); break;
             case Key::VSync: live.present_vsync = s.vsync; break;
             case Key::TemporalSharpness: live.temporal_sharpness = s.temporalSharpness; break;
+            case Key::FrameGeneration: live.frame_generation = s.frameGeneration; break;
             case Key::Upscaler:
             case Key::Sharpness: gpu::XeniaSetOutputScaling(s.upscaler, s.sharpness); break;
             case Key::AnisotropicFiltering:

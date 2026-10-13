@@ -35,6 +35,7 @@ DECLARE_path(log_file);
 DECLARE_bool(log_to_stdout);
 DECLARE_bool(dao_present_vsync);
 DECLARE_double(dao_temporal_sharpness);
+DECLARE_bool(dao_frame_generation);
 DECLARE_int32(anisotropic_override);
 DECLARE_int32(dao_motion_blur);
 DECLARE_double(present_hdr_paper_white);
@@ -133,6 +134,7 @@ namespace dao::gpu
         xe::dao_live::Values& live = xe::dao_live::values;
         live.present_vsync = cvars::dao_present_vsync;
         live.temporal_sharpness = cvars::dao_temporal_sharpness;
+        live.frame_generation = cvars::dao_frame_generation;
         live.anisotropic_override = cvars::anisotropic_override;
         live.motion_blur = cvars::dao_motion_blur;
         live.hdr_paper_white = cvars::present_hdr_paper_white;

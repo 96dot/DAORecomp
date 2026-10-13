@@ -23,22 +23,26 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
 - `dao_host.h`: the runtime services Xenia's code calls instead of its kernel and
   CPU modules (interrupts, guest threads, the window).
 - `dao_live_settings.h`: the settings the in-game Graphics menu changes while the
-  game runs (vsync, temporal sharpness, anisotropic filtering, motion blur, HDR
-  paper white and peak), as atomics the GPU, presenter and render threads read
-  instead of their cvars (also in the upstream files `d3d12_texture_cache.cc` and
+  game runs (vsync, temporal sharpness, anisotropic filtering, motion blur, frame
+  generation, HDR paper white and peak), as atomics the GPU, presenter and render
+  threads read instead of their cvars (also in the upstream files `d3d12_texture_cache.cc` and
   `d3d12_presenter.cc`).
 - `gpu/d3d12/dao_upscale.*`: temporal upscaling (FidelityFX), motion vectors, motion
   blur: `dao_upscale.h` is its interface, `dao_upscale_impl.h` the class its files
   share; `dao_upscale.cc` the frame (draws, resolves, the swap, the composite),
   `dao_upscale_fsr.cc` FidelityFX, `dao_upscale_motion.cc` the motion vectors,
-  `dao_upscale_hdr.cc` true HDR, `dao_motion_blur.cc` motion blur.
+  `dao_upscale_hdr.cc` true HDR, `dao_motion_blur.cc` motion blur,
+  `dao_upscale_fg.cc` frame generation (FSR 3.1).
+- `ui/dao_frame_pacer.cc`: frame generation's presentation: the presenter's
+  thread that paints each generated frame and, half a frame later, the real one.
 - `gpu/d3d12/dao_frame_trace.h`, `gpu/d3d12/dao_gpu_timing.h`: diagnostics.
 - `gpu/d3d12/dao_command_processor.cc`, `dao_render_target_cache.cc`,
   `dao_texture_cache.cc`, `ui/d3d12/dao_presenter.cc`, `dao_provider.cc`:
   this project's member functions of the upstream classes next to them, which
   their upstream files call through short `DAO` hooks: the HDR copy and the
   upscaler's image at the swap, waits and GPU-written memory reads (command
-  processor); resolves straight from render targets into textures (render
+  processor, which also applies the gamma ramp to the generated frame);
+  resolves straight from render targets into textures (render
   target and texture caches); the frame latency wait, HDR output and scRGB
   captures (presenter); device removed logging and `DAO_DRED` (provider).
 - `gpu/shaders/dao_*`, `ui/shaders/dao_*`: the upscaler's, resolves' and HDR
@@ -56,7 +60,8 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
 - D3D12: `gpu/d3d12/d3d12_command_processor.*`, `d3d12_graphics_system.*`,
   `d3d12_render_target_cache.*`, `d3d12_texture_cache.*`,
   `deferred_command_list.*`, `pipeline_cache.*`.
-- UI: `ui/presenter.*`, `ui/d3d12/d3d12_presenter.*` (HDR output and its quality High, scRGB throughout; vsync),
+- UI: `ui/presenter.*`, `ui/d3d12/d3d12_presenter.*` (HDR output and its quality High, scRGB throughout; vsync;
+  frame generation: a second image per mailbox slot, handed to the pacer),
   `ui/d3d12/d3d12_provider.*`, `ui/imgui_drawer.*`, `ui/window_win.*`,
   `ui/windowed_app_context_win.h`.
 

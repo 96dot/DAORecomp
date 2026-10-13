@@ -172,6 +172,7 @@ namespace dao
             : temporal == "fsr3"               ? TemporalUpscaler::Fsr3
                                                : TemporalUpscaler::Auto;
         s.temporalSharpness = video["temporal_sharpness"].value_or(s.temporalSharpness);
+        s.frameGeneration = video["frame_generation"].value_or(s.frameGeneration);
         s.vsync = video["vsync"].value_or(s.vsync);
         // (Before frame_rate, unlock_frame_rate chose between 60 and 30.)
         s.frameRate = video["frame_rate"].value_or(video["unlock_frame_rate"].value_or(true) ? 60 : 30);
@@ -250,6 +251,11 @@ sharpness = {}
 # otherwise FSR 3.1), "fsr4", "fsr3". Sharpening 0..1.
 temporal_upscaler = "{}"
 temporal_sharpness = {}
+# Frame generation (AMD FSR 3.1), with temporal upscaling: a frame generated between each
+# two of the 3D scenes doubles the frames shown, for half a frame more latency. Best with
+# frame_rate at half the display's refresh rate (60 fps on a 120 Hz display): when the
+# display can't show twice the frame rate, only the real frames are shown.
+frame_generation = {}
 # Wait for the display's refresh when presenting: no tearing, and no more frames shown
 # than the display refreshes.
 vsync = {}
@@ -284,7 +290,7 @@ window_height = {}
 [patches]
 )",
             s.showLauncher, s.checkForUpdates, s.modsWarningSeen, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
-            TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.vsync, s.frameRate,
+            TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.frameGeneration, s.vsync, s.frameRate,
             s.hdr, s.hdrPaperWhite, s.hdrPeak, HdrQualityName(s.hdrHighQuality), s.anisotropicFiltering, s.shadows, s.postProcessing,
             MotionBlurName(s.motionBlur), s.fullscreen,
             s.windowWidth, s.windowHeight);
@@ -335,6 +341,7 @@ window_height = {}
         SetXeniaCvar("draw_resolution_scale_y", toml::value<int64_t>(s.resolutionScale));
         SetXeniaCvar("dao_temporal_upscaler", toml::value<std::string>(std::string(TemporalUpscalerName(s.temporalUpscaler))));
         SetXeniaCvar("dao_temporal_sharpness", toml::value<double>(s.temporalSharpness));
+        SetXeniaCvar("dao_frame_generation", toml::value<bool>(s.frameGeneration));
         // (Not Xenia's own vsync cvar: the guest's vblanks stay at the console's 60 Hz.)
         SetXeniaCvar("dao_present_vsync", toml::value<bool>(s.vsync));
         SetXeniaCvar("present_hdr", toml::value<bool>(s.hdr));
@@ -362,6 +369,8 @@ window_height = {}
             s.resolutionScale, UpscalerName(s.upscaler), s.sharpness, TemporalUpscalerName(s.temporalUpscaler),
             s.windowWidth, s.windowHeight, s.fullscreen ? " fullscreen" : "", FrameRateName(s.frameRate),
             s.vsync ? ", vsync" : "");
+        if (s.frameGeneration)
+            LOGI("Settings: frame generation");
         if (s.motionBlur)
             LOGI("Settings: motion blur {}", MotionBlurName(s.motionBlur));
         if (s.hdr)

@@ -796,11 +796,23 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // At the swap: the upscaler's image (DaoUpscaler::OnSwap) in place of the
   // front buffer's, if it gives one: dao_sharpened if FSR sharpened it (at
   // the front buffer's size or smaller), dao_hdr if it's the game's HDR.
+  // dao_generated: frame generation's frame to show before it (as
+  // swap_texture_resource now), or nullptr.
   void DaoReplaceSwapTexture(
       ID3D12Resource*& swap_texture_resource,
       D3D12_SHADER_RESOURCE_VIEW_DESC& swap_texture_srv_desc,
       D3D12_RESOURCE_DESC& swap_texture_desc, bool dao_timed,
-      bool& dao_sharpened, bool& dao_hdr);
+      bool& dao_sharpened, bool& dao_hdr, ID3D12Resource*& dao_generated);
+  // In the swap's refresher, after the gamma ramp pass (its root signature,
+  // constants, ramp and pipeline still bound): the same pass from the
+  // generated frame into its guest output image.
+  static constexpr uint32_t kDaoApplyGammaToGeneratedDescriptors = 2;
+  void DaoApplyGammaToGenerated(
+      ID3D12Resource* source,
+      const D3D12_SHADER_RESOURCE_VIEW_DESC& source_srv_desc,
+      ID3D12Resource* dest, DXGI_FORMAT dest_format,
+      const D3D12_RESOURCE_DESC& swap_texture_desc,
+      const ui::d3d12::util::DescriptorCpuGpuHandlePair* descriptors);
   // The HDR copy's root signature and constants, in place of the gamma
   // ramp's.
   void DaoSetHdrCopyRoot(const D3D12_RESOURCE_DESC& swap_texture_desc,

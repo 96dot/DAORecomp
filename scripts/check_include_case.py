@@ -26,6 +26,7 @@ INCLUDE_DIRS = [
     "tools/XenonRecomp/thirdparty/fmt/include", "tools/XenonRecomp/thirdparty/tomlplusplus/include",
     "tools/FidelityFX-SDK/Kits/FidelityFX/api/include",
     "tools/FidelityFX-SDK/Kits/FidelityFX/upscalers/include",
+    "tools/FidelityFX-SDK/Kits/FidelityFX/framegeneration/include",
 ]
 INCLUDE = re.compile(r'^\s*#\s*include\s*([<"])([^>"]+)[>"]', re.M)
 

@@ -2298,8 +2298,17 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   // The image is the game's HDR (PQ, or scRGB with HDR quality High): not for
   // the gamma ramp.
   bool dao_hdr = false;
+  // Frame generation's frame to show before this one: not with FXAA, which
+  // only the real frame would get (FXAA isn't applied to the game's HDR, so
+  // then it's kept).
+  ID3D12Resource* dao_generated = nullptr;
   DaoReplaceSwapTexture(swap_texture_resource, swap_texture_srv_desc,
-                        swap_texture_desc, dao_timed, dao_sharpened, dao_hdr);
+                        swap_texture_desc, dao_timed, dao_sharpened, dao_hdr,
+                        dao_generated);
+  if (!dao_hdr && (GetActualSwapPostEffect() == SwapPostEffect::kFxaa ||
+                   GetActualSwapPostEffect() == SwapPostEffect::kFxaaExtreme)) {
+    dao_generated = nullptr;
+  }
 
   auto aspect = graphics_system_->GetScaledAspectRatio();
 
@@ -2307,7 +2316,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
       uint32_t(swap_texture_desc.Width), uint32_t(swap_texture_desc.Height),
       aspect.first, aspect.second,
       [this, &swap_texture_srv_desc, frontbuffer_format, swap_texture_resource,
-       &swap_texture_desc, dao_timed, dao_hdr,
+       &swap_texture_desc, dao_timed, dao_hdr, dao_generated,
        dao_scrgb = presenter->IsHdrScrgb()](
           ui::Presenter::GuestOutputRefreshContext& context) -> bool {
         const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
@@ -2432,11 +2441,24 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         }
 
         // Destination, source, and if bindful, gamma ramp.
-        ui::d3d12::util::DescriptorCpuGpuHandlePair apply_gamma_descriptors[3];
+        // DAO: then the generated frame's destination and source.
+        ID3D12Resource* const dao_generated_dest =
+            dao_generated
+                ? static_cast<ui::d3d12::D3D12Presenter::
+                                  D3D12GuestOutputRefreshContext&>(context)
+                      .dao_generated_uav_capable()
+                : nullptr;
+        ui::d3d12::util::DescriptorCpuGpuHandlePair
+            apply_gamma_descriptors[3 + kDaoApplyGammaToGeneratedDescriptors];
         ui::d3d12::util::DescriptorCpuGpuHandlePair
             apply_gamma_descriptor_gamma_ramp;
+        const uint32_t apply_gamma_descriptor_count =
+            bindless_resources_used_ ? 2 : 3;
         if (!RequestOneUseSingleViewDescriptors(
-                bindless_resources_used_ ? 2 : 3, apply_gamma_descriptors)) {
+                apply_gamma_descriptor_count +
+                    (dao_generated_dest ? kDaoApplyGammaToGeneratedDescriptors
+                                        : 0),
+                apply_gamma_descriptors)) {
           return false;
         }
         // Must not call anything that can change the descriptor heap from now
@@ -2629,6 +2651,12 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
           PushTransitionBarrier(apply_gamma_dest,
                                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                                 apply_gamma_dest_initial_state);
+          if (dao_generated_dest) {
+            DaoApplyGammaToGenerated(
+                dao_generated, swap_texture_srv_desc, dao_generated_dest,
+                guest_output_format, swap_texture_desc,
+                apply_gamma_descriptors + apply_gamma_descriptor_count);
+          }
         }
 
         // Need to submit all the commands before giving the image back to the
@@ -2641,7 +2669,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         EndSubmission(true);
         return true;
       },
-      dao_sharpened, dao_hdr);
+      dao_sharpened, dao_hdr, dao_generated != nullptr);
 
   // End the frame even if did not present for any reason (the image refresher
   // was not called), to prevent leaking per-frame resources.

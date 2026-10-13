@@ -6,7 +6,9 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
 - rendering at up to 4K (and higher), with FSR 1 / CAS scaling of the whole image
 - temporal upscaling and anti-aliasing with AMD FSR 4 (RDNA 4) or FSR 3.1, using
   motion vectors generated for the game's 3D scenes, which also drive optional
-  motion blur (of the camera, characters and objects)
+  motion blur (of the camera, characters and objects), and optional FSR 3.1 frame
+  generation (a frame between each two, for a display at twice the frame rate;
+  only real frames are shown on one that can't keep up)
 - HDR output: on an HDR display the 3D scenes are rendered in HDR (the game's
   tonemapping redone without compressing its highlights), upscaled by FSR in HDR;
   HDR quality High keeps it 16-bit scRGB all the way to the display

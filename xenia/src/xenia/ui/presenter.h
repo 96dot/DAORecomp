@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <condition_variable>
@@ -319,7 +320,8 @@ class Presenter {
       uint32_t frontbuffer_width, uint32_t frontbuffer_height,
       uint32_t display_aspect_ratio_x, uint32_t display_aspect_ratio_y,
       std::function<bool(GuestOutputRefreshContext& context)> refresher,
-      bool sharpened = false, bool game_hdr = false);
+      bool sharpened = false, bool game_hdr = false,
+      bool dao_generated = false);
   // The implementation must be callable from any thread, including from
   // multiple at the same time, and it should acquire the latest guest output
   // image via ConsumeGuestOutput.
@@ -356,6 +358,12 @@ class Presenter {
   // frames stay scRGB, in 16-bit float images, from the upscaler to the swap
   // chain, not PQ in 10-bit ones. Fixed when the presenter is initialized.
   bool IsHdrScrgb() const { return hdr_scrgb_; }
+  // DAO: frame generation (dao_frame_pacer.cc). Whether its frames are shown
+  // now: not while only real ones are (the display couldn't keep up, or the
+  // UI thread paints), when the GPU thread doesn't make them.
+  bool DaoGeneratedFramesShown() const;
+  // When frame generation is turned on: its frames are tried right away.
+  void DaoResetFramePacing();
 
   // Requests (re)painting with the UI if there's UI to draw.
   void RequestUIPaintFromUIThread();
@@ -406,6 +414,11 @@ class Presenter {
     // DAO: the image is the game's HDR: PQ-encoded, or scRGB (linear, 1 = 80
     // nits) with HDR quality High (IsHdrScrgb; see dao_hdr_output.ps).
     bool game_hdr;
+    // DAO: frame generation: a generated frame, the implementation's second
+    // image of the mailbox slot, is shown before this one (dao_frame_pacer.cc).
+    bool dao_generated;
+    // DAO: which refresh this is (tells a new frame from one painted again).
+    uint64_t dao_serial;
 
     GuestOutputProperties() { SetToInactive(); }
 
@@ -422,6 +435,8 @@ class Presenter {
       is_8bpc = false;
       sharpened = false;
       game_hdr = false;
+      dao_generated = false;
+      dao_serial = 0;
     }
   };
 
@@ -692,12 +707,31 @@ class Presenter {
   // is_8bpc_out_ref is where to write whether the source actually has no more
   // than 8 bits of precision per channel (though the image provided by the
   // refresher may still have a higher storage precision) - if not written, it
-  // will be assumed to be false.
+  // will be assumed to be false. DAO: dao_generated_ref, whether the slot gets
+  // a generated frame too: cleared if its image couldn't be created.
   virtual bool RefreshGuestOutputImpl(
       uint32_t mailbox_index, uint32_t frontbuffer_width,
       uint32_t frontbuffer_height,
       std::function<bool(GuestOutputRefreshContext& context)> refresher,
-      bool& is_8bpc_out_ref) = 0;
+      bool& is_8bpc_out_ref, bool& dao_generated_ref) = 0;
+
+  // DAO (dao_frame_pacer.cc): frame generation's pacing.
+  enum class DaoPacerStage {
+    kNone,
+    // Painting a new guest output's generated frame.
+    kGenerated,
+    // Painting the real frame of the guest output acquired for the generated
+    // one (kept acquired, not taking a newer one).
+    kReal,
+  };
+  // What the calling thread is painting for the pacer (kNone: not the pacer).
+  static DaoPacerStage DaoPacerPainting();
+  // ConsumeGuestOutput, with the acquired guest output: whether to keep it
+  // (the pacer painting its real frame) rather than take the ready one.
+  static bool DaoKeepAcquired(const GuestOutputProperties& acquired);
+  // Stops the pacer thread: before the implementation it paints with is
+  // destroyed.
+  void DaoStopPacer();
 
   // For guest output capturing (for debugging use thus - shouldn't be adding
   // any noise like dithering that's not present in the original image),
@@ -915,6 +949,46 @@ class Presenter {
   std::mutex paint_mode_mutex_;
   // UI thread: writable, guest output thread: read-only.
   PaintMode paint_mode_ = PaintMode::kNone;
+
+  // DAO: frame generation's pacing (dao_frame_pacer.cc).
+  // Guest output thread, from RefreshGuestOutput with the new guest output:
+  // whether the pacer thread paints it (its generated frame, then the real
+  // one), else the caller paints it as usual.
+  bool DaoQueueFramePaints(const GuestOutputProperties& properties);
+  void DaoPacerThread();
+  // After falling behind, how long only real frames are shown before trying
+  // generated ones again: doubled each time it falls behind again soon after
+  // (a display that can't keep up at all), back to the least kDaoRealOnlyMax
+  // after the last time.
+  static constexpr std::chrono::seconds kDaoRealOnlyMin{5};
+  static constexpr std::chrono::seconds kDaoRealOnlyMax{60};
+  // The refresh count (the guest output thread's).
+  uint64_t dao_serial_ = 0;
+  // Until when only real frames are shown (a steady_clock count), written
+  // under dao_pacer_mutex_.
+  std::atomic<std::chrono::steady_clock::rep> dao_real_only_until_{0};
+  // The rest under dao_pacer_mutex_ (taken after paint_mode_mutex_ when
+  // both are): the pacer's next paint (kNone: none) of which guest output,
+  // which arrived when, and an event waking it for one (a Win32 event, made
+  // with the thread); whether the last guest output was handed to it; how
+  // often it has fallen behind lately (0 to 1); how long only real frames are
+  // shown next time;
+  // and the smoothed interval between new guest outputs (60 fps until two
+  // have come).
+  std::mutex dao_pacer_mutex_;
+  std::condition_variable dao_pacer_cv_;
+  std::thread dao_pacer_thread_;
+  void* dao_pacer_wake_ = nullptr;
+  bool dao_pacer_shutdown_ = false;
+  DaoPacerStage dao_pacer_stage_ = DaoPacerStage::kNone;
+  uint64_t dao_pacer_serial_ = 0;
+  std::chrono::steady_clock::time_point dao_pacer_arrival_;
+  bool dao_pacer_queued_last_ = false;
+  double dao_pacer_behind_ = 0.0;
+  std::chrono::steady_clock::duration dao_real_only_for_ = kDaoRealOnlyMin;
+  bool dao_pacer_behind_logged_ = false;
+  std::chrono::steady_clock::time_point dao_last_new_frame_;
+  double dao_frame_interval_ms_ = 1000.0 / 60.0;
 
   // These fields can be accessed _exclusively_ by either the UI thread or the
   // guest output thread, depending on paint_mode_.

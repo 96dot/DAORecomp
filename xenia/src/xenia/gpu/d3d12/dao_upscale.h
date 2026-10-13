@@ -1,6 +1,7 @@
 // DAO: temporal upscaling of 3D scenes with AMD FSR 3.1 / FSR 4, through the
 // FidelityFX API (amd_fidelityfx_loader_dx12.dll and
-// amd_fidelityfx_upscaler_dx12.dll next to the executable, loaded on demand).
+// amd_fidelityfx_upscaler_dx12.dll next to the executable, loaded on demand;
+// amd_fidelityfx_framegeneration_dx12.dll for frame generation).
 //
 // A 3D frame of the game (Eclipse engine, Xbox 360 Direct3D 9):
 //   depth prepass, shadow maps -> scene draws (2xMSAA, two predicated tiles,
@@ -28,6 +29,9 @@
 // At the swap, the FSR output is composited with the UI (where the front buffer
 // differs from the image FSR got, the front buffer is scaled up instead) and
 // replaces the front buffer as the guest output, at the size it is shown at.
+// With frame generation, a frame between the previous one and this one is
+// generated from the FSR output (dao_upscale_fg.cc) and composited with the UI
+// the same way; the presenter shows it before this one.
 #pragma once
 
 #include "xenia/ui/d3d12/d3d12_api.h"
@@ -82,13 +86,16 @@ class DaoUpscaler {
   // image to present instead (at the size of the window area it's shown in)
   // and its view, or nullptr to present the front buffer. hdr_out: the image is
   // the game's HDR (dao_true_hdr), PQ-encoded or scRGB (the presenter's
-  // IsHdrScrgb); upscaled_out: by FSR (else the front buffer, only encoded).
+  // IsHdrScrgb); upscaled_out: by FSR (else the front buffer, only encoded);
+  // generated_out: the generated frame to show before it (same size, format
+  // and srv_out; recorded, not yet made: see ExecuteFrameGeneration), or
+  // nullptr.
   static ID3D12Resource* OnSwap(
       ID3D12Resource* frontbuffer,
       const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
       uint32_t frontbuffer_width, uint32_t frontbuffer_height,
       D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& hdr_out,
-      bool& upscaled_out);
+      bool& upscaled_out, ID3D12Resource*& generated_out);
 
  private:
   friend class DaoUpscalerImpl;

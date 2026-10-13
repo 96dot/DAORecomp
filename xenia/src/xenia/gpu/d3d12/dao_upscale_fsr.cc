@@ -48,7 +48,10 @@ bool DaoUpscalerImpl::LoadFfx() {
         reinterpret_cast<PfnFfxQuery>(GetProcAddress(ffx_module_, "ffxQuery"));
     ffx_dispatch_ = reinterpret_cast<PfnFfxDispatch>(
         GetProcAddress(ffx_module_, "ffxDispatch"));
+    ffx_configure_ = reinterpret_cast<PfnFfxConfigure>(
+        GetProcAddress(ffx_module_, "ffxConfigure"));
   }
+  // (ffxConfigure only for frame generation: EnsureFrameGeneration.)
   if (!ffx_create_ || !ffx_destroy_ || !ffx_query_ || !ffx_dispatch_) {
     XELOGE(
         "FSR: amd_fidelityfx_loader_dx12.dll is missing or incomplete, "

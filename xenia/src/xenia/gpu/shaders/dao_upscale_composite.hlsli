@@ -47,6 +47,9 @@ cbuffer DaoCompositeConstants : register(b0) {
 // tonemapping pass).
 #define DAO_MODE_ENCODE 3
 #define DAO_MODE_LINEARIZE 4
+// The scene alone, motion-blurred (not under opaque UI), as dao_upscaled is
+// (frame generation's input).
+#define DAO_MODE_SCENE 5
 
 // PQ (SMPTE ST 2084) from linear (1 = paper white); the inverse of PqToNits in
 // dao_hdr_output.ps.
@@ -151,7 +154,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     return;
   }
   float2 uv = (float2(id.xy) + 0.5) / float2(dao_dest_size);
-  if (dao_mode >= DAO_MODE_ENCODE) {
+  if (dao_mode == DAO_MODE_ENCODE || dao_mode == DAO_MODE_LINEARIZE) {
     float3 color = pow(saturate(dao_final.Load(int3(id.xy, 0)).rgb), dao_gamma);
     dao_dest[id.xy] =
         float4(dao_mode == DAO_MODE_ENCODE ? EncodeHdr(color) : color, 1.0);
@@ -177,6 +180,10 @@ void main(uint3 id : SV_DispatchThreadID) {
     scene = MotionBlur(id.xy, uv, scene);
   }
 #endif
+  if (dao_mode == DAO_MODE_SCENE) {
+    dao_dest[id.xy] = float4(scene, 1.0);
+    return;
+  }
   if (dao_mode == DAO_MODE_HDR_TO_SDR) {
     scene = pow(saturate(scene), 1.0 / dao_gamma);
   }

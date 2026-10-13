@@ -76,11 +76,11 @@ GIT_SOURCES = [
     # SDL 3.4.18: input (incl. DualSense), audio, the launcher window.
     GitSource("thirdparty/SDL", "https://github.com/libsdl-org/SDL.git",
               "829a65d769d935c4852f8159e964312c0957260a"),
-    # AMD FidelityFX SDK 2.3.0: API headers and the signed FSR 3.1/4 DLLs.
+    # AMD FidelityFX SDK 2.3.0: API headers and the signed FSR 3.1/4 and frame generation DLLs.
     GitSource("tools/FidelityFX-SDK", "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git",
               "60f4ea81909200d8542eca14dccb2628b763a9a3",
               sparse=("Kits/FidelityFX/docs/license.md", "Kits/FidelityFX/api/include", "Kits/FidelityFX/upscalers/include",
-                      "Kits/FidelityFX/signedbin")),
+                      "Kits/FidelityFX/framegeneration/include", "Kits/FidelityFX/signedbin")),
 ]
 
 

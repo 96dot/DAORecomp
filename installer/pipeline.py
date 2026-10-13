@@ -468,7 +468,8 @@ def _replace_exe(reporter, built, exe):
 def install(reporter, built, dest, with_shortcuts=False):
     dest.mkdir(parents=True, exist_ok=True)
     # The DLLs first: while the game runs they can't be replaced, and the exe is left as it was.
-    for name in ("amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll"):
+    for name in ("amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll",
+                 "amd_fidelityfx_framegeneration_dx12.dll"):
         _copy_when_free(reporter, built / name, dest / name)
     _replace_exe(reporter, built / "DAORecomp.exe", dest / "DAORecomp.exe")
     ffx = REPO / "tools" / "FidelityFX-SDK" / "Kits" / "FidelityFX" / "docs" / "license.md"
