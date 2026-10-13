@@ -28,6 +28,14 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
   `dao_upscale_fsr.cc` FidelityFX, `dao_upscale_motion.cc` the motion vectors,
   `dao_upscale_hdr.cc` true HDR, `dao_motion_blur.cc` motion blur.
 - `gpu/d3d12/dao_frame_trace.h`, `gpu/d3d12/dao_gpu_timing.h`: diagnostics.
+- `gpu/d3d12/dao_command_processor.cc`, `dao_render_target_cache.cc`,
+  `dao_texture_cache.cc`, `ui/d3d12/dao_presenter.cc`, `dao_provider.cc`:
+  this project's member functions of the upstream classes next to them, which
+  their upstream files call through short `DAO` hooks: the HDR copy and the
+  upscaler's image at the swap, waits and GPU-written memory reads (command
+  processor); resolves straight from render targets into textures (render
+  target and texture caches); the frame latency wait, HDR output and scRGB
+  captures (presenter); device removed logging and `DAO_DRED` (provider).
 - `gpu/shaders/dao_*`, `ui/shaders/dao_*`: the upscaler's, resolves' and HDR
   output's shaders (compiled by `scripts/build_xenia_shaders.py`).
 
