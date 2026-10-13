@@ -1323,7 +1323,7 @@ bool D3D12CommandProcessor::SetupContext() {
     XELOGE("Failed to create the gamma ramp application root signature");
     return false;
   }
-  // DAO: the HDR copy, in the same layout (dao_command_processor.cc).
+  // DAO: the HDR copy's, in the same layout (dao_command_processor.cc).
   if (!DaoInitializeHdrCopy(apply_gamma_root_parameters,
                             apply_gamma_root_signature_desc)) {
     return false;
@@ -1368,6 +1368,9 @@ bool D3D12CommandProcessor::SetupContext() {
     XELOGE(
         "Failed to create the PWL gamma ramp application compute pipeline with "
         "perceptual luma output");
+    return false;
+  }
+  if (!DaoCreateHdrCopyPipeline()) {
     return false;
   }
 

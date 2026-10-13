@@ -129,7 +129,8 @@ add_library(xenia-gpu-d3d12 STATIC)
 dao_xenia_sources(xenia-gpu-d3d12 ${XE_SRC}/gpu/d3d12)
 target_link_libraries(xenia-gpu-d3d12 PUBLIC xenia-gpu xenia-ui-d3d12)
 dao_xenia_defaults(xenia-gpu-d3d12)
-# AMD FidelityFX API headers for the temporal upscaler (gpu/d3d12/dao_upscale*);
+# AMD FidelityFX API headers for the temporal upscaler (gpu/d3d12/dao_upscale*,
+# dao_motion_blur.cc);
 # the DLLs are loaded at run time.
 set(DAO_FFX_SDK ${CMAKE_SOURCE_DIR}/tools/FidelityFX-SDK/Kits/FidelityFX)
 target_include_directories(xenia-gpu-d3d12 SYSTEM PRIVATE ${DAO_FFX_SDK}/api/include ${DAO_FFX_SDK}/upscalers/include)

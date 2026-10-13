@@ -3,7 +3,6 @@
 #include "xenia/gpu/d3d12/dao_upscale_impl.h"
 
 #include <algorithm>
-#include <cmath>
 
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 

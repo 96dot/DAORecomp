@@ -9,7 +9,6 @@
 
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
-#include "xenia/base/math.h"
 #include "xenia/gpu/d3d12/dao_gpu_timing.h"
 #include "xenia/gpu/d3d12/dao_upscale.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
@@ -29,7 +28,6 @@ bool D3D12CommandProcessor::DaoInitializeHdrCopy(
     D3D12_ROOT_PARAMETER* apply_gamma_root_parameters,
     const D3D12_ROOT_SIGNATURE_DESC& apply_gamma_root_signature_desc) {
   const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
-  ID3D12Device* device = provider.GetDevice();
   // The same layout with more constants (the gamma ramp's root signature,
   // created from the description before, is done with it).
   apply_gamma_root_parameters[UINT(ApplyGammaRootParameter::kConstants)]
@@ -41,6 +39,11 @@ bool D3D12CommandProcessor::DaoInitializeHdrCopy(
     XELOGE("Failed to create the HDR copy root signature");
     return false;
   }
+  return true;
+}
+
+bool D3D12CommandProcessor::DaoCreateHdrCopyPipeline() {
+  ID3D12Device* device = GetD3D12Provider().GetDevice();
   *(dao_hdr_copy_pipeline_.ReleaseAndGetAddressOf()) =
       ui::d3d12::util::CreateComputePipeline(
           device, shaders::dao_hdr_copy_cs, sizeof(shaders::dao_hdr_copy_cs),

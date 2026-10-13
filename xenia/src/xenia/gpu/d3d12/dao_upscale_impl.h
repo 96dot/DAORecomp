@@ -34,8 +34,8 @@ namespace xe {
 namespace gpu {
 namespace d3d12 {
 
-// Helpers of the upscaler's files (only they include this header), found
-// there unqualified as when they were one file.
+// Helpers of the upscaler's files (only they include this header), used
+// unqualified through the using-directive after the namespace.
 namespace dao_upscale {
 
 using Microsoft::WRL::ComPtr;

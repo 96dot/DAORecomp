@@ -234,15 +234,16 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // Returns the text to display in the GPU backend name in the window title.
   std::string GetWindowTitleText() const;
 
-  // DAO: resolves stay on the GPU (unless readback_resolve is on), so the CPU
-  // doesn't see what they wrote: copies the GPU's data of a range written by
-  // the GPU into out (downscaled to 1x if resolved at the draw resolution
-  // scale), for the few things the game reads on the CPU, such as its save
-  // thumbnails. address is physical; pixel_size_log2: the resolved format's.
-  // To be called on the command processor thread (CallInThread); waits for the
-  // GPU. Of a range resolved at the draw resolution scale, only whole 32x32
-  // tiles are read (out may be shorter than length). False if the GPU's data
-  // isn't newer than the CPU's, or it can't be read back.
+  // DAO (dao_command_processor.cc): resolves stay on the GPU (unless
+  // readback_resolve is on), so the CPU doesn't see what they wrote: copies the
+  // GPU's data of a range written by the GPU into out (downscaled to 1x if
+  // resolved at the draw resolution scale), for the few things the game reads
+  // on the CPU, such as its save thumbnails. address is physical;
+  // pixel_size_log2: the resolved format's. To be called on the command
+  // processor thread (CallInThread); waits for the GPU. Of a range resolved at
+  // the draw resolution scale, only whole 32x32 tiles are read (out may be
+  // shorter than length). False if the GPU's data isn't newer than the CPU's,
+  // or it can't be read back.
   bool DaoReadGpuWrittenMemory(uint32_t address, uint32_t length,
                                uint32_t pixel_size_log2,
                                std::vector<uint8_t>& out);
@@ -333,6 +334,7 @@ class D3D12CommandProcessor final : public CommandProcessor {
   void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
                  uint32_t frontbuffer_height) override;
 
+  // DAO (dao_command_processor.cc): submits the commands before a wait.
   void PrepareForWait() override;
   void OnPrimaryBufferEnd() override;
 
@@ -783,11 +785,12 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // The 256-entry table ramp is the identity (the HDR copy skips it).
   bool dao_gamma_ramp_identity_ = true;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> dao_hdr_copy_pipeline_;
-  // The HDR copy's root signature (the apply_gamma one's description, its
-  // constants changed) and pipeline, with SetupContext.
+  // With SetupContext: the HDR copy's root signature (the apply_gamma one's
+  // description, its constants changed), then its pipeline.
   bool DaoInitializeHdrCopy(
       D3D12_ROOT_PARAMETER* apply_gamma_root_parameters,
       const D3D12_ROOT_SIGNATURE_DESC& apply_gamma_root_signature_desc);
+  bool DaoCreateHdrCopyPipeline();
   // dao_gamma_ramp_identity_ from the 256-entry table ramp.
   void DaoUpdateGammaRampIdentity();
   // At the swap: the upscaler's image (DaoUpscaler::OnSwap) in place of the

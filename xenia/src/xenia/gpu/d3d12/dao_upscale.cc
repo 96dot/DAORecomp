@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cmath>
 
 #include "xenia/base/logging.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
@@ -32,10 +31,6 @@ DEFINE_bool(dao_true_hdr, true,
             "upscaled by FSR in HDR with temporal upscaling). Otherwise the "
             "SDR image is expanded by the presenter.",
             "GPU");
-DECLARE_bool(present_hdr);
-DECLARE_double(present_hdr_paper_white);
-DECLARE_double(present_hdr_peak);
-DECLARE_double(present_hdr_gamma);
 DEFINE_int32(dao_motion_blur, 0,
              "Motion blur of 3D scenes with temporal upscaling, from its "
              "motion vectors (camera, objects, characters): 0 off, 1 low (the "

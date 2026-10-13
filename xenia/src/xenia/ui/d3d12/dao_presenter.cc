@@ -1,6 +1,6 @@
-// DAO: D3D12Presenter's additions: presenting with vsync and a frame latency
-// of two, HDR output through an scRGB swap chain, and captures of an scRGB
-// guest output.
+// DAO: D3D12Presenter's additions: presenting with vsync (with a frame
+// latency of two), HDR output through an scRGB swap chain, and captures of
+// an scRGB guest output.
 #include "xenia/ui/d3d12/d3d12_presenter.h"
 
 #include <algorithm>
