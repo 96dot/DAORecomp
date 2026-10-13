@@ -2329,7 +2329,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                     dao_upscaled_desc.Height <= swap_texture_desc.Height;
     swap_texture_desc = dao_upscaled_desc;
     if (dao_timed) {
-      dao_timing::GpuTiming::Get().Mark(*this, "UI composite");
+      dao_timing::GpuTiming::Get().Mark(*this, "UI composite, motion blur");
     }
   }
 

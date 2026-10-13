@@ -21,6 +21,7 @@ DECLARE_double(dao_temporal_sharpness);
 DECLARE_int32(anisotropic_override);
 DECLARE_double(present_hdr_paper_white);
 DECLARE_double(present_hdr_peak);
+DECLARE_int32(dao_motion_blur);
 DECLARE_bool(dao_present_vsync);
 
 namespace dao::ui
@@ -41,6 +42,7 @@ namespace dao::ui
             AnisotropicFiltering,
             Shadows,
             PostProcessing,
+            MotionBlur,
             Hdr,
             HdrPaperWhite,
             HdrPeak,
@@ -66,6 +68,7 @@ namespace dao::ui
             { "AnisotropicFiltering", false },
             { "Shadows", false },
             { "PostProcessing", false },
+            { "MotionBlur", false },
             { "Hdr", true },
             { "HdrPaperWhite", false },
             { "HdrPeak", false },
@@ -166,6 +169,7 @@ namespace dao::ui
             case Key::AnisotropicFiltering: return s.anisotropicFiltering;
             case Key::Shadows: return s.shadows;
             case Key::PostProcessing: return s.postProcessing;
+            case Key::MotionBlur: return s.motionBlur;
             case Key::Hdr: return s.hdr;
             case Key::HdrPaperWhite: return s.hdrPaperWhite;
             case Key::HdrPeak: return s.hdrPeak;
@@ -203,6 +207,7 @@ namespace dao::ui
             case Key::AnisotropicFiltering: s.anisotropicFiltering = whole; break;
             case Key::Shadows: s.shadows = whole != 0; break;
             case Key::PostProcessing: s.postProcessing = whole != 0; break;
+            case Key::MotionBlur: s.motionBlur = whole; break;
             case Key::Hdr: s.hdr = whole != 0; break;
             case Key::HdrPaperWhite: s.hdrPaperWhite = float(value); break;
             case Key::HdrPeak: s.hdrPeak = float(value); break;
@@ -240,6 +245,7 @@ namespace dao::ui
             case Key::AnisotropicFiltering: to.anisotropicFiltering = from.anisotropicFiltering; break;
             case Key::Shadows: to.shadows = from.shadows; break;
             case Key::PostProcessing: to.postProcessing = from.postProcessing; break;
+            case Key::MotionBlur: to.motionBlur = from.motionBlur; break;
             case Key::Hdr: to.hdr = from.hdr; break;
             case Key::HdrPaperWhite: to.hdrPaperWhite = from.hdrPaperWhite; break;
             case Key::HdrPeak: to.hdrPeak = from.hdrPeak; break;
@@ -264,6 +270,7 @@ namespace dao::ui
                 break;
             case Key::Shadows: s_shadows = s.shadows; break;
             case Key::PostProcessing: s_postProcessing = s.postProcessing; break;
+            case Key::MotionBlur: cvars::dao_motion_blur = s.motionBlur; break;
             case Key::HdrPaperWhite: cvars::present_hdr_paper_white = s.hdrPaperWhite; break;
             case Key::HdrPeak: cvars::present_hdr_peak = s.hdrPeak; break;
             default: break;

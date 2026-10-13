@@ -5,7 +5,8 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
 
 - rendering at up to 4K (and higher), with FSR 1 / CAS scaling of the whole image
 - temporal upscaling and anti-aliasing with AMD FSR 4 (RDNA 4) or FSR 3.1, using
-  motion vectors generated for the game's 3D scenes
+  motion vectors generated for the game's 3D scenes, which also drive optional
+  motion blur (of the camera, characters and objects)
 - HDR output: on an HDR display the 3D scenes are rendered in HDR (the game's
   tonemapping redone without compressing its highlights), upscaled by FSR in HDR;
   HDR quality High keeps it 16-bit scRGB all the way to the display
@@ -174,7 +175,8 @@ folder there is a backup that couldn't be put in place; the log says why.)
 Most graphics settings can also be changed in the game: *Options → Graphics*. Most
 apply at once; when you leave the menu, the game lists the ones that take effect
 the next time it starts. Turning off dynamic shadows and post-processing there (or in the
-launcher) makes the game faster on low-power devices such as the Steam Deck.
+launcher) makes the game faster on low-power devices such as the Steam Deck. Motion
+blur is off by default; Low and High cost GPU time while the scene moves.
 
 Mods go in `mods/` (see `mods/README.txt`); the easiest way to add one is to drop its
 archive, folder or files on the launcher window (archives are opened with Windows'

@@ -66,6 +66,9 @@ namespace dao
         // upscaling: without it, HDR scenes at another size than the window's are
         // stretched without the output upscaler's FSR 1 or CAS.
         bool hdrHighQuality = false;
+        // Motion blur of the 3D scenes, from temporal upscaling's motion vectors (so
+        // only with it): 0 off, 1 low, up to kMaxMotionBlur high.
+        int motionBlur = 0;
         // Anisotropic texture filtering, one of kAnisotropicLevels.
         int anisotropicFiltering = 0;
         // The engine's dynamic character shadows and its post-processing (frame
@@ -83,12 +86,18 @@ namespace dao
 
     // The limits ClampSettings keeps.
     constexpr int kMaxResolutionScale = 7;
+    // Motion blur's highest level (Settings::motionBlur); the in-game Graphics tab and the
+    // launcher list one name per level.
+    constexpr int kMaxMotionBlur = 2;
     constexpr float kHdrMinNits = 80.0f;
     constexpr float kHdrMaxPaperWhite = 1000.0f;
     constexpr float kHdrMaxPeak = 10000.0f;
 
     // Brings every value within its limits (the HDR peak at least the paper white).
     void ClampSettings(Settings& settings);
+
+    // Motion blur as config.toml writes it: "off", "low", "high".
+    std::string_view MotionBlurName(int motionBlur);
 
     // The HDR quality as config.toml writes it: "high", "standard".
     std::string_view HdrQualityName(bool high);

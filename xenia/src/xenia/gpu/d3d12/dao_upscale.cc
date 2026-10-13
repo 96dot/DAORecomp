@@ -60,6 +60,13 @@ DECLARE_bool(present_hdr);
 DECLARE_double(present_hdr_paper_white);
 DECLARE_double(present_hdr_peak);
 DECLARE_double(present_hdr_gamma);
+DEFINE_int32(dao_motion_blur, 0,
+             "Motion blur of 3D scenes with temporal upscaling, from its "
+             "motion vectors (camera, objects, characters): 0 off, 1 low (the "
+             "shutter open a quarter of the frame time, 8 samples per pixel), "
+             "2 high (half of it, 12 samples). Costs GPU time where the scene "
+             "moves.",
+             "GPU");
 DEFINE_bool(dao_show_motion_vectors, false,
             "Shows the motion vectors instead of the game (red: horizontal, "
             "green: vertical motion, gray: none), for debugging.",
@@ -71,6 +78,9 @@ namespace d3d12 {
 
 namespace shaders {
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_hdr_tonemap_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_motion_blur_neighbor_max_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_motion_blur_tile_max_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_upscale_composite_blur_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_upscale_composite_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_upscale_copy_color_cs.h"
 #include "xenia/gpu/shaders/bytecode/d3d12_5_1/dao_upscale_copy_depth_cs.h"
@@ -406,6 +416,35 @@ class DaoUpscalerImpl {
     float paper_white;
     float gamma;
     uint32_t scrgb;
+    // dao_upscale_composite_blur.cs only.
+    uint32_t blur_samples;
+    uint32_t blur_tile;
+  };
+  // The composite's descriptor tables: t0 to t5, then u0.
+  static constexpr uint32_t kCompositeTables = 7;
+  // dao_motion_blur.hlsli (the tile passes).
+  struct BlurConstants {
+    // The tile pass: the motion vectors' size; the neighbourhood pass: the
+    // tile counts.
+    uint32_t size[2];
+    uint32_t tile;
+    float scale;
+    float cut;
+    uint32_t depth_reversed;
+    uint32_t counter;
+    uint32_t cut_tiles;
+  };
+  // The tile passes' views (RecordMotionBlurTiles).
+  static constexpr uint32_t kBlurViews = 7;
+  // dao_motion_blur this frame (samples 0: off).
+  struct MotionBlur {
+    uint32_t samples = 0;
+    uint32_t tile = 0;  // Render pixels.
+    float scale = 0.0f;
+    float cut = 0.0f;  // Render pixels.
+    uint32_t tile_count[2] = {};
+    // Tiles with a cut that make the whole frame one.
+    uint32_t cut_tiles = 0;
   };
   // dao_hdr_tonemap.cs.
   struct HdrTonemapConstants {
@@ -578,6 +617,21 @@ class DaoUpscalerImpl {
   bool ConvertImage(ID3D12Resource* source,
                     const D3D12_SHADER_RESOURCE_VIEW_DESC& source_srv,
                     Texture& dest, CompositeMode mode);
+  // Motion blur's settings for a frame upscaled now, off if there's none.
+  MotionBlur GetMotionBlur(uint32_t render_width,
+                           uint32_t render_height) const;
+  // Motion blur's tile passes, into blur_pixels_, blur_tiles_ and then
+  // blur_around_ (left readable); descriptors: kBlurViews.
+  void RecordMotionBlurTiles(
+      const MotionBlur& blur, uint32_t render_width, uint32_t render_height,
+      const ui::d3d12::util::DescriptorCpuGpuHandlePair* descriptors);
+  // A tile pass, with its 5 descriptor tables: t0, t1, u0, u1, u2.
+  void DispatchBlurTiles(
+      ID3D12PipelineState* pipeline, const BlurConstants& constants,
+      const ui::d3d12::util::DescriptorCpuGpuHandlePair* const* tables,
+      uint32_t groups_x, uint32_t groups_y);
+  // With kCompositeTables descriptors; with motion blur if
+  // constants.blur_samples.
   void DispatchComposite(const ui::d3d12::util::DescriptorCpuGpuHandlePair*
                              descriptors,
                          CompositeConstants constants);
@@ -637,6 +691,10 @@ class DaoUpscalerImpl {
   ComPtr<ID3D12PipelineState> copy_color_pipeline_;
   ComPtr<ID3D12RootSignature> composite_root_signature_;
   ComPtr<ID3D12PipelineState> composite_pipeline_;
+  ComPtr<ID3D12PipelineState> composite_blur_pipeline_;
+  ComPtr<ID3D12RootSignature> blur_root_signature_;
+  ComPtr<ID3D12PipelineState> blur_tile_max_pipeline_;
+  ComPtr<ID3D12PipelineState> blur_neighbor_max_pipeline_;
   ComPtr<ID3D12RootSignature> hdr_tonemap_root_signature_;
   ComPtr<ID3D12PipelineState> hdr_tonemap_pipeline_;
 
@@ -646,6 +704,22 @@ class DaoUpscalerImpl {
   Texture motion_vectors_;
   // The scene depth for the motion vector pass's depth test.
   Texture motion_depth_;
+  // Motion blur (render resolution): each pixel's blur length and log depth;
+  // per tile, the longest blur vector in it, and around it; 2 counters of
+  // tiles with a camera cut (kept in unordered access), used in turn,
+  // blur_counter_ this frame's.
+  Texture blur_pixels_;
+  Texture blur_tiles_;
+  Texture blur_around_;
+  Texture blur_cuts_;
+  uint32_t blur_counter_ = 0;
+  // The render size its textures couldn't be created at.
+  uint32_t blur_failed_size_[2] = {};
+  // How many of this frame's scene draws have a Less(Equal) depth function,
+  // and how many Greater(Equal): whichever is more tells motion blur which
+  // way the depth grows.
+  uint32_t depth_less_draws_ = 0;
+  uint32_t depth_greater_draws_ = 0;
   // Display resolution.
   Texture upscaled_;
   Texture composite_;
@@ -802,22 +876,47 @@ bool DaoUpscalerImpl::Initialize() {
   copy_root_signature_.Attach(
       ui::d3d12::util::CreateRootSignature(provider, copy_desc));
 
-  // Composite: constants, 4 SRVs (separate tables, the one-use descriptors
+  // Motion blur's tile passes: constants, t0, t1, u0, u1, u2.
+  D3D12_DESCRIPTOR_RANGE blur_ranges[5] = {};
+  for (uint32_t i = 0; i < 5; ++i) {
+    blur_ranges[i].RangeType = i < 2 ? D3D12_DESCRIPTOR_RANGE_TYPE_SRV
+                                     : D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    blur_ranges[i].NumDescriptors = 1;
+    blur_ranges[i].BaseShaderRegister = i < 2 ? i : i - 2;
+  }
+  D3D12_ROOT_PARAMETER blur_parameters[6] = {};
+  blur_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+  blur_parameters[0].Constants.Num32BitValues =
+      sizeof(BlurConstants) / sizeof(uint32_t);
+  for (uint32_t i = 0; i < 5; ++i) {
+    blur_parameters[1 + i].ParameterType =
+        D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    blur_parameters[1 + i].DescriptorTable.NumDescriptorRanges = 1;
+    blur_parameters[1 + i].DescriptorTable.pDescriptorRanges = &blur_ranges[i];
+  }
+  D3D12_ROOT_SIGNATURE_DESC blur_desc = {};
+  blur_desc.NumParameters = UINT(std::size(blur_parameters));
+  blur_desc.pParameters = blur_parameters;
+  blur_root_signature_.Attach(
+      ui::d3d12::util::CreateRootSignature(provider, blur_desc));
+
+  // Composite: constants, 6 SRVs (separate tables, the one-use descriptors
   // aren't contiguous), destination UAV, linear sampler.
-  D3D12_DESCRIPTOR_RANGE composite_ranges[5] = {};
-  for (uint32_t i = 0; i < 4; ++i) {
+  D3D12_DESCRIPTOR_RANGE composite_ranges[kCompositeTables] = {};
+  for (uint32_t i = 0; i < kCompositeTables - 1; ++i) {
     composite_ranges[i].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     composite_ranges[i].NumDescriptors = 1;
     composite_ranges[i].BaseShaderRegister = i;
   }
-  composite_ranges[4].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  composite_ranges[4].NumDescriptors = 1;
-  D3D12_ROOT_PARAMETER composite_parameters[6] = {};
+  composite_ranges[kCompositeTables - 1].RangeType =
+      D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  composite_ranges[kCompositeTables - 1].NumDescriptors = 1;
+  D3D12_ROOT_PARAMETER composite_parameters[1 + kCompositeTables] = {};
   composite_parameters[0].ParameterType =
       D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
   composite_parameters[0].Constants.Num32BitValues =
       sizeof(CompositeConstants) / sizeof(uint32_t);
-  for (uint32_t i = 0; i < 5; ++i) {
+  for (uint32_t i = 0; i < kCompositeTables; ++i) {
     composite_parameters[1 + i].ParameterType =
         D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     composite_parameters[1 + i].DescriptorTable.NumDescriptorRanges = 1;
@@ -868,7 +967,7 @@ bool DaoUpscalerImpl::Initialize() {
   hdr_tonemap_root_signature_.Attach(
       ui::d3d12::util::CreateRootSignature(provider, tonemap_desc));
   if (!copy_root_signature_ || !composite_root_signature_ ||
-      !hdr_tonemap_root_signature_) {
+      !blur_root_signature_ || !hdr_tonemap_root_signature_) {
     XELOGE("FSR: failed to create the root signatures");
     return false;
   }
@@ -890,9 +989,22 @@ bool DaoUpscalerImpl::Initialize() {
   hdr_tonemap_pipeline_.Attach(ui::d3d12::util::CreateComputePipeline(
       device, shaders::dao_hdr_tonemap_cs,
       sizeof(shaders::dao_hdr_tonemap_cs), hdr_tonemap_root_signature_.Get()));
+  composite_blur_pipeline_.Attach(ui::d3d12::util::CreateComputePipeline(
+      device, shaders::dao_upscale_composite_blur_cs,
+      sizeof(shaders::dao_upscale_composite_blur_cs),
+      composite_root_signature_.Get()));
+  blur_tile_max_pipeline_.Attach(ui::d3d12::util::CreateComputePipeline(
+      device, shaders::dao_motion_blur_tile_max_cs,
+      sizeof(shaders::dao_motion_blur_tile_max_cs),
+      blur_root_signature_.Get()));
+  blur_neighbor_max_pipeline_.Attach(ui::d3d12::util::CreateComputePipeline(
+      device, shaders::dao_motion_blur_neighbor_max_cs,
+      sizeof(shaders::dao_motion_blur_neighbor_max_cs),
+      blur_root_signature_.Get()));
   if (!copy_depth_ms_pipeline_ || !copy_depth_pipeline_ ||
       !copy_color_pipeline_ || !composite_pipeline_ ||
-      !hdr_tonemap_pipeline_) {
+      !hdr_tonemap_pipeline_ || !composite_blur_pipeline_ ||
+      !blur_tile_max_pipeline_ || !blur_neighbor_max_pipeline_) {
     XELOGE("FSR: failed to create the pipelines");
     return false;
   }
@@ -1390,10 +1502,12 @@ void DaoUpscalerImpl::OnDraw(const RegisterFile& regs,
         case xenos::CompareFunction::kLess:
         case xenos::CompareFunction::kLessEqual:
           motion.depth_test_offset = -kMotionDepthTestOffset;
+          ++depth_less_draws_;
           break;
         case xenos::CompareFunction::kGreater:
         case xenos::CompareFunction::kGreaterEqual:
           motion.depth_test_offset = kMotionDepthTestOffset;
+          ++depth_greater_draws_;
           break;
         default:
           motion.depth_test_offset = 0.0f;
@@ -2345,12 +2459,37 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
     dao_timing::GpuTiming::Get().Mark(cp_, "FSR");
   }
 
-  // Composite the UI.
+  // Motion blur's tiles, then the composite of the UI (blurring the scene).
+  // All the views at once: requesting more could switch descriptor heaps.
   ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
-  ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[5];
-  if (!cp_.RequestOneUseSingleViewDescriptors(5, descriptors)) {
+  MotionBlur blur = GetMotionBlur(render_width, render_height);
+  if (blur.samples &&
+      (!EnsureTexture(blur_pixels_, DXGI_FORMAT_R32G32_FLOAT, render_width,
+                      render_height, "blur pixel") ||
+       !EnsureTexture(blur_tiles_, DXGI_FORMAT_R16G16_FLOAT,
+                      blur.tile_count[0], blur.tile_count[1], "blur tile") ||
+       !EnsureTexture(blur_around_, DXGI_FORMAT_R16G16_FLOAT,
+                      blur.tile_count[0], blur.tile_count[1],
+                      "blur neighborhood") ||
+       !EnsureTexture(blur_cuts_, DXGI_FORMAT_R32_UINT, 2, 1, "blur cut"))) {
+    // Not trying again every frame: until the render size changes.
+    blur_failed_size_[0] = render_width;
+    blur_failed_size_[1] = render_height;
+    blur = {};
+  }
+  ui::d3d12::util::DescriptorCpuGpuHandlePair
+      descriptors[kCompositeTables + kBlurViews];
+  if (!cp_.RequestOneUseSingleViewDescriptors(
+          kCompositeTables + (blur.samples ? kBlurViews : 0), descriptors)) {
     return NotUpscaled("no descriptors", frontbuffer, frontbuffer_srv, srv_out,
                        hdr_out);
+  }
+  if (blur.samples) {
+    RecordMotionBlurTiles(blur, render_width, render_height,
+                          descriptors + kCompositeTables);
+    if (dao_timing::GpuTiming::Enabled()) {
+      dao_timing::GpuTiming::Get().Mark(cp_, "motion blur tiles");
+    }
   }
   D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
   srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -2367,11 +2506,22 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   srv.Format = motion_vectors_.format;
   device->CreateShaderResourceView(motion_vectors_.resource.Get(), &srv,
                                    descriptors[3].first);
+  // Motion blur's pixels and neighbourhoods (without blur, unread: any view).
+  if (blur.samples) {
+    srv.Format = blur_pixels_.format;
+    device->CreateShaderResourceView(blur_pixels_.resource.Get(), &srv,
+                                     descriptors[4].first);
+    srv.Format = blur_around_.format;
+    device->CreateShaderResourceView(blur_around_.resource.Get(), &srv,
+                                     descriptors[5].first);
+  } else {
+    descriptors[4] = descriptors[5] = descriptors[3];
+  }
   D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
   uav.Format = composite_.format;
   uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
   device->CreateUnorderedAccessView(composite_.resource.Get(), nullptr, &uav,
-                                    descriptors[4].first);
+                                    descriptors[6].first);
   Transition(upscaled_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(composite_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   CompositeConstants constants = {};
@@ -2383,6 +2533,8 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   constants.mode = !true_hdr_       ? kCompositeSdr
                    : overlay_shown_ ? kCompositeHdrToSdr
                                     : kCompositeHdr;
+  constants.blur_samples = blur.samples;
+  constants.blur_tile = blur.tile;
   DispatchComposite(descriptors, constants);
   Transition(composite_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
@@ -2397,6 +2549,136 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   return composite_.resource.Get();
 }
 
+// Motion blur's Low and High: the shutter open for this much of the frame
+// time, and samples per pixel.
+constexpr float kBlurShutter[2] = {0.25f, 0.5f};
+constexpr uint32_t kBlurSamples[2] = {8, 12};
+// Tiles (the longest blur): 1/24 of the render height, rounded (30 pixels at
+// 720p), at least a tile pass thread group's 8.
+constexpr uint32_t kBlurTilesPerHeight = 24;
+constexpr uint32_t kBlurMinTile = 8;
+// Motion of more than this much of the render height in a frame is a camera
+// cut, not motion; with a cut in more than 1/kBlurCutTileFraction of the
+// tiles, the whole frame is one.
+constexpr float kBlurCut = 0.25f;
+constexpr uint32_t kBlurCutTileFraction = 8;
+
+DaoUpscalerImpl::MotionBlur DaoUpscalerImpl::GetMotionBlur(
+    uint32_t render_width, uint32_t render_height) const {
+  MotionBlur blur;
+  // Not on the first upscaled frame (the motion is from frames not upscaled),
+  // nor with motion vectors off or shown instead of the scene.
+  const int32_t strength = cvars::dao_motion_blur;
+  if (strength <= 0 || !motion_available_ || !cvars::dao_motion_vectors ||
+      cvars::dao_show_motion_vectors || reset_history_ ||
+      (render_width == blur_failed_size_[0] &&
+       render_height == blur_failed_size_[1])) {
+    return blur;
+  }
+  // Blur vectors are half the motion over the shutter time. (Levels as
+  // DAORecomp's kMaxMotionBlur: 1 low, 2 high; more is high.)
+  const size_t level = strength >= 2 ? 1 : 0;
+  blur.samples = kBlurSamples[level];
+  blur.scale = kBlurShutter[level] * 0.5f;
+  blur.tile = std::max(
+      (render_height + kBlurTilesPerHeight / 2) / kBlurTilesPerHeight,
+      kBlurMinTile);
+  blur.cut = float(render_height) * kBlurCut;
+  blur.tile_count[0] = (render_width + blur.tile - 1) / blur.tile;
+  blur.tile_count[1] = (render_height + blur.tile - 1) / blur.tile;
+  blur.cut_tiles = std::max(
+      blur.tile_count[0] * blur.tile_count[1] / kBlurCutTileFraction,
+      uint32_t(1));
+  return blur;
+}
+
+void DaoUpscalerImpl::RecordMotionBlurTiles(
+    const MotionBlur& blur, uint32_t render_width, uint32_t render_height,
+    const ui::d3d12::util::DescriptorCpuGpuHandlePair* descriptors) {
+  // descriptors: motion, depth, tiles (unordered), pixels (unordered), cuts
+  // (unordered), tiles, neighbourhoods (unordered).
+  ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
+  D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
+  srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srv.Texture2D.MipLevels = 1;
+  D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
+  uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+  srv.Format = motion_vectors_.format;
+  device->CreateShaderResourceView(motion_vectors_.resource.Get(), &srv,
+                                   descriptors[0].first);
+  srv.Format = depth_.format;
+  device->CreateShaderResourceView(depth_.resource.Get(), &srv,
+                                   descriptors[1].first);
+  uav.Format = blur_tiles_.format;
+  device->CreateUnorderedAccessView(blur_tiles_.resource.Get(), nullptr, &uav,
+                                    descriptors[2].first);
+  uav.Format = blur_pixels_.format;
+  device->CreateUnorderedAccessView(blur_pixels_.resource.Get(), nullptr, &uav,
+                                    descriptors[3].first);
+  uav.Format = blur_cuts_.format;
+  device->CreateUnorderedAccessView(blur_cuts_.resource.Get(), nullptr, &uav,
+                                    descriptors[4].first);
+  srv.Format = blur_tiles_.format;
+  device->CreateShaderResourceView(blur_tiles_.resource.Get(), &srv,
+                                   descriptors[5].first);
+  uav.Format = blur_around_.format;
+  device->CreateUnorderedAccessView(blur_around_.resource.Get(), nullptr,
+                                    &uav, descriptors[6].first);
+  BlurConstants constants = {};
+  constants.size[0] = render_width;
+  constants.size[1] = render_height;
+  constants.tile = blur.tile;
+  constants.scale = blur.scale;
+  constants.cut = blur.cut;
+  // Whichever depth function most of the scene drew with.
+  constants.depth_reversed = depth_greater_draws_ > depth_less_draws_ ? 1 : 0;
+  constants.counter = blur_counter_;
+  constants.cut_tiles = blur.cut_tiles;
+  blur_counter_ ^= 1;
+  // The tile pass, after the last neighbourhood pass cleared its counter.
+  Transition(blur_pixels_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  Transition(blur_tiles_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  Transition(blur_cuts_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  cp_.PushUAVBarrier(blur_cuts_.resource.Get());
+  const ui::d3d12::util::DescriptorCpuGpuHandlePair* tile_tables[5] = {
+      &descriptors[0], &descriptors[1], &descriptors[2], &descriptors[3],
+      &descriptors[4]};
+  DispatchBlurTiles(blur_tile_max_pipeline_.Get(), constants, tile_tables,
+                    blur.tile_count[0], blur.tile_count[1]);
+  // The neighbourhood pass, after the tile pass's counting (t1 and u1
+  // unread).
+  Transition(blur_pixels_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  Transition(blur_tiles_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  Transition(blur_around_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  cp_.PushUAVBarrier(blur_cuts_.resource.Get());
+  constants.size[0] = blur.tile_count[0];
+  constants.size[1] = blur.tile_count[1];
+  const ui::d3d12::util::DescriptorCpuGpuHandlePair* around_tables[5] = {
+      &descriptors[5], &descriptors[5], &descriptors[6], &descriptors[6],
+      &descriptors[4]};
+  DispatchBlurTiles(blur_neighbor_max_pipeline_.Get(), constants,
+                    around_tables, (blur.tile_count[0] + 7) / 8,
+                    (blur.tile_count[1] + 7) / 8);
+  Transition(blur_around_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+}
+
+void DaoUpscalerImpl::DispatchBlurTiles(
+    ID3D12PipelineState* pipeline, const BlurConstants& constants,
+    const ui::d3d12::util::DescriptorCpuGpuHandlePair* const* tables,
+    uint32_t groups_x, uint32_t groups_y) {
+  cp_.SubmitBarriers();
+  DeferredCommandList& command_list = cp_.GetDeferredCommandList();
+  command_list.D3DSetComputeRootSignature(blur_root_signature_.Get());
+  command_list.D3DSetComputeRoot32BitConstants(
+      0, sizeof(constants) / sizeof(uint32_t), &constants, 0);
+  for (uint32_t i = 0; i < 5; ++i) {
+    command_list.D3DSetComputeRootDescriptorTable(1 + i, tables[i]->second);
+  }
+  cp_.SetExternalPipeline(pipeline);
+  command_list.D3DDispatch(groups_x, groups_y, 1);
+}
+
 void DaoUpscalerImpl::DispatchComposite(
     const ui::d3d12::util::DescriptorCpuGpuHandlePair* descriptors,
     CompositeConstants constants) {
@@ -2408,11 +2690,13 @@ void DaoUpscalerImpl::DispatchComposite(
   command_list.D3DSetComputeRootSignature(composite_root_signature_.Get());
   command_list.D3DSetComputeRoot32BitConstants(
       0, sizeof(constants) / sizeof(uint32_t), &constants, 0);
-  for (uint32_t i = 0; i < 5; ++i) {
+  for (uint32_t i = 0; i < kCompositeTables; ++i) {
     command_list.D3DSetComputeRootDescriptorTable(1 + i,
                                                   descriptors[i].second);
   }
-  cp_.SetExternalPipeline(composite_pipeline_.Get());
+  cp_.SetExternalPipeline(constants.blur_samples
+                              ? composite_blur_pipeline_.Get()
+                              : composite_pipeline_.Get());
   command_list.D3DDispatch((constants.dest_size[0] + 7) / 8,
                            (constants.dest_size[1] + 7) / 8, 1);
 }
@@ -2433,9 +2717,9 @@ bool DaoUpscalerImpl::ConvertImage(
   uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
   device->CreateUnorderedAccessView(dest.resource.Get(), nullptr, &uav,
                                     descriptors[1].first);
-  const ui::d3d12::util::DescriptorCpuGpuHandlePair tables[5] = {
+  const ui::d3d12::util::DescriptorCpuGpuHandlePair tables[kCompositeTables] = {
       descriptors[0], descriptors[0], descriptors[0], descriptors[0],
-      descriptors[1]};
+      descriptors[0], descriptors[0], descriptors[1]};
   Transition(dest, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   CompositeConstants constants = {};
   constants.dest_size[0] = dest.width;
@@ -2457,33 +2741,34 @@ ID3D12Resource* DaoUpscalerImpl::CompositeHdr(
     return NotUpscaled("no HDR scene", frontbuffer, frontbuffer_srv, srv_out,
                        hdr_out);
   }
-  ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[5];
+  ui::d3d12::util::DescriptorCpuGpuHandlePair views[4];
   if (!EnsureTexture(encoded_, HdrFormat(), width, height, "encoded") ||
-      !cp_.RequestOneUseSingleViewDescriptors(5, descriptors)) {
+      !cp_.RequestOneUseSingleViewDescriptors(4, views)) {
     return NotUpscaled("no descriptors", frontbuffer, frontbuffer_srv, srv_out,
                        hdr_out);
   }
   // The scene (t0) and the image before the UI (t2) at the front buffer's
-  // size; no motion vectors (t3, unread, given the image's view).
+  // size.
   ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
   D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
   srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
   srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
   srv.Texture2D.MipLevels = 1;
   srv.Format = hdr_.format;
-  device->CreateShaderResourceView(hdr_.resource.Get(), &srv,
-                                   descriptors[0].first);
+  device->CreateShaderResourceView(hdr_.resource.Get(), &srv, views[0].first);
   device->CreateShaderResourceView(frontbuffer, &frontbuffer_srv,
-                                   descriptors[1].first);
+                                   views[1].first);
   srv.Format = color_.format;
   device->CreateShaderResourceView(color_.resource.Get(), &srv,
-                                   descriptors[2].first);
-  descriptors[3] = descriptors[2];
+                                   views[2].first);
   D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
   uav.Format = encoded_.format;
   uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
   device->CreateUnorderedAccessView(encoded_.resource.Get(), nullptr, &uav,
-                                    descriptors[4].first);
+                                    views[3].first);
+  // No motion (t3) or blur (t4, t5): unread, given the image's view.
+  const ui::d3d12::util::DescriptorCpuGpuHandlePair tables[kCompositeTables] = {
+      views[0], views[1], views[2], views[2], views[2], views[2], views[3]};
   Transition(hdr_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(color_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   Transition(encoded_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -2493,7 +2778,7 @@ ID3D12Resource* DaoUpscalerImpl::CompositeHdr(
   constants.render_size[0] = float(width);
   constants.render_size[1] = float(height);
   constants.mode = kCompositeHdr;
-  DispatchComposite(descriptors, constants);
+  DispatchComposite(tables, constants);
   Transition(encoded_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   EndFrame(false, "off or paused (true HDR at the render size)");
   hdr_out = true;
@@ -2542,6 +2827,8 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   }
   // History is valid only across consecutive upscaled frames.
   reset_history_ = !upscaled;
+  // Counted per frame.
+  depth_less_draws_ = depth_greater_draws_ = 0;
   // If a 3D scene couldn't be upscaled, stop jittering it for a while (a few
   // jittered frames shown as they are look like a small shake).
   const bool enabled = cvars::dao_temporal_upscaler != "off";

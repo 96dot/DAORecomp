@@ -113,8 +113,14 @@ namespace dao
             s.frameRate = defaults.frameRate;
         s.hdrPaperWhite = std::clamp(s.hdrPaperWhite, kHdrMinNits, kHdrMaxPaperWhite);
         s.hdrPeak = std::clamp(s.hdrPeak, s.hdrPaperWhite, kHdrMaxPeak);
+        s.motionBlur = std::clamp(s.motionBlur, 0, kMaxMotionBlur);
         s.windowWidth = std::clamp(s.windowWidth, 320, 16384);
         s.windowHeight = std::clamp(s.windowHeight, 180, 16384);
+    }
+
+    std::string_view MotionBlurName(int motionBlur)
+    {
+        return motionBlur >= kMaxMotionBlur ? "high" : motionBlur > 0 ? "low" : "off";
     }
 
     std::string_view HdrQualityName(bool high)
@@ -172,6 +178,12 @@ namespace dao
         s.anisotropicFiltering = video["anisotropic_filtering"].value_or(s.anisotropicFiltering);
         s.shadows = video["shadows"].value_or(s.shadows);
         s.postProcessing = video["post_processing"].value_or(s.postProcessing);
+        const std::string motionBlur = video["motion_blur"].value_or(std::string());
+        for (int level = 0; level <= kMaxMotionBlur; ++level)
+        {
+            if (motionBlur == MotionBlurName(level))
+                s.motionBlur = level;
+        }
         s.hdr = video["hdr"].value_or(s.hdr);
         s.hdrPaperWhite = video["hdr_paper_white"].value_or(s.hdrPaperWhite);
         s.hdrPeak = video["hdr_peak"].value_or(s.hdrPeak);
@@ -259,6 +271,10 @@ anisotropic_filtering = {}
 # turning them off makes the game faster on low-power devices.
 shadows = {}
 post_processing = {}
+# Motion blur of the 3D scenes (camera, objects, characters): "off" (the default), "low",
+# "high". Only with temporal upscaling (it uses its motion vectors); costs GPU time where the
+# scene moves, more at High.
+motion_blur = "{}"
 fullscreen = {}
 window_width = {}
 window_height = {}
@@ -268,7 +284,8 @@ window_height = {}
 )",
             s.showLauncher, s.checkForUpdates, s.modsWarningSeen, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
             TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.vsync, s.frameRate,
-            s.hdr, s.hdrPaperWhite, s.hdrPeak, HdrQualityName(s.hdrHighQuality), s.anisotropicFiltering, s.shadows, s.postProcessing, s.fullscreen,
+            s.hdr, s.hdrPaperWhite, s.hdrPeak, HdrQualityName(s.hdrHighQuality), s.anisotropicFiltering, s.shadows, s.postProcessing,
+            MotionBlurName(s.motionBlur), s.fullscreen,
             s.windowWidth, s.windowHeight);
         for (const auto& [id, enabled] : s.patches)
         {
@@ -333,6 +350,7 @@ window_height = {}
         SetXeniaCvar("present_hdr_paper_white", toml::value<double>(s.hdrPaperWhite));
         SetXeniaCvar("present_hdr_peak", toml::value<double>(s.hdrPeak));
         SetXeniaCvar("dao_hdr_scrgb", toml::value<bool>(s.hdrHighQuality));
+        SetXeniaCvar("dao_motion_blur", toml::value<int64_t>(s.motionBlur));
         if (s.anisotropicFiltering)
             SetXeniaCvar("anisotropic_override", toml::value<int64_t>(XeniaAnisotropicLevel(s.anisotropicFiltering)));
         try
@@ -353,6 +371,8 @@ window_height = {}
             s.resolutionScale, UpscalerName(s.upscaler), s.sharpness, TemporalUpscalerName(s.temporalUpscaler),
             s.windowWidth, s.windowHeight, s.fullscreen ? " fullscreen" : "", FrameRateName(s.frameRate),
             s.vsync ? ", vsync" : "");
+        if (s.motionBlur)
+            LOGI("Settings: motion blur {}", MotionBlurName(s.motionBlur));
         if (s.hdr)
             LOGI("Settings: HDR output, paper white {} nits, peak {} nits, quality {}", s.hdrPaperWhite, s.hdrPeak,
                 HdrQualityName(s.hdrHighQuality));

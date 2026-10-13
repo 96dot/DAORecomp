@@ -102,6 +102,8 @@ var ROWS = [
       labels: ["Game default", "2x", "4x", "8x", "16x"] },
     { key: "Shadows", label: "Dynamic shadows", toggle: true },
     { key: "PostProcessing", label: "Post-processing effects", toggle: true },
+    { key: "MotionBlur", label: "Motion blur (with temporal upscaling)", values: [0, 1, 2],
+      labels: ["Off", "Low", "High"] },
     { header: "HDR" },
     { key: "Hdr", label: "HDR output", restart: true, toggle: true },
     { key: "HdrPaperWhite", label: "Paper white", values: HDR_PAPER_WHITE, labels: Nits(HDR_PAPER_WHITE) },

@@ -4,10 +4,19 @@
 // For HDR output the upscaled scene is linear (1 = the game's white) and the
 // result is PQ-encoded (Rec. 709 primaries, decoded by the presenter), or with
 // HDR quality High scRGB (linear, 1 = 80 nits, as the presenter's back buffer).
+// With motion blur (dao_upscale_composite_blur.cs), the scene is blurred along
+// its motion first, so the UI stays sharp.
 Texture2D<float4> dao_upscaled : register(t0);  // Display resolution.
 Texture2D<float4> dao_final : register(t1);     // Render resolution, with UI.
 Texture2D<float4> dao_hudless : register(t2);   // Render resolution, no UI.
 Texture2D<float2> dao_motion : register(t3);    // Render resolution.
+#ifdef DAO_MOTION_BLUR
+// Each pixel's blur length and log depth (render resolution), and the longest
+// blur vector around each tile, from dao_motion_blur_tile_max.cs and
+// dao_motion_blur_neighbor_max.cs.
+Texture2D<float2> dao_blur_pixels : register(t4);
+Texture2D<float2> dao_blur_around : register(t5);
+#endif
 SamplerState dao_linear : register(s0);
 RWTexture2D<float4> dao_dest : register(u0);
 
@@ -23,6 +32,10 @@ cbuffer DaoCompositeConstants : register(b0) {
   float dao_gamma;        // Of the game's output.
   // HDR results are scRGB, not PQ (HDR quality High).
   uint dao_scrgb;
+  // Motion blur (DAO_MOTION_BLUR only): samples per pixel, render pixels per
+  // tile.
+  uint dao_blur_samples;
+  uint dao_blur_tile;
 };
 
 #define DAO_MODE_SDR 0
@@ -48,6 +61,83 @@ float3 EncodeHdr(float3 linear_color) {
   return dao_scrgb ? max(linear_color, 0.0) * (dao_paper_white / 80.0)
                    : Pq(linear_color);
 }
+
+#ifdef DAO_MOTION_BLUR
+// Motion blur: the reconstruction filter of McGuire et al., "A Reconstruction
+// Filter for Plausible Motion Blur" (I3D 2012). Each pixel gathers samples
+// along the longest blur vector around its tile; a sample counts where it is in
+// front and its own blur reaches this pixel, or behind and this pixel's blur
+// reaches it, or both blur together. Cost: dao_blur_samples samples (a load
+// and a bilinear fetch each) per display pixel, where its tile's neighbourhood
+// moves.
+
+// Blur shorter than this (render pixels) is none: all the reach a pixel has.
+static const float kBlurMinimum = 0.5;
+// Where depths are compared, how much nearer (in log view depth) counts as in
+// front.
+static const float kBlurSoftDepth = 0.02;
+// Where a blur reaches, fading over this fraction of its length either side.
+static const float kBlurEdge = 0.05;
+// The weight of samples where both blurs reach (the paper's).
+static const float kBlurBothWeight = 2.0;
+
+// 1 where a is in front of b, fading out over kBlurSoftDepth.
+float InFront(float log_depth_a, float log_depth_b) {
+  return saturate(1.0 - (log_depth_a - log_depth_b) / kBlurSoftDepth);
+}
+
+// Whether blur reaching distance pixels covers a point at distance: fading
+// with the distance (cone), or up to its end (cylinder).
+float Cone(float distance, float reach) {
+  return saturate(1.0 - distance / reach);
+}
+float Cylinder(float distance, float reach) {
+  return 1.0 - smoothstep((1.0 - kBlurEdge) * reach,
+                          (1.0 + kBlurEdge) * reach, distance);
+}
+
+// Jimenez's interleaved gradient noise, 0 to 1: offsets the samples per pixel
+// so few samples band less.
+float Noise(uint2 p) {
+  return frac(52.9829189 * frac(dot(float2(p), float2(0.06711056, 0.00583715))));
+}
+
+float3 MotionBlur(uint2 id, float2 uv, float3 center) {
+  float2 x = uv * dao_render_size;
+  int2 last = int2(dao_render_size) - 1;
+  int2 px = min(int2(x), last);
+  float2 around = dao_blur_around[uint2(px) / dao_blur_tile];
+  // Most of a frame, still or slow, isn't blurred.
+  if (dot(around, around) < kBlurMinimum * kBlurMinimum) {
+    return center;
+  }
+  // Its blur's length and log view depth.
+  float2 pixel_x = dao_blur_pixels[px];
+  float reach_x = max(pixel_x.x, kBlurMinimum);
+  float depth_x = pixel_x.y;
+  float weight = 1.0 / reach_x;
+  float3 sum = center * weight;
+  float offset = Noise(id) - 0.5;
+  for (uint i = 0; i < dao_blur_samples; ++i) {
+    float t = lerp(-1.0, 1.0, (float(i) + 1.0 + offset) /
+                                  float(dao_blur_samples + 1));
+    float2 y = x + around * t;
+    float2 pixel_y = dao_blur_pixels[clamp(int2(y), int2(0, 0), last)];
+    float reach_y = max(pixel_y.x, kBlurMinimum);
+    float depth_y = pixel_y.y;
+    float distance = length(y - x);
+    float sample_weight =
+        InFront(depth_y, depth_x) * Cone(distance, reach_y) +
+        InFront(depth_x, depth_y) * Cone(distance, reach_x) +
+        Cylinder(distance, reach_y) * Cylinder(distance, reach_x) *
+            kBlurBothWeight;
+    sum += sample_weight *
+           dao_upscaled.SampleLevel(dao_linear, y / dao_render_size, 0.0).rgb;
+    weight += sample_weight;
+  }
+  return sum / weight;
+}
+#endif  // DAO_MOTION_BLUR
 
 float UiDifference(int2 p) {
   p = clamp(p, int2(0, 0), int2(dao_render_size) - 1);
@@ -81,6 +171,12 @@ void main(uint3 id : SV_DispatchThreadID) {
   // identical; small differences are faint UI (fades, shadows).
   float ui = saturate(difference * 128.0);
   float3 scene = dao_upscaled[id.xy].rgb;
+#ifdef DAO_MOTION_BLUR
+  // Not under opaque UI.
+  if (ui < 1.0) {
+    scene = MotionBlur(id.xy, uv, scene);
+  }
+#endif
   if (dao_mode == DAO_MODE_HDR_TO_SDR) {
     scene = pow(saturate(scene), 1.0 / dao_gamma);
   }

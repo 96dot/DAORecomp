@@ -28,6 +28,8 @@ namespace dao::launcher
         constexpr const char* kFrameRateNames[] = { "30 fps (original)", "60 fps", "90 fps", "120 fps", "144 fps",
             "165 fps", "240 fps", "Unlimited" };
         static_assert(std::size(kFrameRateNames) == std::size(kFrameRates));
+        constexpr const char* kMotionBlurNames[] = { "Off", "Low", "High" };
+        static_assert(std::size(kMotionBlurNames) == kMaxMotionBlur + 1);
 
         // A setting as the game's menus show it: the name above the picker or slider,
         // which `widget` adds as "##value", returning whether it changed.
@@ -104,6 +106,10 @@ namespace dao::launcher
             ImGui::Checkbox("Dynamic shadows", &s.shadows);
             ImGui::Checkbox("Post-processing effects", &s.postProcessing);
             HelpText("Turning these off makes the game faster on low-power devices such as the Steam Deck.");
+            ImGui::Spacing();
+            ComboRow("Motion blur", &s.motionBlur, kMotionBlurNames, int(std::size(kMotionBlurNames)));
+            HelpText("Blurs what moves (characters, objects, the camera). Needs temporal upscaling; costs GPU "
+                     "time while things move, more at High.");
             ImGui::Spacing();
             HelpText("Most of these settings can also be changed in the game, under Options > Graphics.");
         }
@@ -247,6 +253,7 @@ namespace dao::launcher
             s.anisotropicFiltering = defaults.anisotropicFiltering;
             s.shadows = defaults.shadows;
             s.postProcessing = defaults.postProcessing;
+            s.motionBlur = defaults.motionBlur;
         }
 
         void RestoreDisplay(Settings& s)
