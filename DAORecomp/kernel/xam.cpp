@@ -897,7 +897,26 @@ namespace dao::imp
 
         if (result == X_ERROR_SUCCESS)
         {
+            // Not mounted if its folder can't be made (a full disk, no permission): the
+            // game then reports the failure instead of writing into nothing.
             fs::create_directories(path, ec);
+            if (ec)
+            {
+                LOGE("XamContentCreateEx: can't create the folder of '{}' ({})", fileName, ec.message());
+                result = X_ERROR_ACCESS_DENIED;
+                disposition = 0;
+                // Nor is content mounted at this root before (not closed) written into.
+                if (auto it = s_savesWriting.find(root); it != s_savesWriting.end())
+                {
+                    fs::remove(WritingMarker(it->second), ec);
+                    s_savesWriting.erase(it);
+                }
+                VfsDeleteSymlink(root);
+                VfsUnmountDevice("\\Device\\Content\\" + root.substr(0, root.size() - 1));
+            }
+        }
+        if (result == X_ERROR_SUCCESS)
+        {
             // Display name, for enumeration later. Only for new content: opening a
             // save keeps its name (the game passes a fresh one, e.g. the time now).
             if (disposition == 1)
