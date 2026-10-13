@@ -5,6 +5,7 @@
 // committing keeps the live changes for this session; a later commit saves them.
 #include "stdafx.h"
 #include "ui/graphics_menu.h"
+#include "gpu/camera_fov.h"
 #include "gpu/video.h"
 #include "gpu/xenia_host.h"
 #include "kernel/function.h"
@@ -37,6 +38,8 @@ namespace dao::ui
             Shadows,
             PostProcessing,
             MotionBlur,
+            Fov,
+            ConversationFov,
             Hdr,
             HdrPaperWhite,
             HdrPeak,
@@ -64,6 +67,8 @@ namespace dao::ui
             { "Shadows", false },
             { "PostProcessing", false },
             { "MotionBlur", false },
+            { "Fov", false },
+            { "ConversationFov", false },
             { "Hdr", true },
             { "HdrPaperWhite", false },
             { "HdrPeak", false },
@@ -166,6 +171,8 @@ namespace dao::ui
             case Key::Shadows: return s.shadows;
             case Key::PostProcessing: return s.postProcessing;
             case Key::MotionBlur: return s.motionBlur;
+            case Key::Fov: return s.fov;
+            case Key::ConversationFov: return s.conversationFov;
             case Key::Hdr: return s.hdr;
             case Key::HdrPaperWhite: return s.hdrPaperWhite;
             case Key::HdrPeak: return s.hdrPeak;
@@ -205,6 +212,8 @@ namespace dao::ui
             case Key::Shadows: s.shadows = whole != 0; break;
             case Key::PostProcessing: s.postProcessing = whole != 0; break;
             case Key::MotionBlur: s.motionBlur = whole; break;
+            case Key::Fov: s.fov = whole; break;
+            case Key::ConversationFov: s.conversationFov = whole; break;
             case Key::Hdr: s.hdr = whole != 0; break;
             case Key::HdrPaperWhite: s.hdrPaperWhite = float(value); break;
             case Key::HdrPeak: s.hdrPeak = float(value); break;
@@ -244,6 +253,8 @@ namespace dao::ui
             case Key::Shadows: to.shadows = from.shadows; break;
             case Key::PostProcessing: to.postProcessing = from.postProcessing; break;
             case Key::MotionBlur: to.motionBlur = from.motionBlur; break;
+            case Key::Fov: to.fov = from.fov; break;
+            case Key::ConversationFov: to.conversationFov = from.conversationFov; break;
             case Key::Hdr: to.hdr = from.hdr; break;
             case Key::HdrPaperWhite: to.hdrPaperWhite = from.hdrPaperWhite; break;
             case Key::HdrPeak: to.hdrPeak = from.hdrPeak; break;
@@ -272,6 +283,8 @@ namespace dao::ui
             case Key::Shadows: s_shadows = s.shadows; break;
             case Key::PostProcessing: s_postProcessing = s.postProcessing; break;
             case Key::MotionBlur: live.motion_blur = s.motionBlur; break;
+            case Key::Fov:
+            case Key::ConversationFov: gpu::SetCameraFov(s.fov, s.conversationFov); break;
             case Key::HdrPaperWhite: live.hdr_paper_white = s.hdrPaperWhite; break;
             case Key::HdrPeak: live.hdr_peak = s.hdrPeak; break;
             default: break;
@@ -475,6 +488,7 @@ namespace dao::ui
         const Settings& s = GetSettings();
         s_shadows = s.shadows;
         s_postProcessing = s.postProcessing;
+        gpu::SetCameraFov(s.fov, s.conversationFov);
         InstallOptionsMovie();
     }
 

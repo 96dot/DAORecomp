@@ -52,6 +52,17 @@ function Nits(values) {
     return labels;
 }
 
+// Fields of view, in degrees across at 16:9 (91: the game's own), as settings.h's
+// kFovSteps.
+var FOV = [80, 85, 91, 95, 100, 105, 110, 115, 120];
+function FovLabels() {
+    var labels = new Array();
+    for (var i = 0; i < FOV.length; i++) {
+        labels.push(FOV[i] == 91 ? "91° (original)" : FOV[i] + "°");
+    }
+    return labels;
+}
+
 var HDR_PAPER_WHITE = [80, 100, 120, 160, 200, 250, 300, 400];
 var HDR_PEAK = [400, 600, 800, 1000, 1500, 2000, 3000, 4000];
 
@@ -105,6 +116,9 @@ var ROWS = [
     { key: "PostProcessing", label: "Post-processing effects", toggle: true },
     { key: "MotionBlur", label: "Motion blur (with temporal upscaling)", values: [0, 1, 2],
       labels: ["Off", "Low", "High"] },
+    { header: "Camera" },
+    { key: "Fov", label: "Field of view", values: FOV, labels: FovLabels() },
+    { key: "ConversationFov", label: "Field of view in conversations", values: FOV, labels: FovLabels() },
     { header: "HDR" },
     { key: "Hdr", label: "HDR output", restart: true, toggle: true },
     { key: "HdrPaperWhite", label: "Paper white", values: HDR_PAPER_WHITE, labels: Nits(HDR_PAPER_WHITE) },

@@ -54,6 +54,27 @@ namespace dao::launcher
             return Row(label, [&] { return ImGui::SliderFloat("##value", value, min, max, format); });
         }
 
+        // A field of view: a slider over kFovSteps (a value between them, from
+        // config.toml, starts at the closest).
+        bool FovRow(const char* label, int* value)
+        {
+            int step = 0;
+            for (int i = 1; i < int(std::size(kFovSteps)); ++i)
+            {
+                if (std::abs(kFovSteps[i] - *value) < std::abs(kFovSteps[step] - *value))
+                    step = i;
+            }
+            const std::string text = kFovSteps[step] == kOriginalFov ? fmt::format("{}\u00B0 (original)", kOriginalFov)
+                                                                     : fmt::format("{}\u00B0", kFovSteps[step]);
+            const bool changed = Row(label, [&] {
+                return ImGui::SliderInt("##value", &step, 0, int(std::size(kFovSteps)) - 1, text.c_str(),
+                    ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput);
+            });
+            if (changed)
+                *value = kFovSteps[step];
+            return changed;
+        }
+
         bool PatchOn(const Settings& settings, const patches::Patch& patch)
         {
             const auto it = settings.patches.find(patch.id);
@@ -118,6 +139,12 @@ namespace dao::launcher
             ComboRow("Motion blur", &s.motionBlur, kMotionBlurNames, int(std::size(kMotionBlurNames)));
             HelpText("Blurs what moves (characters, objects, the camera). Needs temporal upscaling; costs GPU "
                      "time while things move, more at High.");
+
+            Section("Camera");
+            FovRow("Field of view", &s.fov);
+            FovRow("Field of view in conversations", &s.conversationFov);
+            HelpText("Degrees across at 16:9; 91 is the game's own. In conversations and cutscenes, each shot's "
+                     "own angle is widened or narrowed in the same proportion.");
             ImGui::Spacing();
             HelpText("Most of these settings can also be changed in the game, under Options > Graphics.");
         }
@@ -263,6 +290,8 @@ namespace dao::launcher
             s.shadows = defaults.shadows;
             s.postProcessing = defaults.postProcessing;
             s.motionBlur = defaults.motionBlur;
+            s.fov = defaults.fov;
+            s.conversationFov = defaults.conversationFov;
         }
 
         void RestoreDisplay(Settings& s)

@@ -7,6 +7,14 @@ namespace dao
     enum class Upscaler { Bilinear, Cas, Fsr };
     // Temporal upscaling and anti-aliasing of the 3D scenes (FidelityFX API).
     enum class TemporalUpscaler { Off, Auto, Fsr4, Fsr3 };
+    // Settings::fov and conversationFov: the game's own field of view (60 degrees
+    // vertical, 91.5 across at 16:9: 91 stands for it and leaves it as it is), and
+    // the limits.
+    inline constexpr int kOriginalFov = 91;
+    inline constexpr int kMinFov = 80;
+    inline constexpr int kMaxFov = 120;
+    // The values offered (the in-game Graphics tab's FOV list too).
+    inline constexpr int kFovSteps[] = { 80, 85, 91, 95, 100, 105, 110, 115, 120 };
     // Settings::anisotropicFiltering values: 0 = the game default.
     inline constexpr int kAnisotropicLevels[] = { 0, 2, 4, 8, 16 };
     // The frame rates offered (0: unlimited). 30 is the game's own lock in its 3D
@@ -74,6 +82,11 @@ namespace dao
         // Motion blur of the 3D scenes, from temporal upscaling's motion vectors (so
         // only with it): 0 off, 1 low, up to kMaxMotionBlur high.
         int motionBlur = 0;
+        // The camera's field of view in gameplay, and in conversations and cutscenes
+        // (scaling each shot's own): horizontal degrees at 16:9, kMinFov to kMaxFov
+        // (gpu/camera_fov.cpp).
+        int fov = kOriginalFov;
+        int conversationFov = kOriginalFov;
         // Anisotropic texture filtering, one of kAnisotropicLevels.
         int anisotropicFiltering = 0;
         // The engine's dynamic character shadows and its post-processing (frame

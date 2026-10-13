@@ -87,6 +87,15 @@ the next game.
   during a frozen conversation shot (the update thread in that loop), then per-second
   call counts and time spent in the two functions, with a key press marking the
   freezes. The job waits at its end for the poller.
+- **Field of view** (camera update `sub_82265108` / `tu6_sub_82284BD8`, camera SetFov
+  `sub_82650038` / `tu6_sub_82683E60`, main camera pointer `0x83211D44` / `0x832E227C`):
+  the update gives the main camera its field of view every frame, gameplay's 60 degrees
+  and conversation shots' own, through SetFov (vtable slot 3, `stfs f1,320(r3)`).
+  Found by scanning guest memory for perspective matrices, then for the camera holding
+  the angle; the camera's vtable gave SetFov, and a hook logging `ctx.lr` and the game
+  mode (`[[r3+280]+120]+96`: 0 exploring, 4 conversation, 8 to 10 title and loading;
+  5, which the update checks with 4, taken for cutscenes, unverified) the caller. Scale the angle
+  in SetFov while the update runs.
 - **Scene tiles** (`sub_82661640`, MSAA global `0x8316E35C`, tile rects `0x82144D64`):
   the function returning the predicated-tiling tile count, called every frame. Found
   from `DAO_GPU_FRAME_TRACE` (two resolves per scene) back to the code setting the

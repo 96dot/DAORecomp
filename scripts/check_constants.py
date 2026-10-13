@@ -1,7 +1,8 @@
 """Checks that the game's IDs, the title updates' hashes and the build tools' license
 link, kept in installer/deps.py for the installer, and the appended installer's
 magic (installer/pipeline.py), have the same values where the program keeps them;
-and that the file and folder names both sides use are spelt the same.
+that the file and folder names both sides use are spelt the same; and that the
+in-game Graphics tab offers the fields of view settings.h does.
 
     python -I scripts/check_constants.py
 """
@@ -50,8 +51,27 @@ NAMES = [
 ]
 
 
+def fov_lists():
+    """settings.h's kFovSteps and kOriginalFov, and graphics_tab.as's FOV list and the
+    value it labels original."""
+    header, script = read("DAORecomp/settings.h"), read("DAORecomp/ui/graphics_tab.as")
+    steps = re.search(r"kFovSteps\[\] = \{([^}]*)\}", header)
+    original = re.search(r"kOriginalFov = (\d+);", header)
+    tab = re.search(r"^var FOV = \[([^\]]*)\];", script, re.M)
+    tab_original = re.search(r"FOV\[i\] == (\d+) \?", script)
+    if not (steps and original and tab and tab_original):
+        sys.exit("settings.h or graphics_tab.as: the field of view lists aren't where this script reads them")
+    def numbers(found):
+        return [int(n) for n in re.findall(r"\d+", found.group(1))]
+    return numbers(steps), int(original.group(1)), numbers(tab), int(tab_original.group(1))
+
+
 def main():
     failed = 0
+    steps, original, tab, tab_original = fov_lists()
+    if steps != tab or original != tab_original:
+        print(f"graphics_tab.as: FOV {tab} (original {tab_original}), settings.h has {steps} (original {original})")
+        failed += 1
     for path, name, expected in CHECKS:
         # Every `name = ...;` in the file (not `==`), so a second copy written that
         # way can't drift unseen.

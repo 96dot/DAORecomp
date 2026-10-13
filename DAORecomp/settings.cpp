@@ -115,6 +115,8 @@ namespace dao
         s.hdrPaperWhite = std::clamp(s.hdrPaperWhite, kHdrMinNits, kHdrMaxPaperWhite);
         s.hdrPeak = std::clamp(s.hdrPeak, s.hdrPaperWhite, kHdrMaxPeak);
         s.motionBlur = std::clamp(s.motionBlur, 0, kMaxMotionBlur);
+        s.fov = std::clamp(s.fov, kMinFov, kMaxFov);
+        s.conversationFov = std::clamp(s.conversationFov, kMinFov, kMaxFov);
         s.windowWidth = std::clamp(s.windowWidth, 320, 16384);
         s.windowHeight = std::clamp(s.windowHeight, 180, 16384);
     }
@@ -186,6 +188,8 @@ namespace dao
             if (motionBlur == MotionBlurName(level))
                 s.motionBlur = level;
         }
+        s.fov = video["fov"].value_or(s.fov);
+        s.conversationFov = video["conversation_fov"].value_or(s.conversationFov);
         s.hdr = video["hdr"].value_or(s.hdr);
         s.hdrPaperWhite = video["hdr_paper_white"].value_or(s.hdrPaperWhite);
         s.hdrPeak = video["hdr_peak"].value_or(s.hdrPeak);
@@ -282,6 +286,10 @@ post_processing = {}
 # "high". Only with temporal upscaling (it uses its motion vectors); costs GPU time where the
 # scene moves, more at High.
 motion_blur = "{}"
+# The camera's field of view, in degrees across at 16:9 (80 to 120; 91 is the game's own):
+# in gameplay, and in conversations and cutscenes (scaling each shot's own).
+fov = {}
+conversation_fov = {}
 fullscreen = {}
 window_width = {}
 window_height = {}
@@ -292,7 +300,7 @@ window_height = {}
             s.showLauncher, s.checkForUpdates, s.modsWarningSeen, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
             TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.frameGeneration, s.vsync, s.frameRate,
             s.hdr, s.hdrPaperWhite, s.hdrPeak, HdrQualityName(s.hdrHighQuality), s.anisotropicFiltering, s.shadows, s.postProcessing,
-            MotionBlurName(s.motionBlur), s.fullscreen,
+            MotionBlurName(s.motionBlur), s.fov, s.conversationFov, s.fullscreen,
             s.windowWidth, s.windowHeight);
         for (const auto& [id, enabled] : s.patches)
         {
@@ -373,6 +381,8 @@ window_height = {}
             LOGI("Settings: frame generation");
         if (s.motionBlur)
             LOGI("Settings: motion blur {}", MotionBlurName(s.motionBlur));
+        if (s.fov != kOriginalFov || s.conversationFov != kOriginalFov)
+            LOGI("Settings: field of view {}, in conversations {}", s.fov, s.conversationFov);
         if (s.hdr)
             LOGI("Settings: HDR output, paper white {} nits, peak {} nits, quality {}", s.hdrPaperWhite, s.hdrPeak,
                 HdrQualityName(s.hdrHighQuality));

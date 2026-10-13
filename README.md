@@ -13,6 +13,7 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
   tonemapping redone without compressing its highlights), upscaled by FSR in HDR;
   HDR quality High keeps it 16-bit scRGB all the way to the display
 - 60 fps (the original is locked to 30), or up to 240 or unlimited (experimental)
+- field of view settings: gameplay's, and conversations' and cutscenes' separately
 - SDL3 input, including DualSense and other controllers
 - a launcher for settings, mods (file overrides, with a converter for PC mods) and
   code patches
