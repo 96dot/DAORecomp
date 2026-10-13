@@ -9,6 +9,7 @@
 // for handle-created objects so ObReferenceObjectByHandle can hand out a pointer).
 // The header's wait-list words hold a signature + object id so we can map it back.
 
+#include <atomic>
 #include "types.h"
 
 namespace dao::kernel
@@ -120,7 +121,9 @@ namespace dao::kernel
 
         bool manualReset;
         bool signaled = false;
-        uint64_t generation = 0;   // bumps on every Set/Cancel so stale firings are ignored
+        // Bumps on every Set/Cancel so stale firings are ignored. Changed under the dispatcher
+        // lock; atomic for the periodic timer's helper thread, which checks it without.
+        std::atomic<uint64_t> generation = 0;
 
         // APC queued to the setting thread when the timer fires.
         uint32_t apcRoutine = 0;

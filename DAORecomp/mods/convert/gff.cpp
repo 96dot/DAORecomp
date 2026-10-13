@@ -102,10 +102,10 @@ namespace dao::mods::gff
                     value.kind = Value::Kind::List;
                     value.type = type;
                     value.flags = flags;
-                    // (Each item charges the budget as it's read; checked first, as the items are reserved.)
+                    // Each item charges the budget as it's read, so nothing is reserved ahead: nested
+                    // lists would each reserve against the same budget (gigabytes from a megabyte).
                     if (budget_ / sizeof(Value) < count)
                         throw Malformed("too big");
-                    value.items.reserve(count);
                     for (uint32_t i = 0; i < count; ++i)
                         value.items.push_back(Read(type, sub, base + 4 + uint64_t(i) * size, depth + 1));
                     return value;
@@ -124,7 +124,6 @@ namespace dao::mods::gff
                     value.kind = Value::Kind::Struct;
                     value.sid = type;
                     value.fourcc = tpl.fourcc;
-                    value.fields.reserve(tpl.fields.size());
                     for (const FieldDef& field : tpl.fields)
                         value.fields.push_back(
                             { field.label, Read(field.type, field.flags, at + field.offset, depth + 1) });
@@ -498,6 +497,10 @@ namespace dao::mods::gff
         if (count == 0 || count > (data.size() - kHeaderSize) / kStructEntrySize)
             return std::nullopt;
         std::vector<Template> templates(count);
+        // All the templates' fields together, at most as many as the file has room for: each
+        // table is checked alone, and many templates naming one big table would otherwise
+        // copy it again for each (gigabytes from a megabyte).
+        size_t totalFields = 0;
         for (uint32_t i = 0; i < count; ++i)
         {
             const size_t at = kHeaderSize + i * kStructEntrySize;
@@ -509,6 +512,9 @@ namespace dao::mods::gff
             if (fieldCount == 0)
                 continue;
             if (fieldTable > data.size() || fieldCount > (data.size() - fieldTable) / kFieldEntrySize)
+                return std::nullopt;
+            totalFields += fieldCount;
+            if (totalFields > data.size() / kFieldEntrySize)
                 return std::nullopt;
             tpl.fields.reserve(fieldCount);
             for (uint32_t k = 0; k < fieldCount; ++k)

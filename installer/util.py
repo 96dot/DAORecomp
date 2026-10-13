@@ -5,6 +5,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import ssl
 import subprocess
 import sys
@@ -114,6 +115,28 @@ def clean_env(extra=None):
     return env
 
 
+def _kill_tree(process):
+    """Ends a process and the ones it started (a build tool's compilers and linkers):
+    its tree on Windows, its process group elsewhere."""
+    if process.poll() is not None:
+        return
+    if IS_WINDOWS:
+        taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
+        try:
+            subprocess.run([str(taskkill), "/T", "/F", "/PID", str(process.pid)], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
+        except OSError:
+            pass  # then the process itself, below
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)  # its own session (see run)
+        except OSError:
+            pass
+    if process.poll() is None:
+        process.kill()
+
+
 def run(reporter, args, cwd=None, env=None, log_file=None, quiet=False):
     """Runs a command, streaming its output to the reporter (and log_file)."""
     args = [str(a) for a in args]
@@ -121,14 +144,27 @@ def run(reporter, args, cwd=None, env=None, log_file=None, quiet=False):
     flags = subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0
     try:
         process = subprocess.Popen(args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   stdin=subprocess.DEVNULL, creationflags=flags)
+                                   stdin=subprocess.DEVNULL, creationflags=flags,
+                                   start_new_session=not IS_WINDOWS)
     except FileNotFoundError:
         raise InstallError(f"{args[0]} not found.")
-    if log_file:
-        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-    out = open(log_file, "w", encoding="utf-8", errors="replace") if log_file else None
+    # Cancelling ends the tool at once, not at its next line of output (a link can be
+    # silent for minutes).
+    finished = threading.Event()
+
+    def watch_cancel():
+        while not finished.wait(0.2):
+            if reporter.cancel_event.is_set():
+                _kill_tree(process)
+                return
+
+    out = None
     tail = []
     try:
+        if log_file:
+            Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+            out = open(log_file, "w", encoding="utf-8", errors="replace")
+        threading.Thread(target=watch_cancel, daemon=True).start()
         for raw in process.stdout:
             line = raw.decode("utf-8", errors="replace").rstrip()
             if out:
@@ -136,10 +172,9 @@ def run(reporter, args, cwd=None, env=None, log_file=None, quiet=False):
             tail = (tail + [line])[-40:]
             if not quiet:
                 reporter.log(line)
-            if reporter.cancel_event.is_set():
-                process.kill()
         process.wait()
     finally:
+        finished.set()
         if out:
             out.close()
     reporter.check_cancel()
