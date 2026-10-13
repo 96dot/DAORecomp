@@ -288,7 +288,8 @@ namespace dao::imp
     {
         std::error_code ec;
         fs::create_directories(ProfileDir(), ec);
-        // Written next to it and swapped in, so a crash mid-write keeps the old value.
+        // Written next to it and swapped in, so a crash mid-write keeps the old value
+        // (not with WriteFileAtomically: this one is written through to the disk).
         const fs::path path = ProfileDir() / fmt::format("{:08X}.bin", id);
         const fs::path temp = fs::path(path).concat(L".tmp");
         FILE* f = _wfopen(temp.c_str(), L"wb");

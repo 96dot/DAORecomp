@@ -221,8 +221,9 @@ start, so this happens once per place.
   installer uses it. `DAORecomp/content/stfs.cpp` is the same reader for the launcher
   (which has no Python): keep the two in step. `scripts/test_stfs.py` tests both on
   packages it makes (pass `build/DAORecomp/DAORecomp.exe` for the C++ one; CI runs the
-  Python one), and `scripts/check_constants.py` checks that the IDs and the title
-  update's hash in `installer/deps.py` match the program's.
+  Python one), and `scripts/check_constants.py` checks that the IDs, the title
+  updates' hashes and the other values `installer/deps.py` shares with the program
+  match every copy of them in it.
 - `scripts/` also has the development tools used to analyse the game and build the
   shaders (`build_xenia_shaders.py` needs FXC from the Windows SDK and xenia-canary's
   FidelityFX-CAS/FSR submodules; the compiled shaders are committed).

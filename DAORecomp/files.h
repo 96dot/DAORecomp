@@ -7,11 +7,11 @@ namespace dao
     // (separators, drive and stream colons, wildcards).
     bool IsBadNameChar(char c);
 
-    // Whether Windows reserves the name for a device (CON, NUL, COM1...), also
-    // with an extension.
+    // Whether Windows reserves the name (UTF-8) for a device (CON, NUL, COM1...),
+    // also with an extension.
     bool IsDeviceName(std::string_view name);
 
-    // A name Windows holds as one file or folder, in its folder: not empty, "." or
+    // A name (UTF-8) Windows holds as one file or folder, in its folder: not empty, "." or
     // "..", no IsBadNameChar, no trailing dot or space, not a device.
     bool IsPlainName(std::string_view name);
 

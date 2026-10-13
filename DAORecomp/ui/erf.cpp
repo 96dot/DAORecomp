@@ -144,6 +144,7 @@ namespace dao::ui
         const auto table = ReadFileBytes(path, entriesAt, uint32_t(tableSize));
         if (!table)
             return std::string("it's damaged");
+        archive.entries_.reserve(count);
         for (uint32_t i = 0; i < count; ++i)
         {
             const std::span<const uint8_t> raw(table->data() + i * entrySize, entrySize);
