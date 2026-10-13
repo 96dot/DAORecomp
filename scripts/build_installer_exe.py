@@ -17,7 +17,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 WORK = REPO / "build" / "installer-exe"
-# PyInstaller and its dependencies, pinned by hash.
+# PyInstaller and its dependencies, and truststore, pinned by hash.
 REQUIREMENTS = REPO / "scripts" / "installer-requirements.txt"
 NAME = "DAORecomp-Installer"
 
@@ -63,6 +63,8 @@ def main():
         "--paths", REPO / "scripts",
         "--hidden-import", "xiso", "--hidden-import", "sync_dir", "--hidden-import", "patch_recompiler",
         "--hidden-import", "stfs", "--hidden-import", "prefix_symbols",
+        # Imported inside a try (installer/util.py): named so it is always bundled.
+        "--hidden-import", "truststore",
         "--add-data", f"{staging}{os.pathsep}source",
         REPO / "install.py",
     ], check=True)

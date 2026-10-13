@@ -1,14 +1,15 @@
 """Logging, processes, downloads and archives shared by the installer steps."""
 import hashlib
+import http.client
 import os
 import platform
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tarfile
 import threading
-import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -158,6 +159,18 @@ def sha256_file(path):
     return h.hexdigest()
 
 
+def _tls_context():
+    """How downloads check certificates: with the system's verifier (truststore) when it's
+    there, else Python's default (None)."""
+    # Python alone trusts only the root certificates already on the PC; Windows fetches
+    # the ones it lacks while verifying, so a fresh PC doesn't fail on GitHub's.
+    try:
+        import truststore
+    except ImportError:
+        return None
+    return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+
 def download(reporter, dl, dest_dir):
     """Downloads a deps.Download into dest_dir (resumable by re-running), checks its SHA-256."""
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -180,7 +193,7 @@ def download(reporter, dl, dest_dir):
     if have:
         request.add_header("Range", f"bytes={have}-")
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=60, context=_tls_context()) as response:
             if have and response.status != 206:
                 have = 0  # the server ignored the range; start over
             with open(partial, "ab" if have else "wb") as out:
@@ -196,9 +209,16 @@ def download(reporter, dl, dest_dir):
                         last = percent // 10
                         reporter.log(f"  {percent}%")
                     reporter.check_cancel()
-    except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+    except (OSError, http.client.HTTPException) as e:
+        # (OSError: urllib's URLError, timeouts, and TLS or connection errors mid-download.)
         # What arrived is kept: running again carries on from there.
-        raise InstallError(f"Can't download {name} ({getattr(e, 'reason', e)}). Check the internet connection "
+        reason = getattr(e, "reason", e)
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            raise InstallError(f"Can't download {name}: the connection's certificate isn't trusted "
+                               f"({reason}). Antivirus HTTPS scanning, a VPN or a network "
+                               f"that inspects connections can cause this; turn it off and try again, or "
+                               f"check that the PC's date and time are right.")
+        raise InstallError(f"Can't download {name} ({reason}). Check the internet connection "
                            f"and try again.")
     if sha256_file(partial) != dl.sha256:
         partial.unlink()
