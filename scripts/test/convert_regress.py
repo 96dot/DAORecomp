@@ -22,9 +22,15 @@ def main():
     work = Path(sys.argv[1])
     work.mkdir(parents=True, exist_ok=True)
     for case in sys.argv[2:]:
-        pc, earlier = (Path(p) for p in case.split("=", 1))
-        mod = work / pc.name
-        for old in (mod, work / ".originals" / pc.name):
+        pc, earlier = (Path(p).resolve() for p in case.split("=", 1))
+        mod = (work / pc.name).resolve()
+        # The work copies are deleted first: never an input, or a folder holding one.
+        for old in (mod, (work / ".originals" / pc.name).resolve()):
+            for kept in (pc, earlier):
+                if old == kept or old in kept.parents or kept in old.parents:
+                    print(f"{old} would replace {kept}: use a work folder away from the inputs")
+                    return 2
+        for old in (mod, (work / ".originals" / pc.name).resolve()):
             if old.exists():
                 shutil.rmtree(old)
         shutil.copytree(pc, mod)

@@ -25,6 +25,18 @@ if IS_WINDOWS:
     # Programs run by name are found on PATH only, never in the current folder.
     os.environ["NoDefaultCurrentDirectoryInExePath"] = "1"
 
+    import ctypes
+    from ctypes import wintypes
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    _kernel32.CreateJobObjectW.argtypes = (wintypes.LPVOID, wintypes.LPCWSTR)
+    _kernel32.OpenProcess.restype = wintypes.HANDLE
+    _kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    _kernel32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+    _kernel32.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+
 
 def _work_root():
     if os.environ.get("DAO_WORK_DIR"):
@@ -115,22 +127,42 @@ def clean_env(extra=None):
     return env
 
 
-def _kill_tree(process):
-    """Ends a process and the ones it started (a build tool's compilers and linkers):
-    its tree on Windows, its process group elsewhere."""
-    if process.poll() is not None:
-        return
+def _job_for(process):
+    """A Windows job object holding a just-started process, and so whatever it starts
+    from then on (it can't start anything before its own startup), or None if that fails.
+    Ending the job ends them all, even after the process itself has exited."""
+    job = _kernel32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    # PROCESS_SET_QUOTA | PROCESS_TERMINATE; the PID is still this process's (Popen holds
+    # its handle).
+    handle = _kernel32.OpenProcess(0x0100 | 0x0001, False, process.pid)
+    assigned = bool(handle) and bool(_kernel32.AssignProcessToJobObject(job, handle))
+    if handle:
+        _kernel32.CloseHandle(handle)
+    if not assigned:
+        _kernel32.CloseHandle(job)
+        return None
+    return job
+
+
+def _kill_tree(process, job):
+    """Ends a process and the ones it started (a build tool's compilers and linkers), also
+    those still running after it exited (one may hold its output open): its job on
+    Windows (else its tree while it runs), its process group elsewhere."""
     if IS_WINDOWS:
-        taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
-        try:
-            subprocess.run([str(taskkill), "/T", "/F", "/PID", str(process.pid)], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                           creationflags=subprocess.CREATE_NO_WINDOW)
-        except OSError:
-            pass  # then the process itself, below
+        if not (job and _kernel32.TerminateJobObject(job, 1)) and process.poll() is None:
+            taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
+            try:
+                subprocess.run([str(taskkill), "/T", "/F", "/PID", str(process.pid)], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+            except OSError:
+                pass  # then the process itself, below
     else:
         try:
-            os.killpg(process.pid, signal.SIGKILL)  # its own session (see run)
+            # Its own session (see run): the group outlives the process while members remain.
+            os.killpg(process.pid, signal.SIGKILL)
         except OSError:
             pass
     if process.poll() is None:
@@ -148,6 +180,7 @@ def run(reporter, args, cwd=None, env=None, log_file=None, quiet=False):
                                    start_new_session=not IS_WINDOWS)
     except FileNotFoundError:
         raise InstallError(f"{args[0]} not found.")
+    job = _job_for(process) if IS_WINDOWS else None
     # Cancelling ends the tool at once, not at its next line of output (a link can be
     # silent for minutes).
     finished = threading.Event()
@@ -155,16 +188,17 @@ def run(reporter, args, cwd=None, env=None, log_file=None, quiet=False):
     def watch_cancel():
         while not finished.wait(0.2):
             if reporter.cancel_event.is_set():
-                _kill_tree(process)
+                _kill_tree(process, job)
                 return
 
+    watcher = threading.Thread(target=watch_cancel, daemon=True)
     out = None
     tail = []
     try:
         if log_file:
             Path(log_file).parent.mkdir(parents=True, exist_ok=True)
             out = open(log_file, "w", encoding="utf-8", errors="replace")
-        threading.Thread(target=watch_cancel, daemon=True).start()
+        watcher.start()
         for raw in process.stdout:
             line = raw.decode("utf-8", errors="replace").rstrip()
             if out:
@@ -175,6 +209,10 @@ def run(reporter, args, cwd=None, env=None, log_file=None, quiet=False):
         process.wait()
     finally:
         finished.set()
+        if watcher.is_alive():
+            watcher.join()  # before the job is closed under it
+        if job:
+            _kernel32.CloseHandle(job)
         if out:
             out.close()
     reporter.check_cancel()
