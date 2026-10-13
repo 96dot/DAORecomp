@@ -2,8 +2,8 @@
 // The launcher's parts (see launcher.h), shared by its files: launcher.cpp has
 // the command line, the window and its frame loop, widgets.cpp the helpers the
 // views draw with, and the views a file each (title_screen.cpp, configure_view.cpp,
-// mods_view.cpp, saves_view.cpp, update_view.cpp, install_view.cpp, and
-// add_to_steam.cpp's popup).
+// mods_view.cpp, saves_view.cpp, dlc_view.cpp, update_view.cpp, install_view.cpp,
+// and add_to_steam.cpp's popup).
 
 // (Every part had these when the launcher was one file.)
 #include <future>
@@ -12,6 +12,7 @@
 #include <SDL3/SDL.h>
 #include <imgui.h>
 
+#include "content/installed.h"
 #include "content/save_backups.h"
 #include "launcher/install_runner.h"
 #include "launcher/steam.h"
@@ -81,7 +82,7 @@ namespace dao::launcher
     // Button hints: the icon's height, the gap to the label, the label's size.
     constexpr float kHintIcon = 30.0f, kHintGap = 8.0f, kHintTextSize = 19.0f;
 
-    enum class View { Main, Configure, Mods, Saves, Update, Install };
+    enum class View { Main, Configure, Mods, Saves, Dlc, Update, Install };
     // Graphics, Display, Patches, Advanced.
     constexpr int kConfigureTabs = 4;
 
@@ -159,6 +160,22 @@ namespace dao::launcher
         std::string backupText, currentText;
     };
 
+    // A row of the Downloadable Content view's table.
+    struct DlcRow
+    {
+        std::string name;
+        bool installed = false;
+        // It needs the title update.
+        bool needsUpdate = false;
+    };
+
+    // What's installed of the DLC and the title update, read in the background.
+    struct DlcScan
+    {
+        std::vector<content::InstalledPackage> packages;
+        content::TitleUpdateState titleUpdate;
+    };
+
     // The Install view's paths.
     enum class InstallField
     {
@@ -214,6 +231,18 @@ namespace dao::launcher
         std::vector<SaveBackupRow> saveBackups;
         int selectedBackup = -1;
         std::vector<mods::InstallResult::Line> saveMessages;
+        // Downloadable Content: what's installed (read as the view opens, and after
+        // packages are added while it's shown) and whether it has been read once, the
+        // reading under way, and whether to read again after it.
+        std::vector<DlcRow> dlcRows;
+        content::TitleUpdateState titleUpdate;
+        bool dlcRead = false;
+        std::future<DlcScan> dlcScan;
+        bool readDlcAgain = false;
+        // How the last drop on that view went (not the Mods page's messages), and
+        // whether the one being added was dropped there.
+        std::vector<mods::InstallResult::Line> dlcMessages;
+        bool addingOnDlc = false;
         // The release the updater found and its notes, taken from it once.
         std::optional<Release> release;
         std::vector<NoteLine> releaseNotes;
@@ -343,6 +372,7 @@ namespace dao::launcher
     bool BeginDialog(const State& st, const char* title);
     bool CancelPressed();
     void Messages(const std::vector<mods::InstallResult::Line>& lines);
+    void ColoredText(ImU32 color, const char* text);
     void PanelFrame(State& st, const Layout& layout, const char* title, Restore restore);
     void ShowContents(State& st, const Layout& layout, float left, Contents contents, bool resetScroll = false);
 
@@ -371,6 +401,12 @@ namespace dao::launcher
 
     // saves_view.cpp: Save Backups, putting back a save the game saved over.
     void SavesView(State& st, const Layout& layout);
+
+    // dlc_view.cpp: Downloadable Content, what's installed and how to add more.
+    bool ReadingDlc(const State& st);
+    void ReadDlc(State& st);
+    void FinishReadingDlc(State& st);
+    void DlcView(State& st, const Layout& layout);
 
     // update_view.cpp: Update, a newer release's page.
     const Release* FoundRelease(State& st);

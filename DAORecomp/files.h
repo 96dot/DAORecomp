@@ -15,6 +15,9 @@ namespace dao
     // "..", no IsBadNameChar, no trailing dot or space, not a device.
     bool IsPlainName(std::string_view name);
 
+    // A folder, not a link or junction to one somewhere else.
+    bool IsPlainFolder(const std::filesystem::path& path);
+
     // Writes `data` to <path>.part and renames that over `path`, so `path` is never
     // a partial file (if either fails, the old one stays). False if it fails, and
     // then the .part is removed.

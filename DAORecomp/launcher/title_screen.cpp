@@ -329,6 +329,8 @@ namespace dao::launcher
             SetView(st, View::Mods);
         if (item("Save Backups"))
             SetView(st, View::Saves);
+        if (item("Downloadable Content"))
+            SetView(st, View::Dlc);
         // Update appears above Exit once a newer release is found.
         if (FoundRelease(st) && item("Update"))
             SetView(st, View::Update);

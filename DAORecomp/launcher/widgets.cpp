@@ -195,6 +195,14 @@ namespace dao::launcher
     }
 
     // How something went, a line each: problems in the error colour.
+    // Wrapped text in `color` (kWarning, kError).
+    void ColoredText(ImU32 color, const char* text)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, color);
+        ImGui::TextWrapped("%s", text);
+        ImGui::PopStyleColor();
+    }
+
     void Messages(const std::vector<mods::InstallResult::Line>& lines)
     {
         ImGui::PushTextWrapPos(0.0f);

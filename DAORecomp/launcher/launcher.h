@@ -1,7 +1,8 @@
 #pragma once
 // The launcher window shown before the game (and again, on its Mods page, when
 // the game's Manage mods button restarts it): Play, Configure (graphics, display,
-// patches, advanced), Mods, Save Backups, and Update when a newer release is out.
+// patches, advanced), Mods, Save Backups, Downloadable Content, and Update when a
+// newer release is out.
 // It edits userdata/config.toml; the game reads that file once the launcher closes.
 
 namespace dao::launcher

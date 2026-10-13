@@ -105,11 +105,7 @@ namespace dao::launcher
                               .c_str()
                         : "The save was deleted, so the backup is put back as it is.");
                 if (row.backup.currentUnfinished)
-                {
-                    ImGui::PushStyleColor(ImGuiCol_Text, kWarning);
-                    ImGui::TextWrapped("The game stopped while writing the save there now, so it may be damaged.");
-                    ImGui::PopStyleColor();
-                }
+                    ColoredText(kWarning, "The game stopped while writing the save there now, so it may be damaged.");
                 ImGui::Spacing();
                 if (ImGui::Button("Restore"))
                 {

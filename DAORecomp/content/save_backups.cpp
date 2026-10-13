@@ -17,14 +17,6 @@ namespace dao::content
         // The restore's name for the save it sets aside (see save_backups.h).
         constexpr std::wstring_view kAside = L"~current";
 
-        // A folder, not a link or junction to one somewhere else.
-        bool IsPlainFolder(const fs::path& path)
-        {
-            const DWORD attributes = GetFileAttributesW(path.c_str());
-            return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) &&
-                !(attributes & FILE_ATTRIBUTE_REPARSE_POINT);
-        }
-
         // A display name file's bytes (kDisplayNameSize at most); empty if there's none.
         std::string ReadNameFile(const fs::path& path)
         {

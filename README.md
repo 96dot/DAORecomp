@@ -84,6 +84,8 @@ them) and:
 Only packages in the read-only format Xbox Live delivers them in (LIVE/PIRS) are read;
 the packages themselves are left as they are. At start, `title_update/default.xexp` is
 checked to be Title Update 6's or 7's; anything else is passed over for the disc's version.
+The launcher's *Downloadable Content* shows which DLC and title update are installed
+(and whether the game can use them), and packages can be dropped there too.
 
 ### Linux (or from the source on Windows)
 
@@ -269,8 +271,8 @@ start, so this happens once per place.
     memory it faulted on (Direct3D 12 DRED).
   - `DAO_LAUNCHER_SCREENSHOTS=<folder>`: saves each launcher view (the title screen,
     the four Configure tabs, Mods: its list, even before the first-open notice was
-    read, Save Backups) as `launcher_0.bmp` to `launcher_6.bmp`, and the Update page as
-    `launcher_7.bmp` when the update check finds a release, then quits.
+    read, Save Backups, Downloadable Content) as `launcher_0.bmp` to `launcher_7.bmp`, and
+    the Update page as `launcher_8.bmp` when the update check finds a release, then quits.
   - `DAO_LAUNCHER_DROP=<path>|<path>...`: with `DAO_LAUNCHER_SCREENSHOTS`, adds those
     as if dropped on the window (tests adding mods and installing packages).
   - `DAO_BUILD=disc`: runs the disc's build even when a title update is installed.

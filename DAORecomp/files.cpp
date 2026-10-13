@@ -35,6 +35,13 @@ namespace dao
         return std::ranges::none_of(name, IsBadNameChar);
     }
 
+    bool IsPlainFolder(const std::filesystem::path& path)
+    {
+        const DWORD attributes = GetFileAttributesW(path.c_str());
+        return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) &&
+            !(attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+    }
+
     bool WriteFileAtomically(const std::filesystem::path& path, std::string_view data)
     {
         const std::filesystem::path part = std::filesystem::path(path).concat(L".part");

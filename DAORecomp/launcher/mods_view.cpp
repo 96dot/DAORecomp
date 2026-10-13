@@ -72,13 +72,17 @@ namespace dao::launcher
     }
 
     // Adds the mods just dropped on the window, in the background (copying and
-    // unpacking can take a while), and shows the Mods page.
+    // unpacking can take a while), and shows the Mods page (or stays on Downloadable
+    // Content, for packages dropped there).
     void AddDroppedMods(State& st)
     {
+        // (A drop on Downloadable Content stays there, and its outcome is shown there.)
+        const bool onDlc = st.view == View::Dlc;
+        auto& messages = onDlc ? st.dlcMessages : st.modMessages;
         // (After the list has been read, which they're added to.)
         if (ReadingMods(st))
         {
-            if (!st.dropped.empty())
+            if (!st.dropped.empty() && !onDlc)
                 SetView(st, View::Mods);
             return;
         }
@@ -86,13 +90,15 @@ namespace dao::launcher
         st.dropped.clear();
         if (dropped.empty())
             return;
-        SetView(st, View::Mods);
+        if (!onDlc)
+            SetView(st, View::Mods);
         if (ModsBusy(st))
         {
-            st.modMessages = { { "Still working on the last mods: drop these again when it's done.", true } };
+            messages = { { "Still working on the last mods: drop these again when it's done.", true } };
             return;
         }
-        st.modMessages.clear();
+        messages.clear();
+        st.addingOnDlc = onDlc;
         // Xbox 360 packages (DLC, the title update) are installed; the rest are mods.
         st.modInstall = std::async(std::launch::async,
             [root = st.modsRoot, gameRoot = st.gameRoot, userRoot = st.userRoot, dropped = std::move(dropped),
@@ -136,7 +142,11 @@ namespace dao::launcher
             st.scrollToMod = true;
         }
         mods::FindOverlaps(st.mods);
-        st.modMessages = std::move(result.lines);
+        (st.addingOnDlc ? st.dlcMessages : st.modMessages) = std::move(result.lines);
+        // What's installed changed (wherever it was dropped). Not once the launcher is
+        // done: nothing would show it.
+        if (st.view == View::Dlc && !st.play && !st.quit)
+            ReadDlc(st);
     }
 
     // When the background conversion is done: the mod as it is now, and the outcome.
