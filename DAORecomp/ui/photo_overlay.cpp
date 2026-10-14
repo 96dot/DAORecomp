@@ -73,23 +73,10 @@ namespace dao::ui
         };
         constexpr const char* kRowNames[] = { "Field of View", "Roll", "Camera Speed", "Frame", "Grid" };
 
-        // Laid out on the game's 1280x720 stage. The panel: on shading fading to
-        // the right, the save screen's title plate, then a main-menu plate a row (the
-        // highlighted one for the selected row), the pop-ups' divider under them.
-        constexpr float kPanelLeft = 40.0f, kPanelWidth = 400.0f, kPanelTop = 40.0f, kShadeWidth = 560.0f;
-        constexpr float kTitleWidth = 360.0f, kTitleMinHeight = 60.0f, kTitleSize = 26.0f;
-        constexpr float kRowGap = 6.0f, kRowHeight = 44.0f, kRowTextSize = 20.0f, kInset = 26.0f;
-        constexpr float kPlateEnds = 0.09f;
-        constexpr float kArrowHeight = 22.0f, kValueWidth = 150.0f;
-        constexpr float kDividerWidth = 380.0f;
-        // The controls along the bottom, on the pop-ups' bar.
-        constexpr float kBarLeft = 30.0f, kBarTop = 664.0f, kBarBottom = 708.0f, kHintTop = 673.0f;
-        constexpr float kBarEnds = 0.06f;
-        constexpr HintStyle kHintStyle{ 26.0f, 5.0f, 16.0f, 16.0f };
-        // Messages (on a highlighted plate): what was saved, over the bar, and the
-        // setting the d-pad changes, at the top.
+        // Laid out on the game's 1280x720 stage (the panel and the controls as
+        // overlay.cpp's). Messages (on a highlighted plate): what was saved, over the
+        // controls, and the setting the d-pad changes, at the top.
         constexpr float kToastY = 606.0f, kToastSize = 19.0f, kReadoutY = 22.0f, kReadoutSize = 22.0f;
-        constexpr float kMessagePad = 34.0f;
         constexpr float kCrossArm = 18.0f;
         // Seconds: how long messages and the flash last, and how long the toast and
         // the readout take to fade out at the end.
@@ -323,73 +310,10 @@ namespace dao::ui
             // The settings, down the left.
             void DrawPanel(ImDrawList* draw)
             {
-                const float titleHeight = std::max(ArtHeight(overlay_, art::kTitlePlate, kTitleWidth), kTitleMinHeight);
-                const float rowsTop = kPanelTop + titleHeight + kRowGap;
-                const float rowsBottom = rowsTop + int(Row::Count) * (kRowHeight + kRowGap);
-                const float dividerHeight = ArtHeight(overlay_, art::kDivider, kDividerWidth);
-
-                // Shading behind it, fading out to the right.
-                const ImVec2 shadeMin = At(0, kPanelTop - 20.0f);
-                const ImVec2 shadeMax = At(kPanelLeft + kShadeWidth, rowsBottom + dividerHeight + 10.0f);
-                draw->AddRectFilledMultiColor(ImVec2(0, shadeMin.y), shadeMax, IM_COL32(0, 0, 0, 200),
-                    IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 200));
-
-                // The title on its plate.
-                const float middle = kPanelLeft + kPanelWidth * 0.5f;
-                DrawArt(draw, overlay_, art::kTitlePlate, At(middle - kTitleWidth * 0.5f, kPanelTop),
-                    At(middle + kTitleWidth * 0.5f, kPanelTop + titleHeight));
-                const float titleSize = Px(kTitleSize);
-                constexpr const char* kTitle = "Photo Mode";
-                const ImVec2 titleExtent = overlay_.bold->CalcTextSizeA(titleSize, FLT_MAX, 0, kTitle);
-                const ImVec2 titleMiddle = At(middle, kPanelTop + titleHeight * 0.5f);
-                ShadowText(draw, overlay_.bold, titleSize,
-                    ImVec2(titleMiddle.x - titleExtent.x * 0.5f, titleMiddle.y - titleExtent.y * 0.5f), kGoldBright,
-                    kTitle);
-
+                PanelRow rows[int(Row::Count)];
                 for (int i = 0; i < int(Row::Count); ++i)
-                {
-                    const float top = rowsTop + i * (kRowHeight + kRowGap);
-                    const ImVec2 rowMin = At(kPanelLeft, top), rowMax = At(kPanelLeft + kPanelWidth, top + kRowHeight);
-                    const bool selected = i == row_;
-                    DrawArtSliced(draw, overlay_, selected ? art::kPlateLit : art::kPlate, rowMin, rowMax, kPlateEnds,
-                        selected ? 1.0f : 0.85f);
-                    const float size = Px(kRowTextSize);
-                    const float textY = (rowMin.y + rowMax.y - size) * 0.5f;
-                    ShadowText(draw, overlay_.bold, size, ImVec2(At(kPanelLeft + kInset, 0).x, textY),
-                        selected ? kGoldBright : kText, kRowNames[i]);
-
-                    // The value, between the Options screen's arrows when selected.
-                    const std::string value = Value(Row(i));
-                    const float right = At(kPanelLeft + kPanelWidth - kInset, 0).x;
-                    const float left = right - Px(kValueWidth);
-                    const ImVec2 extent = overlay_.regular->CalcTextSizeA(size, FLT_MAX, 0, value.c_str());
-                    ShadowText(draw, overlay_.regular, size, ImVec2((left + right - extent.x) * 0.5f, textY),
-                        selected ? kText : kTextDim, value);
-                    const float arrowHeightPerWidth = ArtHeight(overlay_, art::kArrowLeft, 1.0f);
-                    if (selected && arrowHeightPerWidth > 0)
-                    {
-                        const float h = Px(kArrowHeight), w = h / arrowHeightPerWidth;
-                        const float y = (rowMin.y + rowMax.y - h) * 0.5f;
-                        DrawArt(draw, overlay_, art::kArrowLeft, ImVec2(left, y), ImVec2(left + w, y + h));
-                        DrawArt(draw, overlay_, art::kArrowLeft, ImVec2(right - w, y), ImVec2(right, y + h), 1.0f, true);
-                    }
-                }
-
-                DrawArt(draw, overlay_, art::kDivider, At(middle - kDividerWidth * 0.5f, rowsBottom),
-                    At(middle + kDividerWidth * 0.5f, rowsBottom + dividerHeight));
-            }
-
-            // A line of text centred on a highlighted plate, faded by `alpha`.
-            void DrawMessage(ImDrawList* draw, ImFont* font, float size, float y, std::string_view text, float alpha)
-            {
-                const float pixels = Px(size);
-                const ImVec2 extent = font->CalcTextSizeA(pixels, FLT_MAX, 0, text.data(), text.data() + text.size());
-                const float middle = At(Stage::kWidth * 0.5f, 0).x, top = At(0, y).y, pad = Px(kMessagePad);
-                const float height = extent.y * 1.9f;
-                DrawArtSliced(draw, overlay_, art::kPlateLit, ImVec2(middle - extent.x * 0.5f - pad, top),
-                    ImVec2(middle + extent.x * 0.5f + pad, top + height), kPlateEnds, alpha);
-                ShadowText(draw, font, pixels, ImVec2(middle - extent.x * 0.5f, top + (height - extent.y) * 0.5f),
-                    WithAlpha(kText, alpha), text);
+                    rows[i] = { kRowNames[i], Value(Row(i)) };
+                ui::DrawPanel(draw, overlay_, stage_, "Photo Mode", rows, row_);
             }
 
             // With the panel closed: the field of view or roll for a moment after
@@ -399,15 +323,13 @@ namespace dao::ui
                 if (now_ >= readoutUntil_)
                     return;
                 const float alpha = float(std::min(1.0, (readoutUntil_ - now_) / kReadoutFade));
-                DrawMessage(draw, overlay_.bold, kReadoutSize, kReadoutY,
+                DrawMessage(draw, overlay_, stage_, overlay_.bold, kReadoutSize, kReadoutY,
                     fmt::format("{}  {}", kRowNames[int(readout_)], Value(readout_)), alpha);
             }
 
-            // The controls along the bottom, on the pop-ups' bar.
+            // The controls along the bottom.
             void DrawControls(ImDrawList* draw)
             {
-                DrawArtSliced(draw, overlay_, art::kBar, At(kBarLeft, kBarTop), At(Stage::kWidth - kBarLeft, kBarBottom),
-                    kBarEnds, 0.95f);
                 std::vector<Hint> hints = { { "Move", art::kLeftStick }, { "Look", art::kRightStick },
                     { "Down / Up", art::kButtonLT, art::kButtonRT } };
                 if (panelOpen_)
@@ -420,9 +342,7 @@ namespace dao::ui
                                                   { "Take Photo", art::kButtonA }, { "Settings", art::kButtonX } });
                 hints.insert(hints.end(), { { "Hide UI", art::kButtonY }, { "Reset", art::kButtonBack },
                                               { panelOpen_ ? "Back" : "Exit", art::kButtonB } });
-                const float width = HintsWidth(overlay_, stage_, hints, kHintStyle);
-                ui::DrawHints(draw, overlay_, stage_, hints, kHintStyle, At(Stage::kWidth * 0.5f, 0).x - width * 0.5f,
-                    At(0, kHintTop).y);
+                ui::DrawControls(draw, overlay_, stage_, hints);
             }
 
             void DrawToast(ImDrawList* draw)
@@ -430,7 +350,7 @@ namespace dao::ui
                 if (now_ >= toastUntil_)
                     return;
                 const float alpha = float(std::min(1.0, (toastUntil_ - now_) / kToastFade));
-                DrawMessage(draw, overlay_.italic, kToastSize, kToastY, toast_, alpha);
+                DrawMessage(draw, overlay_, stage_, overlay_.italic, kToastSize, kToastY, toast_, alpha);
             }
 
             // The shutter: a white flash fading out.

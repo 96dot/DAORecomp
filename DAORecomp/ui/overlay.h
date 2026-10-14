@@ -93,8 +93,9 @@ namespace dao::ui
         ImVec2 At(float x, float y) const { return ImVec2(originX + x * fit, originY + y * fit); }
     };
 
-    // Text with the game's drop shadow.
-    void ShadowText(ImDrawList* draw, ImFont* font, float size, ImVec2 at, ImU32 color, std::string_view text);
+    // Text with the game's drop shadow (wrapped at `wrapWidth` pixels, if not 0).
+    void ShadowText(ImDrawList* draw, ImFont* font, float size, ImVec2 at, ImU32 color, std::string_view text,
+        float wrapWidth = 0);
 
     // A sprite of the game's art stretched over a rectangle (`mirrored`: left to
     // right), if the art has it.
@@ -123,4 +124,29 @@ namespace dao::ui
     // Drawn from `left` (pixels), icons from `top`.
     void DrawHints(ImDrawList* draw, const Overlay& overlay, const Stage& stage, std::span<const Hint> hints,
         const HintStyle& style, float left, float top);
+
+    // The menus over the game (photo mode's settings, the cheats), on the stage.
+
+    // A row of a menu panel: its name, and its value on the right (none if empty),
+    // between the Options screen's arrows when it's selected and left and right
+    // change it.
+    struct PanelRow
+    {
+        std::string_view name;
+        std::string value;
+        bool changes = true;
+    };
+    // A menu panel down the stage's left: the title on the save screen's title
+    // plate, then a main-menu plate a row (the highlighted one for the `selected`
+    // row), the pop-ups' divider under them, all on shading fading out to the right
+    // that reaches `shadeBelow` (stage units) under the divider. Returns the
+    // divider's bottom (stage units).
+    float DrawPanel(ImDrawList* draw, const Overlay& overlay, const Stage& stage, std::string_view title,
+        std::span<const PanelRow> rows, int selected, float shadeBelow = 0);
+    // A line of text centred across the stage at `y` (stage units) on a
+    // highlighted plate, faded by `alpha`.
+    void DrawMessage(ImDrawList* draw, const Overlay& overlay, const Stage& stage, ImFont* font, float size, float y,
+        std::string_view text, float alpha);
+    // The controls along the stage's bottom, on the pop-ups' bar.
+    void DrawControls(ImDrawList* draw, const Overlay& overlay, const Stage& stage, std::span<const Hint> hints);
 }

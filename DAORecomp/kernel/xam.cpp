@@ -12,6 +12,7 @@
 #include "input/input.h"
 #include "ui/keyboard.h"
 #include "ui/photo_mode.h"
+#include "ui/cheats.h"
 
 namespace dao::imp
 {
@@ -507,15 +508,27 @@ namespace dao::imp
         else if (state)
         {
             state->packetNumber = host.packetNumber;
-            // (Photo mode's buttons are its own: the first player's.)
-            state->gamepad.buttons =
-                user == 0 || user == 0xFF ? dao::ui::PhotoModeFilterButtons(host.buttons) : host.buttons;
-            state->gamepad.leftTrigger = host.leftTrigger;
-            state->gamepad.rightTrigger = host.rightTrigger;
-            state->gamepad.thumbLX = host.thumbLX;
-            state->gamepad.thumbLY = host.thumbLY;
-            state->gamepad.thumbRX = host.thumbRX;
-            state->gamepad.thumbRY = host.thumbRY;
+            // (Photo mode's buttons are its own, and the cheats menu's all of the
+            // controller: the first player's.)
+            const bool first = user == 0 || user == 0xFF;
+            state->gamepad.buttons = first
+                ? dao::ui::CheatsFilterButtons(dao::ui::PhotoModeFilterButtons(host.buttons))
+                : host.buttons;
+            if (first && dao::ui::CheatsOpen())
+            {
+                state->gamepad.leftTrigger = state->gamepad.rightTrigger = 0;
+                state->gamepad.thumbLX = state->gamepad.thumbLY = 0;
+                state->gamepad.thumbRX = state->gamepad.thumbRY = 0;
+            }
+            else
+            {
+                state->gamepad.leftTrigger = host.leftTrigger;
+                state->gamepad.rightTrigger = host.rightTrigger;
+                state->gamepad.thumbLX = host.thumbLX;
+                state->gamepad.thumbLY = host.thumbLY;
+                state->gamepad.thumbRX = host.thumbRX;
+                state->gamepad.thumbRY = host.thumbRY;
+            }
         }
         return X_ERROR_SUCCESS;
     }

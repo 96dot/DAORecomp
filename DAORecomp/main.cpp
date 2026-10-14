@@ -14,6 +14,7 @@
 #include "ui/graphics_menu.h"
 #include "ui/keyboard.h"
 #include "ui/photo_mode.h"
+#include "ui/cheats.h"
 #include "program.h"
 #include "settings.h"
 #include "text.h"
@@ -412,12 +413,12 @@ int main(int argc, char** argv)
     if (frameHistory)
         dao::gpu::StartFrameHistory(userRoot);
 
-    // Hotkeys (game window focused): F6 pauses neural rendering and resumes it, F10
-    // switches between the game's own 30 fps and the frame rate set, F12 saves the
-    // frame history (DAO_FRAME_HISTORY). Polled at 20 Hz: each poll is a few window
-    // system calls (round trips to wineserver on Proton), and a key press is longer.
+    // Hotkeys (game window focused): F6 pauses neural rendering and resumes it, F7
+    // opens the cheats menu and closes it, F10 switches between the game's own 30 fps
+    // and the frame rate set, F12 saves the frame history (DAO_FRAME_HISTORY).
+    // Polled at 20 Hz: each poll is a few window system calls (round trips to wineserver on Proton), and a key press is longer.
     std::thread([frameHistory, neural = dao::NeuralRenderingOn(dao::GetSettings())] {
-        constexpr int keys[] = { VK_F6, VK_F10, VK_F12 };
+        constexpr int keys[] = { VK_F6, VK_F7, VK_F10, VK_F12 };
         bool wasDown[std::size(keys)] = {};
         for (;;)
         {
@@ -437,6 +438,8 @@ int main(int argc, char** argv)
                         paused.store(pause, std::memory_order_relaxed);
                         LOGI("Neural rendering: {} (F6)", pause ? "paused" : "resumed");
                     }
+                    else if (keys[i] == VK_F7)
+                        dao::ui::ToggleCheats();
                     else if (keys[i] == VK_F10)
                         dao::gpu::ToggleGameFrameRate();
                     else if (keys[i] == VK_F12 && frameHistory)

@@ -25,6 +25,9 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
 - a photo mode (the START menu's Photo Mode row, or L3+R3): a free camera with the
   world paused, field of view, roll, frames from 32:9 to 9:16 and composition grids,
   saving PNGs to Pictures\DAORecomp
+- a cheats menu (*Options → Graphics → Open cheats* in a game, or F7): the developers'
+  own debug scripts, still in the game, for immortality, skill checks, gold,
+  experience and more
 - an on-screen keyboard for naming characters, usable with a gamepad
 - the downloadable content (Awakening and the rest), installed from your own packages
 
@@ -266,6 +269,24 @@ photo (saved in `Pictures\DAORecomp`, cut to the chosen frame, without the overl
 SDR when the game is in HDR), X opens the settings (field of view, roll, camera speed,
 frame, grid), Y hides the overlay, BACK resets the camera, and B or START leaves. On its
 own, a stick click reaches the game 80 ms late (the other may still come).
+
+The cheats menu opens from *Options → Graphics → Open cheats* (paused from exploration or
+combat), or with F7 (the keyboard only, while the game's window is in front), in exploration or combat;
+the world pauses under it. Each cheat runs one of the scripts BioWare's developers left in
+the game (the PC version's console ran them with `runscript`), through the game's own
+script engine:
+
+| Cheat | Script | What it does |
+|---|---|---|
+| Immortal Party | `pc_immortal`, as each party member | the party still takes damage but can't die (A again makes those it made immortal mortal) |
+| Win Every Skill Check | `zz_override_skills` | persuasion, intimidation and the other skill checks in conversations always succeed |
+| Kill Nearby Enemies | `killallhostiles` | kills up to 30 enemies the party leader can see, even those the story keeps alive (some fights may not end as they should) |
+| Add Gold | `zz_money` | 1, 10, 100 or 1,000 gold (left and right) |
+| Add Experience | `addxp` | 1,000, 5,000, 20,000 or 100,000 experience for the party |
+| Strengthen Party | `zz_supercrit`, for each party member | health and mana 1,000, strength and dexterity 50; permanent |
+
+They change the save like anything else in the game: back it up first (the launcher's
+*Save Backups*) if you may want it as it was. B or START closes the menu.
 
 Shaders are compiled the first time something is drawn, and that draw is skipped
 until then, so new places can show objects popping in for a moment. Compiled shaders

@@ -114,12 +114,13 @@ namespace dao::ui
         originY = (io.DisplaySize.y - kHeight * fit) * 0.5f;
     }
 
-    void ShadowText(ImDrawList* draw, ImFont* font, float size, ImVec2 at, ImU32 color, std::string_view text)
+    void ShadowText(ImDrawList* draw, ImFont* font, float size, ImVec2 at, ImU32 color, std::string_view text,
+        float wrapWidth)
     {
         const float offset = std::max(1.0f, size / 16.0f);
         draw->AddText(font, size, ImVec2(at.x + offset, at.y + offset), palette::kShadow, text.data(),
-            text.data() + text.size());
-        draw->AddText(font, size, at, color, text.data(), text.data() + text.size());
+            text.data() + text.size(), wrapWidth);
+        draw->AddText(font, size, at, color, text.data(), text.data() + text.size(), wrapWidth);
     }
 
     void DrawArt(ImDrawList* draw, const Overlay& overlay, const char* name, ImVec2 min, ImVec2 max, float alpha,
@@ -196,5 +197,109 @@ namespace dao::ui
                 hint.label);
             x += extent.x + space;
         }
+    }
+
+    namespace
+    {
+        // The menus' layout on the stage. The panel: its left, width and top, the
+        // shading's width, the title plate, the rows, and the divider under them.
+        constexpr float kPanelLeft = 40.0f, kPanelWidth = 400.0f, kPanelTop = 40.0f, kShadeWidth = 560.0f;
+        constexpr float kTitleWidth = 360.0f, kTitleMinHeight = 60.0f, kTitleSize = 26.0f;
+        constexpr float kRowGap = 6.0f, kRowHeight = 44.0f, kRowTextSize = 20.0f, kInset = 26.0f;
+        constexpr float kPlateEnds = 0.09f;
+        constexpr float kArrowHeight = 22.0f, kValueWidth = 150.0f;
+        constexpr float kDividerWidth = 380.0f;
+        // A message's plate past its text, each side, and its height for the text's.
+        constexpr float kMessagePad = 34.0f, kMessageHeight = 1.9f;
+        // The controls along the bottom, on the pop-ups' bar.
+        constexpr float kBarLeft = 30.0f, kBarTop = 664.0f, kBarBottom = 708.0f, kHintTop = 673.0f;
+        constexpr float kBarEnds = 0.06f;
+        constexpr HintStyle kHintStyle{ 26.0f, 5.0f, 16.0f, 16.0f };
+    }
+
+    float DrawPanel(ImDrawList* draw, const Overlay& overlay, const Stage& stage, std::string_view title,
+        std::span<const PanelRow> rows, int selected, float shadeBelow)
+    {
+        using namespace palette;
+        const auto px = [&](float size) { return size * stage.fit; };
+        const float titleHeight = std::max(ArtHeight(overlay, art::kTitlePlate, kTitleWidth), kTitleMinHeight);
+        const float rowsTop = kPanelTop + titleHeight + kRowGap;
+        const float rowsBottom = rowsTop + float(rows.size()) * (kRowHeight + kRowGap);
+        const float dividerHeight = ArtHeight(overlay, art::kDivider, kDividerWidth);
+
+        // Shading behind it, fading out to the right.
+        const ImVec2 shadeMin = stage.At(0, kPanelTop - 20.0f);
+        const ImVec2 shadeMax = stage.At(kPanelLeft + kShadeWidth, rowsBottom + dividerHeight + 10.0f + shadeBelow);
+        draw->AddRectFilledMultiColor(ImVec2(0, shadeMin.y), shadeMax, IM_COL32(0, 0, 0, 200), IM_COL32(0, 0, 0, 0),
+            IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 200));
+
+        // The title on its plate.
+        const float middle = kPanelLeft + kPanelWidth * 0.5f;
+        DrawArt(draw, overlay, art::kTitlePlate, stage.At(middle - kTitleWidth * 0.5f, kPanelTop),
+            stage.At(middle + kTitleWidth * 0.5f, kPanelTop + titleHeight));
+        const float titleSize = px(kTitleSize);
+        const ImVec2 titleExtent =
+            overlay.bold->CalcTextSizeA(titleSize, FLT_MAX, 0, title.data(), title.data() + title.size());
+        const ImVec2 titleMiddle = stage.At(middle, kPanelTop + titleHeight * 0.5f);
+        ShadowText(draw, overlay.bold, titleSize,
+            ImVec2(titleMiddle.x - titleExtent.x * 0.5f, titleMiddle.y - titleExtent.y * 0.5f), kGoldBright, title);
+
+        for (int i = 0; i < int(rows.size()); ++i)
+        {
+            const PanelRow& row = rows[i];
+            const float top = rowsTop + i * (kRowHeight + kRowGap);
+            const ImVec2 rowMin = stage.At(kPanelLeft, top);
+            const ImVec2 rowMax = stage.At(kPanelLeft + kPanelWidth, top + kRowHeight);
+            const bool lit = i == selected;
+            DrawArtSliced(draw, overlay, lit ? art::kPlateLit : art::kPlate, rowMin, rowMax, kPlateEnds,
+                lit ? 1.0f : 0.85f);
+            const float size = px(kRowTextSize);
+            const float textY = (rowMin.y + rowMax.y - size) * 0.5f;
+            ShadowText(draw, overlay.bold, size, ImVec2(stage.At(kPanelLeft + kInset, 0).x, textY),
+                lit ? kGoldBright : kText, row.name);
+            if (row.value.empty())
+                continue;
+
+            // The value, between the Options screen's arrows when selected.
+            const float right = stage.At(kPanelLeft + kPanelWidth - kInset, 0).x;
+            const float left = right - px(kValueWidth);
+            const ImVec2 extent = overlay.regular->CalcTextSizeA(size, FLT_MAX, 0, row.value.c_str());
+            ShadowText(draw, overlay.regular, size, ImVec2((left + right - extent.x) * 0.5f, textY),
+                lit ? kText : kTextDim, row.value);
+            const float arrowHeightPerWidth = ArtHeight(overlay, art::kArrowLeft, 1.0f);
+            if (lit && row.changes && arrowHeightPerWidth > 0)
+            {
+                const float h = px(kArrowHeight), w = h / arrowHeightPerWidth;
+                const float y = (rowMin.y + rowMax.y - h) * 0.5f;
+                DrawArt(draw, overlay, art::kArrowLeft, ImVec2(left, y), ImVec2(left + w, y + h));
+                DrawArt(draw, overlay, art::kArrowLeft, ImVec2(right - w, y), ImVec2(right, y + h), 1.0f, true);
+            }
+        }
+
+        DrawArt(draw, overlay, art::kDivider, stage.At(middle - kDividerWidth * 0.5f, rowsBottom),
+            stage.At(middle + kDividerWidth * 0.5f, rowsBottom + dividerHeight));
+        return rowsBottom + dividerHeight;
+    }
+
+    void DrawMessage(ImDrawList* draw, const Overlay& overlay, const Stage& stage, ImFont* font, float size, float y,
+        std::string_view text, float alpha)
+    {
+        const float pixels = size * stage.fit;
+        const ImVec2 extent = font->CalcTextSizeA(pixels, FLT_MAX, 0, text.data(), text.data() + text.size());
+        const float middle = stage.At(Stage::kWidth * 0.5f, 0).x, top = stage.At(0, y).y;
+        const float pad = kMessagePad * stage.fit, height = extent.y * kMessageHeight;
+        DrawArtSliced(draw, overlay, art::kPlateLit, ImVec2(middle - extent.x * 0.5f - pad, top),
+            ImVec2(middle + extent.x * 0.5f + pad, top + height), kPlateEnds, alpha);
+        ShadowText(draw, font, pixels, ImVec2(middle - extent.x * 0.5f, top + (height - extent.y) * 0.5f),
+            palette::WithAlpha(palette::kText, alpha), text);
+    }
+
+    void DrawControls(ImDrawList* draw, const Overlay& overlay, const Stage& stage, std::span<const Hint> hints)
+    {
+        DrawArtSliced(draw, overlay, art::kBar, stage.At(kBarLeft, kBarTop),
+            stage.At(Stage::kWidth - kBarLeft, kBarBottom), kBarEnds, 0.95f);
+        const float width = HintsWidth(overlay, stage, hints, kHintStyle);
+        DrawHints(draw, overlay, stage, hints, kHintStyle, stage.At(Stage::kWidth * 0.5f, 0).x - width * 0.5f,
+            stage.At(0, kHintTop).y);
     }
 }

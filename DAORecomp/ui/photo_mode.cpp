@@ -12,6 +12,7 @@
 // camera's own d-pad pans across the level).
 #include "stdafx.h"
 #include "ui/photo_mode.h"
+#include "ui/cheats.h"
 #include "ui/menu_movies.h"
 #include "gpu/camera_fov.h"
 #include "input/input.h"
@@ -163,6 +164,8 @@ namespace
     {
         const uint32_t controller = ctx.r3.u32;
         const uint32_t game = PPC_LOAD_U32(kGame.Get());
+        // The cheats menu (cheats.cpp) opens and runs its scripts from here too.
+        dao::ui::UpdateCheats(base, CurrentMode(base, controller), game);
         const int64_t toggleAt = s_toggleAt.load(std::memory_order_relaxed);
         if (toggleAt && game)
         {
@@ -184,7 +187,7 @@ namespace
                 if (s_state == State::On || Now() - s_leftAt > std::chrono::nanoseconds(kRetryLeave).count())
                     Leave(controller);
             }
-            else if (s_state == State::Off && (mode == kModeExplore || mode == kModeCombat))
+            else if (s_state == State::Off && (mode == kModeExplore || mode == kModeCombat) && !dao::ui::CheatsOpen())
             {
                 s_toggleAt = 0;
                 Enter(base, controller, game, mode);

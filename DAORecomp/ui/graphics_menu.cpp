@@ -7,6 +7,7 @@
 #include "ui/graphics_menu.h"
 #include "ui/menu_movies.h"
 #include "ui/photo_mode.h"
+#include "ui/cheats.h"
 #include "gpu/camera_fov.h"
 #include "gpu/video.h"
 #include "gpu/xenia_host.h"
@@ -92,8 +93,9 @@ namespace dao::ui
 
         constexpr std::string_view kPrefix = "DAORecomp.";
         constexpr std::string_view kPendingPrefix = "Pending.";
-        // "Available.<Key>": 0 if the tab hides the setting.
+        // "Available.<Key>": 0 if the tab hides the setting (or the cheats' button).
         constexpr std::string_view kAvailablePrefix = "Available.";
+        constexpr std::string_view kCheats = "Cheats";
         // The slider steps of the sharpness settings (0 to 10).
         constexpr double kSliderSteps = 10.0;
 
@@ -363,6 +365,8 @@ namespace dao::ui
             const Settings& s = Menu();
             if (name.starts_with(kAvailablePrefix))
             {
+                if (name.substr(kAvailablePrefix.size()) == kCheats)
+                    return CheatsAvailable() ? 1.0 : 0.0;
                 const auto key = FindKey(name.substr(kAvailablePrefix.size()));
                 if (!key)
                     return std::nullopt;
@@ -468,15 +472,20 @@ namespace dao::ui
             TerminateProcess(GetCurrentProcess(), 0);
         }
 
-        // "Set <key> <value>", "RestoreDefaults", "OpenMods" or "PhotoMode" (the
-        // START menu's row: pause_menu.as, with menu_movies.cpp's marker), after
-        // "DAORecomp.". (All our menu scripts' messages come through the engine's
-        // SendMessage, hooked here.)
+        // "Set <key> <value>", "RestoreDefaults", "OpenMods", "Cheats" or
+        // "PhotoMode" (the START menu's row: pause_menu.as, with menu_movies.cpp's
+        // marker), after "DAORecomp.". (All our menu scripts' messages come through
+        // the engine's SendMessage, hooked here.)
         void HandleMessage(std::string_view message)
         {
             if (message == "PhotoMode")
             {
                 TogglePhotoMode();
+                return;
+            }
+            if (message == kCheats)
+            {
+                ToggleCheats();
                 return;
             }
             if (message == "RestoreDefaults")

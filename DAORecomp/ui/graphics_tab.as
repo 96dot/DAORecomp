@@ -12,6 +12,8 @@
 //   ExternalCommands.SendMessage("DAORecomp.RestoreDefaults")
 //   ExternalCommands.SendMessage("DAORecomp.OpenMods")  ends the game for the
 //       launcher's Mods page (returns only if the launcher can't be started)
+//   ExternalCommands.SendMessage("DAORecomp.Cheats")  opens the cheats menu over
+//       the game once the menus have closed (DAORecomp/ui/cheats.cpp)
 // The keys and their values are those of DAORecomp/ui/graphics_menu.cpp.
 
 // OptionsMenu.ms_nCurrentTab on this tab (the engine's tabs are 0 to 4).
@@ -90,11 +92,20 @@ function OpenMods() {
     });
 }
 
+// Cheats: the menus close (the options committed, as leaving the menu does: after
+// the restart notice, if any) and the cheats menu opens over the game.
+function OpenCheats() {
+    CommitOptionsThen(new Array(), function() {
+        ExternalCommands.SendMessageArgs("GameModeController.HideGUIScreen", "MainMenu");
+        ExternalCommands.SendMessage("DAORecomp.Cheats");
+    });
+}
+
 // The rows in order: a header, a button (its action), or a setting shown as a
 // picker (values and their labels), a checkbox (toggle) or a slider. A value not
 // in a picker's list (from config.toml, such as a resolution scale above 4) shows
-// as the closest one. An optional setting is shown only where the host has it
-// (DAORecomp.Available.<key>).
+// as the closest one. An optional row is shown only where the host has it
+// (DAORecomp.Available.<key>: the cheats paused from exploration or combat).
 var ROWS = [
     { header: "Display" },
     { key: "Fullscreen", label: "Display mode", values: [0, 1], labels: ["Windowed", "Fullscreen"] },
@@ -139,7 +150,9 @@ var ROWS = [
     { key: "HdrQuality", label: "HDR quality", restart: true, values: [0, 1],
       labels: ["Standard", "High (16-bit scRGB)"] },
     { header: "Mods" },
-    { button: "Manage mods", action: OpenMods }
+    { button: "Manage mods", action: OpenMods },
+    { header: "Cheats", key: "Cheats", optional: true },
+    { button: "Open cheats", action: OpenCheats, key: "Cheats", optional: true }
 ];
 
 function Get(key) {
@@ -412,12 +425,17 @@ OptionsMenu.SetCurrentSubOptions = function() {
     OptionsMenu.SelectedGroup = selected;
 };
 
-// Leaving the menu: say which changes need a restart, as the game does for its own.
+// Leaving the menu: say which changes need a restart, as the game does for its own,
+// then commit the options (the game's CommitOptions, with `args`) and call `after`
+// (if not null).
 var commitOptions = OptionsMenu.CommitOptions;
-OptionsMenu.CommitOptions = function() {
+function CommitOptionsThen(args, after) {
     var changes = RestartChanges();
     if (changes.length == 0) {
-        commitOptions.apply(OptionsMenu, arguments);
+        commitOptions.apply(OptionsMenu, args);
+        if (after != null) {
+            after();
+        }
         return;
     }
     RecordPending();
@@ -428,7 +446,13 @@ OptionsMenu.CommitOptions = function() {
     Popups.ShowDialogBox(text, Localization.GetString(325483), function() {
         ExternalCommands.SendMessageArgs("GUI.DialogBoxClosed");
         commitOptions.apply(OptionsMenu);
+        if (after != null) {
+            after();
+        }
     });
+}
+OptionsMenu.CommitOptions = function() {
+    CommitOptionsThen(arguments, null);
 };
 
 // Restore Defaults on this tab resets its settings (the engine doesn't know it).
