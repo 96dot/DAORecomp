@@ -77,7 +77,7 @@ Surface::TypeFlags D3D12Presenter::GetSupportedSurfaceTypes() const {
   return types;
 }
 
-bool D3D12Presenter::CaptureGuestOutput(RawImage& image_out) {
+bool D3D12Presenter::CaptureGuestOutput(RawImage& image_out, bool dao_sdr) {
   Microsoft::WRL::ComPtr<ID3D12Resource> guest_output_resource;
   GuestOutputProperties properties;
   {
@@ -211,6 +211,14 @@ bool D3D12Presenter::CaptureGuestOutput(RawImage& image_out) {
   image_out.data.resize(image_out.stride * image_out.height);
   uint32_t* image_out_pixels =
       reinterpret_cast<uint32_t*>(image_out.data.data());
+  // DAO: the game's own HDR to SDR, for photos.
+  if (dao_sdr && properties.game_hdr) {
+    DaoTonemapCapture(reinterpret_cast<const uint8_t*>(mapping) +
+                          copy_dest.PlacedFootprint.Offset,
+                      copy_dest.PlacedFootprint.Footprint.RowPitch,
+                      texture_desc.Format == kSwapChainHdrFormat, image_out);
+    return true;
+  }
   // DAO: a 16-bit scRGB guest output (HDR quality High) to 8 bits; negative
   // values are 0.
   if (texture_desc.Format == kSwapChainHdrFormat) {
@@ -526,6 +534,7 @@ void D3D12Presenter::PaintContext::DestroySwapChain() {
     frame_latency_waitable = nullptr;
   }
   hdr_source.Reset();
+  ui_layer.Reset();
   swap_chain_hdr = false;
   swap_chain_allows_tearing = false;
   swap_chain_height = 0;
@@ -1144,19 +1153,45 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
     back_buffer_clear_needed = false;
   }
 
+  // DAO: the UI over the game's own HDR goes to the UI layer, in SDR.
+  const bool ui_over_hdr = execute_ui_drawers &&
+                           paint_context_.swap_chain_hdr &&
+                           guest_output_resource &&
+                           guest_output_properties.game_hdr &&
+                           paint_context_.ui_layer;
   if (execute_ui_drawers) {
     // Draw the UI.
-    if (!back_buffer_bound) {
+    DXGI_FORMAT ui_format =
+        paint_context_.swap_chain_hdr ? HdrSourceFormat() : kSwapChainFormat;
+    if (ui_over_hdr) {
+      D3D12_RESOURCE_BARRIER ui_layer_barrier = {};
+      ui_layer_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+      ui_layer_barrier.Transition.pResource = paint_context_.ui_layer.Get();
+      ui_layer_barrier.Transition.Subresource =
+          D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+      ui_layer_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+      ui_layer_barrier.Transition.StateAfter =
+          D3D12_RESOURCE_STATE_RENDER_TARGET;
+      command_list->ResourceBarrier(1, &ui_layer_barrier);
+      const D3D12_CPU_DESCRIPTOR_HANDLE ui_layer_rtv =
+          provider_.OffsetRTVDescriptor(rtv_heap_start,
+                                        PaintContext::kRTVIndexUiLayer);
+      static constexpr float kTransparent[4] = {};
+      command_list->ClearRenderTargetView(ui_layer_rtv, kTransparent, 0,
+                                          nullptr);
+      command_list->OMSetRenderTargets(1, &ui_layer_rtv, true, nullptr);
+      ui_format = kSwapChainFormat;
+    } else if (!back_buffer_bound) {
       command_list->OMSetRenderTargets(1, &back_buffer_rtv, true, nullptr);
       back_buffer_bound = true;
     }
-    // (Never painted directly with UI: with HDR output, it's the HDR source.)
+    // (Never painted directly with UI: with HDR output, it's the HDR source,
+    // or the UI layer.)
     D3D12UIDrawContext ui_draw_context(
         *this, paint_context_.swap_chain_width,
         paint_context_.swap_chain_height, command_list,
         ui_completion_timeline_->GetUpcomingSubmission(),
-        ui_completion_timeline_->UpdateAndGetCompletedSubmission(),
-        paint_context_.swap_chain_hdr ? HdrSourceFormat() : kSwapChainFormat);
+        ui_completion_timeline_->UpdateAndGetCompletedSubmission(), ui_format);
     ExecuteUIDrawersFromUIThread(ui_draw_context);
   }
 
@@ -1164,7 +1199,7 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
   if (paint_context_.swap_chain_hdr && !hdr_direct) {
     DaoEncodeHdrSource(command_list, back_buffer, swap_chain_back_buffer,
                        swap_chain_back_buffer_rtv,
-                       guest_output_properties.game_hdr);
+                       guest_output_properties.game_hdr, ui_over_hdr);
     back_buffer = swap_chain_back_buffer;
   }
 

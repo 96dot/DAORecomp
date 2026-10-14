@@ -52,8 +52,14 @@ namespace dao::gpu
     void XeniaWriteSwapPacket(uint32_t buffer, uint32_t fetchConstant, uint32_t frontBufferVirtual,
         uint32_t width, uint32_t height);
 
-    // Saves the current guest output (what the game presented) as a PNG.
-    bool CaptureFrame(const std::filesystem::path& path);
+    // Saves the current guest output (what the game presented, without the host's
+    // overlays) as a PNG; with `aspect` (width / height), its middle at that aspect.
+    // A frame of the game's HDR is saved tonemapped to SDR with `sdr` (photos),
+    // otherwise as encoded (PQ), as tests compare it.
+    bool CaptureFrame(const std::filesystem::path& path, double aspect = 0, bool sdr = false);
+    // The size of the middle of a width x height image at `aspect` (width / height;
+    // 0: the whole image): what CaptureFrame keeps, and photo mode frames.
+    std::pair<double, double> FrameSize(double width, double height, double aspect);
     // Hash of the current guest output (0 if unavailable), for frame-rate checks.
     uint64_t HashFrame();
     // The current guest output downscaled 2x (box filter) to tightly packed RGB.

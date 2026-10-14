@@ -30,9 +30,6 @@ constexpr double kFrameIntervalSmoothing = 0.125;
 // that can't keep up.
 constexpr double kBehindSmoothing = 1.0 / 16.0;
 constexpr double kBehindTooOften = 0.25;
-// While the UI thread paints (presenter UI shown), how long only real frames
-// are shown before looking again.
-constexpr auto kRealOnlyWhileUiPaints = std::chrono::seconds(1);
 // The pacer sleeps until this long before the real frame is due, then spins:
 // sleeps aren't that precise.
 constexpr auto kSpin = std::chrono::microseconds(500);
@@ -99,6 +96,7 @@ bool Presenter::DaoQueueFramePaints(const GuestOutputProperties& properties) {
   const bool queued_last = dao_pacer_queued_last_;
   dao_pacer_queued_last_ = false;
   dao_pacer_stage_ = DaoPacerStage::kNone;
+  dao_ui_paint_stage_ = DaoPacerStage::kNone;
   if (!properties.dao_generated || dao_pacer_shutdown_) {
     return false;
   }
@@ -147,6 +145,9 @@ bool Presenter::DaoQueueFramePaints(const GuestOutputProperties& properties) {
   dao_pacer_serial_ = properties.dao_serial;
   dao_pacer_stage_ = DaoPacerStage::kGenerated;
   dao_pacer_arrival_ = now;
+  // The UI thread's repaints until the pacer's first: its generated frame.
+  dao_ui_paint_stage_ = DaoPacerStage::kGenerated;
+  dao_ui_paint_serial_ = properties.dao_serial;
   lock.unlock();
   dao_pacer_cv_.notify_one();
   // (Closed by DaoStopPacer, which the presenter's destruction calls, never
@@ -155,6 +156,16 @@ bool Presenter::DaoQueueFramePaints(const GuestOutputProperties& properties) {
     SetEvent(dao_pacer_wake_);
   }
   return true;
+}
+
+void Presenter::DaoBeginUIThreadPaint() {
+  std::lock_guard<std::mutex> lock(dao_pacer_mutex_);
+  t_pacer_stage = int(dao_ui_paint_stage_);
+  t_pacer_serial = dao_ui_paint_serial_;
+}
+
+void Presenter::DaoEndUIThreadPaint() {
+  t_pacer_stage = int(DaoPacerStage::kNone);
 }
 
 void Presenter::DaoStopPacer() {
@@ -261,13 +272,9 @@ void Presenter::DaoPacerThread() {
                                ? DaoPacerStage::kReal
                                : DaoPacerStage::kNone;
         if (paint_mode_ == PaintMode::kUIThreadOnRequest) {
-          // The UI thread paints the real frames only: none generated
-          // meanwhile.
-          dao_real_only_until_.store(
-              (std::chrono::steady_clock::now() + kRealOnlyWhileUiPaints)
-                  .time_since_epoch()
-                  .count(),
-              std::memory_order_relaxed);
+          // Painted there (with the UI), as asked.
+          dao_ui_paint_stage_ = stage;
+          dao_ui_paint_serial_ = serial;
         }
       }
       // As RefreshGuestOutput paints.
@@ -277,9 +284,7 @@ void Presenter::DaoPacerThread() {
         case PaintMode::kNone:
           break;
         case PaintMode::kUIThreadOnRequest:
-          if (stage == DaoPacerStage::kGenerated) {
-            RequestPaintOrConnectionRecoveryViaWindow(true);
-          }
+          RequestPaintOrConnectionRecoveryViaWindow(true);
           break;
         case PaintMode::kGuestOutputThreadImmediately:
           if (surface_paint_connection_state_ ==

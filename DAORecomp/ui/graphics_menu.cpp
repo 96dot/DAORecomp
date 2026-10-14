@@ -5,6 +5,8 @@
 // committing keeps the live changes for this session; a later commit saves them.
 #include "stdafx.h"
 #include "ui/graphics_menu.h"
+#include "ui/menu_movies.h"
+#include "ui/photo_mode.h"
 #include "gpu/camera_fov.h"
 #include "gpu/video.h"
 #include "gpu/xenia_host.h"
@@ -396,9 +398,17 @@ namespace dao::ui
             TerminateProcess(GetCurrentProcess(), 0);
         }
 
-        // "Set <key> <value>", "RestoreDefaults" or "OpenMods", after "DAORecomp.".
+        // "Set <key> <value>", "RestoreDefaults", "OpenMods" or "PhotoMode" (the
+        // START menu's row: pause_menu.as, with menu_movies.cpp's marker), after
+        // "DAORecomp.". (All our menu scripts' messages come through the engine's
+        // SendMessage, hooked here.)
         void HandleMessage(std::string_view message)
         {
+            if (message == "PhotoMode")
+            {
+                TogglePhotoMode();
+                return;
+            }
             if (message == "RestoreDefaults")
             {
                 RestoreDefaults();

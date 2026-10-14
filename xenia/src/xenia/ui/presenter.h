@@ -325,7 +325,10 @@ class Presenter {
   // The implementation must be callable from any thread, including from
   // multiple at the same time, and it should acquire the latest guest output
   // image via ConsumeGuestOutput.
-  virtual bool CaptureGuestOutput(RawImage& image_out) = 0;
+  // DAO: with dao_sdr, the game's own HDR is tonemapped to SDR (photos);
+  // otherwise it's captured as encoded, PQ (tests compare those).
+  virtual bool CaptureGuestOutput(RawImage& image_out,
+                                  bool dao_sdr = false) = 0;
   // DAO: the size of the surface being painted to (0 if none), read by the
   // GPU thread to size the temporal upscaler output (a stale value only delays
   // a resize by a frame).
@@ -346,11 +349,8 @@ class Presenter {
   void AddUIDrawerFromUIThread(UIDrawer* drawer, size_t z_order);
   void RemoveUIDrawerFromUIThread(UIDrawer* drawer);
 
-  // DAO: for the guest output thread (true HDR, which needs an HDR display and
-  // no UI drawn over the guest output in SDR). Any thread.
-  bool HasUIDrawers() const {
-    return has_ui_drawers_.load(std::memory_order_relaxed);
-  }
+  // DAO: for the guest output thread (true HDR, which needs an HDR display).
+  // Any thread.
   bool IsDisplayHdr() const {
     return display_hdr_.load(std::memory_order_relaxed);
   }
@@ -359,8 +359,8 @@ class Presenter {
   // chain, not PQ in 10-bit ones. Fixed when the presenter is initialized.
   bool IsHdrScrgb() const { return hdr_scrgb_; }
   // DAO: frame generation (dao_frame_pacer.cc). Whether its frames are shown
-  // now: not while only real ones are (the display couldn't keep up, or the
-  // UI thread paints), when the GPU thread doesn't make them.
+  // now: not while only real ones are (the display couldn't keep up), when
+  // the GPU thread doesn't make them.
   bool DaoGeneratedFramesShown() const;
   // When frame generation is turned on: its frames are tried right away.
   void DaoResetFramePacing();
@@ -961,6 +961,11 @@ class Presenter {
   // one), else the caller paints it as usual.
   bool DaoQueueFramePaints(const GuestOutputProperties& properties);
   void DaoPacerThread();
+  // UI thread, around its paints (presenter UI shown): each paints the frame
+  // the pacer last asked for, so the UI's own repaints between the pacer's
+  // don't show a real frame before its generated one.
+  void DaoBeginUIThreadPaint();
+  static void DaoEndUIThreadPaint();
   // After falling behind, how long only real frames are shown before trying
   // generated ones again: doubled each time it falls behind again soon after
   // (a display that can't keep up at all), back to kDaoRealOnlyMin once it has
@@ -987,6 +992,10 @@ class Presenter {
   bool dao_pacer_shutdown_ = false;
   DaoPacerStage dao_pacer_stage_ = DaoPacerStage::kNone;
   uint64_t dao_pacer_serial_ = 0;
+  // What the UI thread paints (DaoBeginUIThreadPaint; kNone: the newest guest
+  // output, no frame generation) of which guest output.
+  DaoPacerStage dao_ui_paint_stage_ = DaoPacerStage::kNone;
+  uint64_t dao_ui_paint_serial_ = 0;
   std::chrono::steady_clock::time_point dao_pacer_arrival_;
   bool dao_pacer_queued_last_ = false;
   double dao_pacer_behind_ = 0.0;
@@ -1084,7 +1093,6 @@ class Presenter {
   // Note: All the iteration logic involving this Z ordering must be the same as
   // in input handling (in the input listeners in the Window), but in reverse.
   std::multimap<size_t, UIDrawerReference> ui_drawers_;
-  std::atomic<bool> has_ui_drawers_{false};
 
   size_t ui_draw_current_ = 0;
   size_t ui_draw_current_z_order_;

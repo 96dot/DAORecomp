@@ -11,6 +11,7 @@
 
 #include "input/input.h"
 #include "ui/keyboard.h"
+#include "ui/photo_mode.h"
 
 namespace dao::imp
 {
@@ -506,7 +507,9 @@ namespace dao::imp
         else if (state)
         {
             state->packetNumber = host.packetNumber;
-            state->gamepad.buttons = host.buttons;
+            // (Photo mode's buttons are its own: the first player's.)
+            state->gamepad.buttons =
+                user == 0 || user == 0xFF ? dao::ui::PhotoModeFilterButtons(host.buttons) : host.buttons;
             state->gamepad.leftTrigger = host.leftTrigger;
             state->gamepad.rightTrigger = host.rightTrigger;
             state->gamepad.thumbLX = host.thumbLX;

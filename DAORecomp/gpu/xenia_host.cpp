@@ -368,23 +368,34 @@ namespace dao::gpu
             dwords[offset++] = xenos::MakePacketType2();
     }
 
-    bool CaptureFrame(const std::filesystem::path& path)
+    bool CaptureFrame(const std::filesystem::path& path, double aspect, bool sdr)
     {
         if (!s_graphics || !s_graphics->presenter())
             return false;
         xe::ui::RawImage image;
-        if (!s_graphics->presenter()->CaptureGuestOutput(image) || !image.width)
+        if (!s_graphics->presenter()->CaptureGuestOutput(image, sdr) || !image.width || !image.height)
             return false;
+        // The middle of it at `aspect`.
+        const auto [frameWidth, frameHeight] = FrameSize(image.width, image.height, aspect);
+        const uint32_t width = std::clamp(uint32_t(std::lround(frameWidth)), 1u, image.width);
+        const uint32_t height = std::clamp(uint32_t(std::lround(frameHeight)), 1u, image.height);
+        const uint32_t left = (image.width - width) / 2, top = (image.height - height) / 2;
         // RGBX -> RGB
-        std::vector<uint8_t> rgb(size_t(image.width) * image.height * 3);
-        for (uint32_t y = 0; y < image.height; y++)
+        std::vector<uint8_t> rgb(size_t(width) * height * 3);
+        for (uint32_t y = 0; y < height; y++)
         {
-            const uint8_t* row = image.data.data() + y * image.stride;
-            for (uint32_t x = 0; x < image.width; x++)
-                memcpy(&rgb[(size_t(y) * image.width + x) * 3], row + x * 4, 3);
+            const uint8_t* row = image.data.data() + size_t(top + y) * image.stride + size_t(left) * 4;
+            for (uint32_t x = 0; x < width; x++)
+                memcpy(&rgb[(size_t(y) * width + x) * 3], row + x * 4, 3);
         }
-        return stbi_write_png(Utf8(path).c_str(), int(image.width), int(image.height), 3, rgb.data(),
-            int(image.width) * 3) != 0;
+        return stbi_write_png(Utf8(path).c_str(), int(width), int(height), 3, rgb.data(), int(width) * 3) != 0;
+    }
+
+    std::pair<double, double> FrameSize(double width, double height, double aspect)
+    {
+        if (aspect <= 0)
+            return { width, height };
+        return { std::min(width, height * aspect), std::min(height, width / aspect) };
     }
 
     uint64_t HashFrame()

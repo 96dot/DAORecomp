@@ -120,8 +120,8 @@ constexpr uint64_t kTonemapPixelShader = 0x20BA772900FB8AA3;
 enum CompositeMode : uint32_t {
   kCompositeSdr,
   kCompositeHdr,
-  // A linear scene with the UI, output in SDR: true HDR's while presenter UI
-  // is shown, or the linearized SDR image's (XeSS).
+  // A linear scene with the UI, output in SDR: the linearized SDR image's
+  // (XeSS).
   kCompositeHdrToSdr,
   // One source (t1) to the destination at its size: HDR-encoded (HdrFormat),
   // or linear.
@@ -507,9 +507,6 @@ class DaoUpscalerImpl {
     return HdrScrgb() ? DXGI_FORMAT_R16G16B16A16_FLOAT
                       : DXGI_FORMAT_R10G10B10A2_UNORM;
   }
-  // Presenter UI (the on-screen keyboard, notifications) is drawn over the
-  // guest output, in SDR: true HDR frames are output in SDR meanwhile.
-  bool OverlayShown() const;
   // The linear scene in hdr_, for the upscaler (true HDR, or a backend's
   // LinearSdrColor) or CompositeHdr: with true HDR the tonemapping pass redone
   // (unless it isn't the image before the UI: a pass after it, or none), else
@@ -699,9 +696,8 @@ class DaoUpscalerImpl {
   int32_t scene_depth_window_offset_[2] = {};
   bool hudless_pending_ = false;
   bool hudless_captured_ = false;
-  // True HDR this frame (WantsTrueHdr), and OverlayShown at its swap.
+  // True HDR this frame (WantsTrueHdr).
   bool true_hdr_ = false;
-  bool overlay_shown_ = false;
   // The tonemapping pass, from OnDraw to AfterDraw; ran this frame.
   bool hdr_pending_ = false;
   bool hdr_captured_ = false;

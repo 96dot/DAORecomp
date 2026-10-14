@@ -1,0 +1,30 @@
+# Photo mode (run about 118 s, with DAO_PHOTO_DIR set to collect the photo): loads the
+# latest save, enters with L3+R3, zooms, opens the settings panel, picks the 21:9
+# frame and the rule of thirds grid, takes a photo, raises the camera, rolls, resets,
+# hides and shows the UI, and exits with B. The overlay isn't in the game's captures
+# (CAPTURE): capture the window instead (scripts/test/capture_window.ps1).
+every 2 START 0.2 from 10 until 26
+27 A 0.2
+# On: L3+R3, then zoom in for a second.
+70 LS+RS 0.3
+76 UP 1
+# The panel: down to Frame, 21:9, down to Grid, rule of thirds; a photo.
+80 X 0.2
+82 DOWN 0.2
+83 DOWN 0.2
+84 DOWN 0.2
+85 RIGHT 0.2
+86 RIGHT 0.2
+87 DOWN 0.2
+88 RIGHT 0.2
+92 A 0.2
+# Up with RT; panel closed, roll right, move ahead, reset.
+95 RT 1.5
+97 X 0.2
+98 RIGHT 1.5
+101 LUP 1
+103 BACK 0.2
+# Hide the UI and show it again, then exit.
+105 Y 0.2
+108 Y 0.2
+110 B 0.2

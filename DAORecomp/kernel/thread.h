@@ -112,8 +112,10 @@ namespace dao::kernel
     std::string SampleHostStack(uint32_t hostThreadId, int count);
     void ForEachThread(const std::function<void(GuestThread&)>& fn);
 
-    // Calls a guest function on the current thread. Integer/pointer args go in r3..r10.
-    uint64_t CallGuest(uint32_t function, std::initializer_list<uint64_t> args = {});
+    // Calls a guest function on the current thread. Integer/pointer args go in r3..r10,
+    // floating-point ones in f1..f13.
+    uint64_t CallGuest(uint32_t function, std::initializer_list<uint64_t> args = {},
+        std::initializer_list<double> floatArgs = {});
 
     // The context guest code is currently running with on this host thread.
     PPCContext* CurrentContext();
