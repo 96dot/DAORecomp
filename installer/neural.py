@@ -220,6 +220,10 @@ class Comgr:
                 self._api["destroy_data_set"](s)
 
 
+# hipErrorNoDevice: the driver's there, with no AMD GPU (one switched for another make's).
+_HIP_ERROR_NO_DEVICE = 100
+
+
 def gpu_targets():
     """The architectures of TARGETS this PC's GPUs have, as AMD's HIP runtime (part of
     its driver) reports them; none without it, and None if it can't say (it didn't
@@ -232,13 +236,19 @@ def gpu_targets():
     # (256 characters at 1160), such as "gfx1201" or "gfx1201:sramecc-:xnack-".
     size, arch_at, arch_size = 4096, 1160, 256
     count = ctypes.c_int()
-    if hip.hipInit(0) or hip.hipGetDeviceCount(ctypes.byref(count)):
+    error = hip.hipInit(0) or hip.hipGetDeviceCount(ctypes.byref(count))
+    if error == _HIP_ERROR_NO_DEVICE:
+        return []
+    if error:
         return None
     found = set()
     for i in range(count.value):
         props = ctypes.create_string_buffer(size)
-        if hip.hipGetDevicePropertiesR0600(props, i):
-            continue
+        try:
+            if hip.hipGetDevicePropertiesR0600(props, i):
+                continue
+        except AttributeError:
+            return None
         arch = props.raw[arch_at:arch_at + arch_size].split(b"\0")[0].split(b":")[0].decode("ascii", "replace")
         if arch in TARGETS:
             found.add(arch)
@@ -329,18 +339,29 @@ def install(reporter, built_dir, dest):
     a GPU and AMD's driver, it's left out (the game runs without it), and an earlier
     install's kernels and shaders are removed (the launcher would offer it, and it
     wouldn't start); if the driver can't say which GPU this is, or the kernels can't be
-    built, an earlier install's for this GPU stay. built_dir keeps the compiled kernels
-    between installs."""
+    built, an earlier install's stay if they're from this source (the runtime's) and, when
+    the GPU is known, for it. built_dir keeps the compiled kernels between installs."""
     for source, name in LICENSES.items():
         shutil.copy2(LMXXF / source, Path(dest) / name)
     out = Path(dest) / FOLDER
 
     sums_file = out / "HIP" / "SHA256SUMS"
+    # The kernels' source (lmxxf's, which the runtime is built from), beside the list:
+    # kernels from another can't be kept for this runtime.
+    source_file = out / "HIP" / "SOURCE"
+
+    def linked():
+        # Whether the folders it writes are links (to somewhere else): nothing's removed or
+        # written through one. (is_junction: Python 3.12.)
+        return any(p.is_symlink() or getattr(p, "is_junction", lambda: False)()
+                   for p in (out, out / "HIP", out / "shaders")) \
+            or not out.resolve().is_relative_to(Path(dest).resolve())
 
     def remove_installed():
         # What this installs there, the list (the launcher's and the game's check) first;
-        # anything else in the folder stays. Not through a link (to somewhere else).
-        if out.is_symlink() or out.is_junction() or not out.resolve().is_relative_to(Path(dest).resolve()):
+        # anything else in the folder stays.
+        if linked():
+            reporter.log(f"Neural rendering: {out} (or a folder in it) is a link; nothing removed through it")
             return
         try:
             sums_file.unlink(missing_ok=True)
@@ -348,6 +369,15 @@ def install(reporter, built_dir, dest):
             pass
         for folder in ("HIP", "shaders"):
             shutil.rmtree(out / folder, ignore_errors=True)
+
+    def source_stamp():
+        try:
+            modules = recipe(HIP_DIR)
+            text = "".join(f"{name}\n{module_source(name, defines, sources, HIP_DIR, TYPES_HEADER)}\n"
+                           for name, defines, sources in modules)
+        except (InstallError, OSError):
+            return None
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     def installed_targets():
         # The GPUs an earlier install's kernels are for ("<hash>  <target>/<module>.hsaco").
@@ -357,18 +387,27 @@ def install(reporter, built_dir, dest):
             return set()
         return {line.split("  ", 1)[1].split("/", 1)[0] for line in lines if "  " in line and "/" in line}
 
-    def keep_or_remove(reason):
-        if targets is not None and not set(targets) <= installed_targets():
-            remove_installed()
-        elif sums_file.is_file():
+    def keep_or_remove(reason, targets):
+        # An earlier install's kernels stay if they're from this source and, when the GPU
+        # is known (targets), for it.
+        try:
+            same_source = source_file.read_text(encoding="utf-8").strip() == source_stamp()
+        except OSError:
+            same_source = False
+        if not sums_file.is_file():
+            pass
+        elif same_source and (targets is None or set(targets) <= installed_targets()):
             reason += " (the earlier install's kernels are kept)"
+        else:
+            remove_installed()
+            reason += " (the earlier install's kernels, for another GPU or source, are removed)"
         reporter.log(f"Neural rendering not installed: {reason}")
 
     if not IS_WINDOWS:
         return
     targets = gpu_targets()
     if targets is None:
-        keep_or_remove("AMD's driver didn't start, to say which GPU this is")
+        keep_or_remove("AMD's driver didn't start, so which GPU this is isn't known", None)
         return
     if not targets:
         reporter.log("Neural rendering not installed: no AMD RDNA 4 GPU (RX 9000 series) with AMD's driver")
@@ -378,29 +417,34 @@ def install(reporter, built_dir, dest):
         targets = build_modules(reporter, HIP_DIR, TYPES_HEADER, built_dir, targets)
     except Cancelled:
         raise
-    except InstallError as e:
-        keep_or_remove(str(e))
+    except (InstallError, OSError) as e:
+        keep_or_remove(str(e), targets)
+        return
+    if linked():
+        reporter.log(f"Neural rendering not installed: {out} (or a folder in it) is a link")
         return
     try:
         remove_installed()
         hip = out / "HIP"
         sums = []
         for target in targets:
-            (hip / target).mkdir(parents=True)
+            # (A file the removal couldn't delete is written over.)
+            (hip / target).mkdir(parents=True, exist_ok=True)
             # The recipe's modules (not ones it no longer has).
             for name, _, _ in recipe(HIP_DIR):
                 data = (Path(built_dir) / target / f"{name}.hsaco").read_bytes()
                 (hip / target / f"{name}.hsaco").write_bytes(data)
                 sums.append(f"{hashlib.sha256(data).hexdigest()}  {target}/{name}.hsaco")
-        (out / "shaders").mkdir()
+        (out / "shaders").mkdir(exist_ok=True)
         for shader in sorted(SHADERS_DIR.glob("*.hlsl")):
             shutil.copy2(shader, out / "shaders" / shader.name)
         # The player's own settings (custom-config.txt) beside it stay.
         config = Path(dest) / CONFIG_FOLDER
         config.mkdir(exist_ok=True)
         shutil.copy2(FLAGS, config / "default-config.txt")
+        source_file.write_text((source_stamp() or "") + "\n", encoding="utf-8")
         # Last: the launcher and the game take the list as neural rendering installed.
-        (hip / "SHA256SUMS").write_text("\n".join(sums) + "\n", encoding="utf-8")
+        sums_file.write_text("\n".join(sums) + "\n", encoding="utf-8")
     except OSError as e:
         reporter.log(f"Neural rendering not installed: {e}")
         remove_installed()

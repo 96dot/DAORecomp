@@ -156,7 +156,7 @@ rendering's GPU kernels, compiled for that GPU during the install by the driver'
 compiler (`amd_comgr_3.dll`; a minute or two the first time, and again after a driver
 update), and the shaders it compiles, and `DLSS5-AMD/`: its settings and logs. An install
 on a PC without such a GPU removes an earlier install's kernels and shaders (your own
-files there stay).
+files there stay; if AMD's driver can't say which GPU it is, they stay too).
 
 When you save over a save, the version it replaces is kept in
 `userdata/save_backups/`: one per save, the one before its latest overwrite (a save
@@ -213,8 +213,8 @@ don't come with the game: download lmxxf's release package (linked from its READ
 in the launcher's *Configure → Graphics* turn on *Neural rendering* and choose the
 package's folder with *Browse* (its folder with `block0-ffn.f16` is searched for, four
 levels down at most; if it isn't found, choose that folder itself). The option
-is there when the install has the kernels for your GPU (install again after changing
-to an RX 9000 series GPU), and needs temporal upscaling on. It's expensive: lmxxf
+is there when the install has its kernels (installed on a PC with an RX 9000 series GPU:
+install again after changing to one), and needs temporal upscaling on. It's expensive: lmxxf
 measures about 7 ms of GPU time a frame for its 900-line network and 9.5 ms for 1080
 lines on an RX 9070 XT. It works with HDR output too (the network gets the scene in linear
 light, as DLSS 5 takes HDR, and the highlights above paper white keep their brightness),
@@ -222,7 +222,7 @@ takes effect when the game starts, and loading the network holds the first frame
 for a second or two.
 *Neural rendering strength* (also in *Options → Graphics*, where it applies at once)
 sets how much of the network's change of detail and colour is kept, from none (0, which skips
-the network: no GPU time for it, though it stays loaded) to all (1).
+the network: no GPU time for it, though it stays loaded; so does anything under 0.05) to all (1).
 The options lmxxf's packages have are there too (in both; they take effect when the game
 starts): *quality* is the network's size, which the 3D scenes are fitted to (Auto picks the
 smallest they fit: 720 lines at `resolution_scale = 1` and 1080 above; 900 and 720 are

@@ -131,12 +131,13 @@ bool NeuralRendering::Fail(const char* what) {
 bool NeuralRendering::Load() {
   std::error_code ec;
   // Absolute, as the runtime gets it: it makes it absolute itself, in a
-  // MAX_PATH buffer.
+  // MAX_PATH buffer, and opens its files by MAX_PATH names.
   std::filesystem::path weights = xe::to_path(cvars::dao_neural_weights);
   if (!weights.empty()) {
     weights = std::filesystem::absolute(weights, ec);
   }
-  if (weights.empty() || ec || weights.native().size() >= MAX_PATH ||
+  if (weights.empty() || ec ||
+      (weights / kWeightsFile).native().size() >= MAX_PATH ||
       !std::filesystem::is_regular_file(weights / kWeightsFile, ec)) {
     XELOGE(
         "Neural rendering: no weights in \"{}\" (the folder of lmxxf's "
@@ -245,8 +246,8 @@ void NeuralRendering::Prepare(ID3D12Resource* color, uint32_t width,
   }
   // A frame prepared and cancelled: the network built for the size, its
   // weights uploaded and its shaders compiled. Nothing is recorded, so
-  // cancelling it only releases the job. (At full strength, whatever the
-  // slider's: the strength is a frame's setting, not the network's.)
+  // cancelling it only releases the job. (Prepared at strength 1: the strength
+  // is set per frame, in LmxxfNrFrameInfo, so the slider's doesn't matter.)
   const LmxxfNrFrameInfo info = FrameInfo(color, width, height, 1.0f);
   job_ = {};
   job_.struct_size = sizeof(job_);
@@ -257,6 +258,8 @@ void NeuralRendering::Prepare(ID3D12Resource* color, uint32_t width,
   }
   api_.CancelUnsubmitted(session_, job_.handle);
   job_ = {};
+  prepared_size_[0] = width;
+  prepared_size_[1] = height;
   XELOGI("Neural rendering: ready for {}x{} in {} ms", width, height,
          std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now() - start)
@@ -286,6 +289,14 @@ ID3D12Resource* NeuralRendering::Run(ID3D12Resource* color, uint32_t width,
     api_.ResetHistory(session_);
     reset_pending_ = false;
   }
+  if (prepared_size_[0] &&
+      (prepared_size_[0] != width || prepared_size_[1] != height)) {
+    XELOGW(
+        "Neural rendering: the scenes are {}x{}, not {}x{} as it was made "
+        "ready for: it's built again now",
+        width, height, prepared_size_[0], prepared_size_[1]);
+  }
+  prepared_size_[0] = 0;
   const LmxxfNrFrameInfo info = FrameInfo(color, width, height, strength);
   job_ = {};
   job_.struct_size = sizeof(job_);

@@ -280,10 +280,9 @@ class NeuralRendering {
   // Runs the network on `color` (the scene at the render size, SDR, in
   // NON_PIXEL_SHADER_RESOURCE): records what's before it, ends the open
   // submission, has the queue wait for the network, and begins the next.
-  // Returns its output at the render size (in NON_PIXEL_SHADER_RESOURCE when
-  // read), or null if it doesn't run this frame (the open submission as it
-  // was, unless it failed).
-  // `strength` is in (0, 1].
+  // `strength` is in (0, 1]. Returns its output at the render size (in
+  // NON_PIXEL_SHADER_RESOURCE when read), or null if it doesn't run this frame
+  // (the open submission as it was, unless it failed).
   ID3D12Resource* Run(ID3D12Resource* color, uint32_t width, uint32_t height,
                       float strength, bool reset);
   // Loads it and builds the network for frames of `color`'s size (as Run's,
@@ -316,6 +315,8 @@ class NeuralRendering {
   bool reset_pending_ = false;
   bool failed_ = false;
   uint64_t frame_ = 0;
+  // The size Prepare built the network for, until the first frame it runs on.
+  uint32_t prepared_size_[2] = {};
 };
 
 class DaoUpscalerImpl {
@@ -678,9 +679,13 @@ class DaoUpscalerImpl {
   // resumes.
   bool neural_paused_ = false;
   // The strength of the network's output in the last upscaled frame (0
-  // without it), and the change in it that resets the upscaler's history.
+  // without it), and the change in it that resets the upscaler's history (a
+  // visible change of the image; the Graphics tab's steps are 0.1).
   float neural_shown_ = 0.0f;
   static constexpr float kNeuralStrengthJump = 0.25f;
+  // The strength under which the network is skipped: what the Graphics tab's
+  // slider (in tenths) shows as 0.
+  static constexpr double kNeuralStrengthMin = 0.05;
   // Whether NeuralRendering::Prepare was done (at the first swap).
   bool neural_prepared_ = false;
   // Whether backend_ is FSR's (which the others fall back to).

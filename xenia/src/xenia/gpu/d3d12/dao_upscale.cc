@@ -821,9 +821,10 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   // linear scene's texture it will take: loading it and building its network
   // stalls the GPU thread a second or two (1.7 s on an RX 9070 XT), which the
   // first 3D scene would show. The logos and the scenes have the same render
-  // size (the first 3D frame then prepares in under a millisecond); a size
-  // that differs rebuilds it in Run. Only with temporal upscaling, which it
-  // runs before, and also at strength 0, for the slider to apply at once.
+  // size (measured: the first 3D frame then prepares in 0.3 ms); if they
+  // didn't, the runtime would build it again on the first 3D frame (Run logs
+  // it). Only with temporal upscaling, which it runs before, and also at
+  // strength 0, for the slider to apply at once.
   if (!neural_prepared_ && cvars::dao_neural_rendering &&
       cvars::dao_temporal_upscaler != "off") {
     neural_prepared_ = true;
@@ -885,8 +886,9 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
                          !(neural_ && neural_->failed());
   // Read once a frame (the Graphics tab sets it at any time); NaN as 0.
   const double live_strength = dao_live::Load(dao_live::values.neural_strength);
-  const float neural_strength =
-      live_strength > 0.0 ? float(std::min(live_strength, 1.0)) : 0.0f;
+  const float neural_strength = live_strength >= kNeuralStrengthMin
+                                    ? float(std::min(live_strength, 1.0))
+                                    : 0.0f;
   // Paused (F6), or at strength 0 (the network's output unused: its GPU time
   // saved): the session stays, to resume at once.
   const bool run_neural = neural_on && neural_strength > 0.0f &&
@@ -964,9 +966,15 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   frame.frame_ms = std::clamp(frame_ms, 1.0f, 100.0f);
   // The history isn't of the same image when the network's output comes or
   // goes, or its strength jumps (paused, resumed, failed, or the slider set
-  // far from where it was): not for the slider's small steps, its output
-  // changing as gradually as theirs.
-  const float neural_shown = neural_color ? neural_strength : 0.0f;
+  // far from where it was): not for the slider's steps of 0.1, which change
+  // the image little.
+  // (A frame it waits out, its pipelines not created yet, isn't a change: the
+  // next one has its output again.)
+  const bool neural_waited =
+      run_neural && !neural_color && !(neural_ && neural_->failed());
+  const float neural_shown = neural_color    ? neural_strength
+                             : neural_waited ? neural_shown_
+                                             : 0.0f;
   frame.reset = reset_history_ ||
                 std::abs(neural_shown - neural_shown_) > kNeuralStrengthJump;
   neural_shown_ = neural_shown;

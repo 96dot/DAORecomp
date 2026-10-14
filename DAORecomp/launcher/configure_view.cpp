@@ -105,7 +105,8 @@ namespace dao::launcher
 
         // Whether settings.neuralWeights is known not to have the weights. Checked when
         // it changes, on a thread of its own: a \\server\ path typed in can take
-        // seconds to answer. Not known meanwhile.
+        // seconds to answer. Not known meanwhile (and a path typed after one that doesn't
+        // answer is checked once it has).
         bool WeightsMissing(State& st)
         {
             const std::string& weights = st.settings.neuralWeights;
@@ -120,12 +121,20 @@ namespace dao::launcher
             {
                 check = std::make_shared<State::WeightsCheck>();
                 check->path = weights;
-                std::thread([check] {
+                auto run = [check] {
                     std::error_code ec;
                     check->found = !check->path.empty() &&
                         fs::is_regular_file(FromUtf8(check->path) / kNeuralWeightsFile, ec);
                     check->done.store(true, std::memory_order_release);
-                }).detach();
+                };
+                try
+                {
+                    std::thread(run).detach();
+                }
+                catch (const std::system_error&)
+                {
+                    run();
+                }
             }
             return weights == st.checkedWeights && !st.weightsFound;
         }
