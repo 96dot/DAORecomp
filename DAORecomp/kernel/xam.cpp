@@ -9,6 +9,8 @@
 #include "content/save_backups.h"
 #include "files.h"
 
+#include "gpu/video.h"
+#include "gpu/xenia_host.h"
 #include "input/input.h"
 #include "ui/keyboard.h"
 #include "ui/photo_mode.h"
@@ -495,6 +497,18 @@ namespace dao::imp
 
     uint32_t XamInputGetState(uint32_t user, uint32_t flags, X_INPUT_STATE* state)
     {
+        // Low latency waits here, before the frame's first read of the controller
+        // (a frame: one VdSwap, g_video.swapCount).
+        static std::atomic<uint64_t> s_lowLatencySwap{ UINT64_MAX };
+        const uint64_t swap = dao::gpu::g_video.swapCount.load(std::memory_order_relaxed);
+        if (s_lowLatencySwap.exchange(swap, std::memory_order_relaxed) != swap)
+        {
+            dao::gpu::XeniaLowLatencyFrameStart();
+            // A swap during the wait is still this frame's (the game runs a frame
+            // ahead at times): not another wait for it.
+            s_lowLatencySwap.store(dao::gpu::g_video.swapCount.load(std::memory_order_relaxed),
+                std::memory_order_relaxed);
+        }
         if (state)
             memset(state, 0, sizeof(*state));
         if ((flags & 0xFF) && (flags & 1) == 0)

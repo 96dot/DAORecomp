@@ -81,6 +81,10 @@ namespace dao
         // Waits for the display's refresh when presenting: no tearing, and no more
         // frames shown than the display refreshes.
         bool vsync = true;
+        // Low latency (AMD Radeon Anti-Lag 2): each frame starts as late as it can
+        // still be on time, so the controller is read closer to when it's shown. 0
+        // off, 1 on, 2 (kMaxLowLatency) on with boost: Anti-Lag 2 has no boost, so the same as 1.
+        int lowLatency = 0;
         // One of kFrameRates. The game locks its 3D scenes to 30 fps through the D3D
         // presentation interval: 60 presents them every vblank, and above 60 every
         // frame at once, paced to the rate unless unlimited (gpu/video.cpp).
@@ -123,6 +127,9 @@ namespace dao
     // Motion blur's highest level (Settings::motionBlur); the in-game Graphics tab and the
     // launcher list one name per level.
     constexpr int kMaxMotionBlur = 2;
+    // Low latency's highest level (Settings::lowLatency); the in-game Graphics tab and the
+    // launcher list one name per level.
+    constexpr int kMaxLowLatency = 2;
     // Neural rendering's network sizes (Settings::neuralNetwork), passes and styles.
     constexpr int kNeuralNetworks[] = { 0, 1080, 900, 720 };
     constexpr int kMaxNeuralPasses = 3;
@@ -136,6 +143,9 @@ namespace dao
 
     // Motion blur as config.toml writes it: "off", "low", "high".
     std::string_view MotionBlurName(int motionBlur);
+
+    // Low latency as config.toml writes it: "off", "on", "boost".
+    std::string_view LowLatencyName(int lowLatency);
 
     // The HDR quality as config.toml writes it: "high", "standard".
     std::string_view HdrQualityName(bool high);

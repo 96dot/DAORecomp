@@ -27,6 +27,13 @@
 /thirdparty/lmxxf-nr/**/*.dll
 /thirdparty/lmxxf-nr/**/*.exe
 /thirdparty/lmxxf-nr/**/*.zip
+# AMD's Anti-Lag 2 SDK header (MIT), kept as it is: see its SOURCE. Only these
+# three files, should more of the SDK be unpacked there.
+!/thirdparty/antilag2/
+/thirdparty/antilag2/*
+!/thirdparty/antilag2/ffx_antilag2_dx12.h
+!/thirdparty/antilag2/LICENSE.txt
+!/thirdparty/antilag2/SOURCE
 /build/
 /build-*/
 /xenia/third_party

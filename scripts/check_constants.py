@@ -2,8 +2,8 @@
 link, kept in installer/deps.py for the installer, and the appended installer's
 magic (installer/pipeline.py), have the same values where the program keeps them;
 that the file and folder names both sides use are spelt the same; and that the
-in-game Graphics tab offers the fields of view and neural rendering options settings.h
-does.
+in-game Graphics tab offers the fields of view, neural rendering options and motion blur
+and low latency levels settings.h does.
 
     python -I scripts/check_constants.py
 """
@@ -86,20 +86,25 @@ def fov_lists():
     return numbers(steps), int(original.group(1)), numbers(tab), int(tab_original.group(1))
 
 
-def neural_lists():
+def option_lists():
     """[(the option, settings.h's values, graphics_tab.as's)] for neural rendering's
     network sizes (kNeuralNetworks), passes (1 to kMaxNeuralPasses) and styles (0 to
-    kMaxNeuralStyle)."""
+    kMaxNeuralStyle), and the motion blur and low latency levels (0 to kMaxMotionBlur,
+    kMaxLowLatency)."""
     header, script = read("DAORecomp/settings.h"), read("DAORecomp/ui/graphics_tab.as")
     networks = re.search(r"kNeuralNetworks\[\] = \{([^}]*)\}", header)
     passes = re.search(r"kMaxNeuralPasses = (\d+);", header)
     styles = re.search(r"kMaxNeuralStyle = (\d+);", header)
-    if not (networks and passes and styles):
-        sys.exit("settings.h: neural rendering's lists aren't where this script reads them")
+    blur = re.search(r"kMaxMotionBlur = (\d+);", header)
+    latency = re.search(r"kMaxLowLatency = (\d+);", header)
+    if not (networks and passes and styles and blur and latency):
+        sys.exit("settings.h: the options' lists aren't where this script reads them")
     out = []
     for key, values in [("NeuralNetwork", [int(n) for n in re.findall(r"\d+", networks.group(1))]),
                         ("NeuralPasses", list(range(1, int(passes.group(1)) + 1))),
-                        ("NeuralStyle", list(range(0, int(styles.group(1)) + 1)))]:
+                        ("NeuralStyle", list(range(0, int(styles.group(1)) + 1))),
+                        ("MotionBlur", list(range(0, int(blur.group(1)) + 1))),
+                        ("LowLatency", list(range(0, int(latency.group(1)) + 1)))]:
         row = re.search(rf'key: "{key}"[^}}]*?values: \[([^\]]*)\]', script, re.S)
         if not row:
             sys.exit(f"graphics_tab.as: no {key} row with values (this script reads it)")
@@ -113,7 +118,7 @@ def main():
     if steps != tab or original != tab_original:
         print(f"graphics_tab.as: FOV {tab} (original {tab_original}), settings.h has {steps} (original {original})")
         failed += 1
-    for key, values, tab_values in neural_lists():
+    for key, values, tab_values in option_lists():
         if values != tab_values:
             print(f"graphics_tab.as: {key} {tab_values}, settings.h has {values}")
             failed += 1

@@ -16,6 +16,7 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
   tonemapping redone without compressing its highlights), upscaled in HDR;
   HDR quality High keeps it 16-bit scRGB all the way to the display
 - 60 fps (the original is locked to 30), or up to 240 or unlimited (experimental)
+- low latency with AMD Radeon Anti-Lag 2 (AMD GPUs)
 - field of view settings: gameplay's, and conversations' (and, it seems, cutscenes')
   separately
 - SDL3 input, including DualSense and other controllers
@@ -208,6 +209,16 @@ the next time it starts. Turning off dynamic shadows and post-processing there (
 launcher) makes the game faster on low-power devices such as the Steam Deck. Motion
 blur is off by default; Low and High cost GPU time while the scene moves.
 
+**Low latency** (*Configure → Display → Frame rate* in the launcher, or *Options →
+Graphics*, where it applies at once) turns on AMD Radeon Anti-Lag 2 on AMD GPUs with a
+current driver: each frame starts as late as it can still be on time, so the
+controller is read closer to when the frame is shown. It does the most when the GPU is
+the limit (an unlimited frame rate, or one the GPU can't quite reach), where frames would
+otherwise wait in a queue; at a frame rate the GPU reaches easily there's little to gain.
+It cost no frames in tests on an RX 9070 XT. It's off while frame generation is on: Anti-Lag 2
+works with FSR 3's own way of showing generated frames, not this game's, and cost frames
+with it. *On + Boost* is the same as *On* on AMD GPUs. On other GPUs it does nothing. `userdata/xenia.log` says whether it's available and on.
+
 **Neural rendering (experimental, AMD RDNA 4 only):** the 3D scenes go through the
 neural rendering network of NVIDIA's DLSS 5 before temporal upscaling, run on AMD's
 GPUs by [lmxxf's port](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) (MIT),
@@ -396,7 +407,9 @@ license is copied next to its DLLs, and Intel's XeSS license and third-party not
 next to `libxess.dll` (`intel_xess_license.txt`, `intel_xess_third_party_programs.txt`).
 `thirdparty/lmxxf-nr` is lmxxf's code under the MIT license, with AMD's HIP API headers
 under theirs (MIT); both licenses are installed next to `LmxxfNrRuntime.dll`
-(`lmxxf_nr_license.txt`, `lmxxf_nr_hip_api_license.txt`). The neural rendering network's
-weights are NVIDIA's; none of them are in this repository or the releases.
+(`lmxxf_nr_license.txt`, `lmxxf_nr_hip_api_license.txt`). `thirdparty/antilag2` is
+AMD's Anti-Lag 2 SDK header, under its MIT license (installed as
+`amd_antilag2_license.txt`). The neural rendering network's weights are NVIDIA's; none
+of them are in this repository or the releases.
 *Dragon Age* is a trademark of Electronic Arts; this project is not affiliated with EA,
 BioWare or Microsoft.

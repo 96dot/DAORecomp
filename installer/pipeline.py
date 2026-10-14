@@ -485,6 +485,8 @@ def install(reporter, built, dest, with_shortcuts=False):
     # libxess.dll's license and third-party notices go with it (its license's terms).
     shutil.copy2(toolchain.XESS_DIR / "LICENSE.txt", dest / "intel_xess_license.txt")
     shutil.copy2(toolchain.XESS_DIR / "third-party-programs.txt", dest / "intel_xess_third_party_programs.txt")
+    # The Anti-Lag 2 SDK's header is built into the exe: its license (MIT) goes with it.
+    shutil.copy2(REPO / "thirdparty" / "antilag2" / "LICENSE.txt", dest / "amd_antilag2_license.txt")
     neural.install(reporter, BUILD / "neural", dest)
     for folder in ("userdata", "mods"):
         (dest / folder).mkdir(exist_ok=True)

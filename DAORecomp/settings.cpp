@@ -121,6 +121,7 @@ namespace dao
         s.hdrPaperWhite = std::clamp(s.hdrPaperWhite, kHdrMinNits, kHdrMaxPaperWhite);
         s.hdrPeak = std::clamp(s.hdrPeak, s.hdrPaperWhite, kHdrMaxPeak);
         s.motionBlur = std::clamp(s.motionBlur, 0, kMaxMotionBlur);
+        s.lowLatency = std::clamp(s.lowLatency, 0, kMaxLowLatency);
         s.fov = std::clamp(s.fov, kMinFov, kMaxFov);
         s.conversationFov = std::clamp(s.conversationFov, kMinFov, kMaxFov);
         s.windowWidth = std::clamp(s.windowWidth, 320, 16384);
@@ -130,6 +131,11 @@ namespace dao
     std::string_view MotionBlurName(int motionBlur)
     {
         return motionBlur >= kMaxMotionBlur ? "high" : motionBlur > 0 ? "low" : "off";
+    }
+
+    std::string_view LowLatencyName(int lowLatency)
+    {
+        return lowLatency >= kMaxLowLatency ? "boost" : lowLatency > 0 ? "on" : "off";
     }
 
     std::string_view HdrQualityName(bool high)
@@ -190,6 +196,12 @@ namespace dao
         s.neuralSkinProtect = video["neural_skin_protect"].value_or(s.neuralSkinProtect);
         s.neuralStyle = video["neural_style"].value_or(s.neuralStyle);
         s.vsync = video["vsync"].value_or(s.vsync);
+        const std::string lowLatency = video["low_latency"].value_or(std::string());
+        for (int level = 0; level <= kMaxLowLatency; ++level)
+        {
+            if (lowLatency == LowLatencyName(level))
+                s.lowLatency = level;
+        }
         // (Before frame_rate, unlock_frame_rate chose between 60 and 30.)
         s.frameRate = video["frame_rate"].value_or(video["unlock_frame_rate"].value_or(true) ? 60 : 30);
         s.fullscreen = video["fullscreen"].value_or(s.fullscreen);
@@ -297,6 +309,11 @@ neural_style = {}
 # Wait for the display's refresh when presenting: no tearing, and no more frames shown
 # than the display refreshes.
 vsync = {}
+# Low latency (AMD Radeon Anti-Lag 2, with a current AMD driver): each frame starts as late
+# as it can still be on time, so the controller is read closer to when the frame is shown.
+# "off", "on", "boost" (Anti-Lag 2 has no boost: the same as "on"). Off while frame generation
+# is on (it would cost frames).
+low_latency = "{}"
 # Frames per second: 30 (the game's own lock in its 3D scenes), 60, 90, 120, 144, 165, 240,
 # or 0 for unlimited. Above 60 is experimental.
 frame_rate = {}
@@ -334,7 +351,7 @@ window_height = {}
             s.showLauncher, s.checkForUpdates, s.modsWarningSeen, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
             TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.frameGeneration, s.neuralRendering,
             Quote(s.neuralWeights), s.neuralStrength, s.neuralNetwork, s.neuralPasses, s.neuralSkinProtect,
-            s.neuralStyle, s.vsync, s.frameRate,
+            s.neuralStyle, s.vsync, LowLatencyName(s.lowLatency), s.frameRate,
             s.hdr, s.hdrPaperWhite, s.hdrPeak, HdrQualityName(s.hdrHighQuality), s.anisotropicFiltering, s.shadows, s.postProcessing,
             MotionBlurName(s.motionBlur), s.fov, s.conversationFov, s.fullscreen,
             s.windowWidth, s.windowHeight);
@@ -396,6 +413,7 @@ window_height = {}
         SetXeniaCvar("dao_neural_style", toml::value<int64_t>(s.neuralStyle));
         // (Not Xenia's own vsync cvar: the guest's vblanks stay at the console's 60 Hz.)
         SetXeniaCvar("dao_present_vsync", toml::value<bool>(s.vsync));
+        SetXeniaCvar("dao_low_latency", toml::value<int64_t>(s.lowLatency));
         SetXeniaCvar("present_hdr", toml::value<bool>(s.hdr));
         SetXeniaCvar("present_hdr_paper_white", toml::value<double>(s.hdrPaperWhite));
         SetXeniaCvar("present_hdr_peak", toml::value<double>(s.hdrPeak));
@@ -429,6 +447,8 @@ window_height = {}
                 s.neuralSkinProtect ? " (skin protected)" : "", s.neuralStyle, s.neuralWeights);
         if (s.motionBlur)
             LOGI("Settings: motion blur {}", MotionBlurName(s.motionBlur));
+        if (s.lowLatency)
+            LOGI("Settings: low latency {}", LowLatencyName(s.lowLatency));
         if (s.fov != kOriginalFov || s.conversationFov != kOriginalFov)
             LOGI("Settings: field of view {}, in conversations {}", s.fov, s.conversationFov);
         if (s.hdr)

@@ -39,6 +39,10 @@ namespace dao::gpu
     void XeniaSetFullscreen(bool fullscreen);
     void XeniaSetOutputScaling(Upscaler upscaler, float sharpness);
 
+    // Low latency's wait, on the game's thread once a frame just before it reads the
+    // controller (XamInputGetState).
+    void XeniaLowLatencyFrameStart();
+
     void XeniaInitializeRingBuffer(uint32_t physicalAddress, uint32_t sizeLog2);
     void XeniaEnableReadPointerWriteBack(uint32_t address, uint32_t blockSizeLog2);
     void XeniaSetInterruptCallback(uint32_t callback, uint32_t userData);

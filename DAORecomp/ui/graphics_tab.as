@@ -114,6 +114,8 @@ var ROWS = [
     { key: "FrameRate", label: "Frame rate", values: [30, 60, 90, 120, 144, 165, 240, 0],
       labels: ["30 fps (original)", "60 fps", "90 fps", "120 fps", "144 fps", "165 fps", "240 fps", "Unlimited"] },
     { key: "VSync", label: "Vertical sync", toggle: true },
+    { key: "LowLatency", label: "Low latency (AMD Anti-Lag 2)", values: [0, 1, 2],
+      labels: ["Off", "On", "On + Boost"] },
     { header: "Upscaling" },
     { key: "TemporalUpscaler", label: "Temporal upscaling", restart: true, values: [0, 1, 2, 3, 4],
       labels: ["Off", "Auto", "FidelityFX FSR 4", "FidelityFX FSR 3.1", "Intel XeSS-SR"] },

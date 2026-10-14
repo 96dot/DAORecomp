@@ -23,8 +23,8 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
 - `dao_host.h`: the runtime services Xenia's code calls instead of its kernel and
   CPU modules (interrupts, guest threads, the window).
 - `dao_live_settings.h`: the settings the in-game Graphics menu changes while the
-  game runs (vsync, temporal sharpness, anisotropic filtering, motion blur, frame
-  generation, HDR paper white and peak), as atomics the GPU, presenter and render
+  game runs (vsync, low latency, temporal sharpness, anisotropic filtering, motion
+  blur, frame generation, HDR paper white and peak), as atomics the GPU, presenter and render
   threads read instead of their cvars (also in the upstream files `d3d12_texture_cache.cc` and
   `d3d12_presenter.cc`).
 - `gpu/d3d12/dao_upscale.*`: temporal upscaling (FidelityFX or XeSS), motion vectors,
@@ -37,6 +37,9 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
   `dao_upscale_fg.cc` frame generation (FSR 3.1).
 - `ui/dao_frame_pacer.cc`: frame generation's presentation: the presenter's
   thread that paints each generated frame and, half a frame later, the real one.
+- `ui/d3d12/dao_low_latency.*`: low latency (AMD Radeon Anti-Lag 2, the header in
+  `thirdparty/antilag2`): set up with the device (provider), and its once-a-frame wait,
+  which DAORecomp calls as the game reads the controller.
 - `gpu/d3d12/dao_frame_trace.h`, `gpu/d3d12/dao_gpu_timing.h`: diagnostics.
 - `gpu/d3d12/dao_command_processor.cc`, `dao_render_target_cache.cc`,
   `dao_texture_cache.cc`, `ui/d3d12/dao_presenter.cc`, `dao_provider.cc`:

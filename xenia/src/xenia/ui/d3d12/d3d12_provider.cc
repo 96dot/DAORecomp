@@ -17,6 +17,7 @@
 #include "xenia/ui/d3d12/d3d12_immediate_drawer.h"
 #include "xenia/ui/d3d12/d3d12_presenter.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
+#include "xenia/ui/d3d12/dao_low_latency.h"  // DAO
 DEFINE_bool(d3d12_debug, false, "Enable Direct3D 12 and DXGI debug layer.",
             "D3D12");
 DEFINE_bool(d3d12_break_on_error, false,
@@ -86,6 +87,7 @@ D3D12Provider::~D3D12Provider() {
     direct_queue_->Release();
   }
   if (device_ != nullptr) {
+    dao_low_latency::Shutdown();  // DAO
     device_->Release();
   }
   if (dxgi_factory_ != nullptr) {
@@ -423,6 +425,8 @@ bool D3D12Provider::Initialize() {
   dxgi_factory_ = dxgi_factory;
   device_ = device;
   direct_queue_ = direct_queue;
+  // DAO: AMD Radeon Anti-Lag 2, if the driver has it.
+  dao_low_latency::Initialize(device);
 
   // Get descriptor sizes for each type.
   for (uint32_t i = 0; i < D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES; ++i) {

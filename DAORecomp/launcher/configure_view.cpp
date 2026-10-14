@@ -34,6 +34,8 @@ namespace dao::launcher
         static_assert(std::size(kFrameRateNames) == std::size(kFrameRates));
         constexpr const char* kMotionBlurNames[] = { "Off", "Low", "High" };
         static_assert(std::size(kMotionBlurNames) == kMaxMotionBlur + 1);
+        constexpr const char* kLowLatencyNames[] = { "Off", "On", "On + Boost" };
+        static_assert(std::size(kLowLatencyNames) == kMaxLowLatency + 1);
         // The names of kNeuralNetworks, and of the passes and styles.
         constexpr const char* kNeuralNetworkNames[] = { "Auto (720 at 1x, 1080 above)",
             "Quality (1080-line network)", "Balanced (900-line network)", "Performance (720-line network)" };
@@ -302,6 +304,10 @@ namespace dao::launcher
             ImGui::Checkbox("VSync", &s.vsync);
             HelpText("Waits for the display's refresh: no tearing, and no more frames shown than the display "
                      "refreshes.");
+            ComboRow("Low latency", &s.lowLatency, kLowLatencyNames, int(std::size(kLowLatencyNames)));
+            HelpText("AMD Radeon Anti-Lag 2 (a current AMD driver): each frame starts as late as it can still be on "
+                     "time, so the controller is read closer to when the frame is shown. Boost is the same as On "
+                     "on AMD GPUs. Off while frame generation is on (it would cost frames).");
 
             Section("HDR (experimental)");
             ImGui::Checkbox("HDR output", &s.hdr);
@@ -424,6 +430,7 @@ namespace dao::launcher
             s.windowWidth = defaults.windowWidth;
             s.windowHeight = defaults.windowHeight;
             s.vsync = defaults.vsync;
+            s.lowLatency = defaults.lowLatency;
             s.frameRate = defaults.frameRate;
             s.hdr = defaults.hdr;
             s.hdrPaperWhite = defaults.hdrPaperWhite;

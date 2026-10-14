@@ -119,6 +119,8 @@ dao_xenia_sources(xenia-ui-d3d12 ${XE_SRC}/ui/d3d12)
 target_include_directories(xenia-ui-d3d12 SYSTEM PUBLIC ${XE_TP}/DirectX-Headers/include ${XE_TP}/DirectXShaderCompiler/include)
 target_link_libraries(xenia-ui-d3d12 PUBLIC xenia-base xenia-ui PRIVATE d3d12 dxgi dxguid)
 dao_xenia_defaults(xenia-ui-d3d12)
+# AMD Radeon Anti-Lag 2's header (ui/d3d12/dao_low_latency.cc).
+target_include_directories(xenia-ui-d3d12 SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/thirdparty/antilag2)
 
 add_library(xenia-gpu STATIC)
 dao_xenia_sources(xenia-gpu ${XE_SRC}/gpu)

@@ -21,6 +21,7 @@
 #include "xenia/gpu/d3d12/dao_upscale.h"
 #include "xenia/gpu/xenos.h"
 #include "xenia/memory.h"
+#include "xenia/ui/d3d12/dao_low_latency.h"
 #include "xenia/ui/window.h"
 #include "xenia/ui/window_listener.h"
 #include "xenia/ui/window_win.h"
@@ -39,6 +40,7 @@ DECLARE_bool(dao_frame_generation);
 DECLARE_double(dao_neural_strength);
 DECLARE_int32(anisotropic_override);
 DECLARE_int32(dao_motion_blur);
+DECLARE_int32(dao_low_latency);
 DECLARE_double(present_hdr_paper_white);
 DECLARE_double(present_hdr_peak);
 
@@ -141,6 +143,12 @@ namespace dao::gpu
         live.hdr_paper_white = cvars::present_hdr_paper_white;
         live.hdr_peak = cvars::present_hdr_peak;
         live.neural_strength = cvars::dao_neural_strength;
+        live.low_latency = cvars::dao_low_latency;
+    }
+
+    void XeniaLowLatencyFrameStart()
+    {
+        xe::ui::d3d12::dao_low_latency::FrameStart();
     }
 
     bool InitializeXeniaGraphics(const std::filesystem::path& userRoot)
