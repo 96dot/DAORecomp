@@ -222,7 +222,8 @@ class Comgr:
 
 def gpu_targets():
     """The architectures of TARGETS this PC's GPUs have, as AMD's HIP runtime (part of
-    its driver) reports them; none without it."""
+    its driver) reports them; none without it, and None if it can't say (it didn't
+    start: a driver being updated, or a GPU switched off)."""
     try:
         hip = ctypes.WinDLL(str(_system32() / "amdhip64_7.dll"))
     except (OSError, InstallError):
@@ -232,7 +233,7 @@ def gpu_targets():
     size, arch_at, arch_size = 4096, 1160, 256
     count = ctypes.c_int()
     if hip.hipInit(0) or hip.hipGetDeviceCount(ctypes.byref(count)):
-        return []
+        return None
     found = set()
     for i in range(count.value):
         props = ctypes.create_string_buffer(size)
@@ -325,24 +326,50 @@ def _compile_all(reporter, comgr, jobs, target, done):
 def install(reporter, built_dir, dest):
     """Puts neural rendering's kernels (compiled for this PC's RDNA 4 GPU), its shaders
     and settings in dest, and lmxxf's licenses (its DLL is in every install). Without such
-    a GPU and AMD's driver it's left out (the game runs without it), and an earlier
+    a GPU and AMD's driver, it's left out (the game runs without it), and an earlier
     install's kernels and shaders are removed (the launcher would offer it, and it
-    wouldn't start); if they can't be built, an earlier install's stay. built_dir keeps
-    the compiled kernels between installs."""
+    wouldn't start); if the driver can't say which GPU this is, or the kernels can't be
+    built, an earlier install's for this GPU stay. built_dir keeps the compiled kernels
+    between installs."""
     for source, name in LICENSES.items():
         shutil.copy2(LMXXF / source, Path(dest) / name)
     out = Path(dest) / FOLDER
 
+    sums_file = out / "HIP" / "SHA256SUMS"
+
     def remove_installed():
         # What this installs there, the list (the launcher's and the game's check) first;
-        # anything else in the folder stays.
-        (out / "HIP" / "SHA256SUMS").unlink(missing_ok=True)
+        # anything else in the folder stays. Not through a link (to somewhere else).
+        if out.is_symlink() or out.is_junction() or not out.resolve().is_relative_to(Path(dest).resolve()):
+            return
+        try:
+            sums_file.unlink(missing_ok=True)
+        except OSError:
+            pass
         for folder in ("HIP", "shaders"):
             shutil.rmtree(out / folder, ignore_errors=True)
+
+    def installed_targets():
+        # The GPUs an earlier install's kernels are for ("<hash>  <target>/<module>.hsaco").
+        try:
+            lines = sums_file.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return set()
+        return {line.split("  ", 1)[1].split("/", 1)[0] for line in lines if "  " in line and "/" in line}
+
+    def keep_or_remove(reason):
+        if targets is not None and not set(targets) <= installed_targets():
+            remove_installed()
+        elif sums_file.is_file():
+            reason += " (the earlier install's kernels are kept)"
+        reporter.log(f"Neural rendering not installed: {reason}")
 
     if not IS_WINDOWS:
         return
     targets = gpu_targets()
+    if targets is None:
+        keep_or_remove("AMD's driver didn't start, to say which GPU this is")
+        return
     if not targets:
         reporter.log("Neural rendering not installed: no AMD RDNA 4 GPU (RX 9000 series) with AMD's driver")
         remove_installed()
@@ -352,8 +379,7 @@ def install(reporter, built_dir, dest):
     except Cancelled:
         raise
     except InstallError as e:
-        reporter.log(f"Neural rendering not installed: {e}"
-                     + (" (the earlier install's kept)" if (out / "HIP" / "SHA256SUMS").is_file() else ""))
+        keep_or_remove(str(e))
         return
     try:
         remove_installed()

@@ -127,10 +127,13 @@ bool DaoUpscalerImpl::EnsureHdrScene() {
   color_srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
   color_srv.Texture2D.MipLevels = 1;
   Transition(color_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  return EnsureHdrTexture() && ConvertImage(color_.resource.Get(), color_srv,
+                                            hdr_, kCompositeLinearize);
+}
+
+bool DaoUpscalerImpl::EnsureHdrTexture() {
   return EnsureTexture(hdr_, DXGI_FORMAT_R16G16B16A16_FLOAT, render_size_[0],
-                       render_size_[1], "HDR") &&
-         ConvertImage(color_.resource.Get(), color_srv, hdr_,
-                      kCompositeLinearize);
+                       render_size_[1], "HDR");
 }
 
 bool DaoUpscalerImpl::WantsTrueHdr() const {

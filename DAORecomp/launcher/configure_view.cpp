@@ -103,18 +103,31 @@ namespace dao::launcher
             return *st.neuralInstalled;
         }
 
-        // Whether settings.neuralWeights has the weights (checked when it changes).
-        bool WeightsFound(State& st)
+        // Whether settings.neuralWeights is known not to have the weights. Checked when
+        // it changes, on a thread of its own: a \\server\ path typed in can take
+        // seconds to answer. Not known meanwhile.
+        bool WeightsMissing(State& st)
         {
             const std::string& weights = st.settings.neuralWeights;
-            if (weights != st.checkedWeights)
+            auto& check = st.weightsCheck;
+            if (check && check->done.load(std::memory_order_acquire))
             {
-                st.checkedWeights = weights;
-                std::error_code ec;
-                st.weightsFound =
-                    !weights.empty() && fs::is_regular_file(FromUtf8(weights) / kNeuralWeightsFile, ec);
+                st.checkedWeights = check->path;
+                st.weightsFound = check->found;
+                check.reset();
             }
-            return st.weightsFound;
+            if (!check && weights != st.checkedWeights)
+            {
+                check = std::make_shared<State::WeightsCheck>();
+                check->path = weights;
+                std::thread([check] {
+                    std::error_code ec;
+                    check->found = !check->path.empty() &&
+                        fs::is_regular_file(FromUtf8(check->path) / kNeuralWeightsFile, ec);
+                    check->done.store(true, std::memory_order_release);
+                }).detach();
+            }
+            return weights == st.checkedWeights && !st.weightsFound;
         }
 
         void NeuralRenderingRows(State& st)
@@ -125,7 +138,7 @@ namespace dao::launcher
             ImGui::Checkbox("Neural rendering (AMD RDNA 4, experimental)", &s.neuralRendering);
             ImGui::BeginDisabled(!s.neuralRendering);
             PathRow(st, "Neural rendering weights", PathField::NeuralWeights);
-            if (s.neuralRendering && !WeightsFound(st))
+            if (s.neuralRendering && WeightsMissing(st))
                 ColoredText(kWarning, s.neuralWeights.empty()
                         ? "Choose the folder of lmxxf's package (or its weights folder)."
                         : "No weights (block0-ffn.f16) in this folder: it stays off.");
@@ -430,7 +443,9 @@ namespace dao::launcher
     std::optional<fs::path> FindNeuralWeights(const fs::path& folder)
     {
         constexpr int kMaxDepth = 4;
-        // (A folder as large as a drive, or a slow network share, isn't searched through.)
+        // (A folder as large as a drive, or a slow network share, isn't searched through:
+        // the limits are checked between entries, so one slow listing can still overrun
+        // the time. On the folder dialog's thread, with Browse off meanwhile.)
         constexpr int kMaxEntries = 20000;
         constexpr auto kMaxTime = std::chrono::seconds(5);
         std::error_code ec;

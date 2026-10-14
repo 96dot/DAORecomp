@@ -283,8 +283,9 @@ class NeuralRendering {
   // Returns its output at the render size (in NON_PIXEL_SHADER_RESOURCE when
   // read), or null if it doesn't run this frame (the open submission as it
   // was, unless it failed).
+  // `strength` is in (0, 1].
   ID3D12Resource* Run(ID3D12Resource* color, uint32_t width, uint32_t height,
-                      bool reset);
+                      float strength, bool reset);
   // Loads it and builds the network for frames of `color`'s size (as Run's,
   // in NON_PIXEL_SHADER_RESOURCE), unless it's loaded or has failed: a second
   // or two, done on the first frame rather than the first 3D scene's.
@@ -294,7 +295,7 @@ class NeuralRendering {
   bool Load();
   // The runtime's description of a frame of `color`.
   LmxxfNrFrameInfo FrameInfo(ID3D12Resource* color, uint32_t width,
-                             uint32_t height);
+                             uint32_t height, float strength);
   // Logs the runtime's error and turns it off; false.
   bool Fail(const char* what);
   static void ExecuteInputs(void* context,
@@ -569,6 +570,9 @@ class DaoUpscalerImpl {
   // tonemapping pass redone (unless it isn't the image before the UI: a pass
   // after it, or none), else the image before the UI linearized.
   bool EnsureHdrScene();
+  // hdr_ at the render size (as EnsureHdrScene and neural rendering's
+  // warm-up take it).
+  bool EnsureHdrTexture();
   // A frame not upscaled: with true HDR, the front buffer HDR-encoded into
   // encoded_ (all true HDR frames are), else nullptr (the front buffer).
   ID3D12Resource* NotUpscaled(
@@ -673,9 +677,10 @@ class DaoUpscalerImpl {
   // Paused (F6, or strength 0) since it last ran: its history restarts when it
   // resumes.
   bool neural_paused_ = false;
-  // Whether the last upscaled frame was the network's output (kept while
-  // strength 0 skips it).
-  bool neural_used_ = false;
+  // The strength of the network's output in the last upscaled frame (0
+  // without it), and the change in it that resets the upscaler's history.
+  float neural_shown_ = 0.0f;
+  static constexpr float kNeuralStrengthJump = 0.25f;
   // Whether NeuralRendering::Prepare was done (at the first swap).
   bool neural_prepared_ = false;
   // Whether backend_ is FSR's (which the others fall back to).

@@ -26,13 +26,6 @@ namespace dao
 
         constexpr const char* kXeniaComment = "# Any Xenia GPU option, by its cvar name, e.g. anisotropic_override = 4.\n";
 
-        // Neural rendering runs: on, with its weights' folder, and before temporal
-        // upscaling (without it, it isn't loaded).
-        bool NeuralRenderingOn(const Settings& s)
-        {
-            return s.neuralRendering && !s.neuralWeights.empty() && s.temporalUpscaler != TemporalUpscaler::Off;
-        }
-
         const char* UpscalerName(Upscaler upscaler)
         {
             switch (upscaler)
@@ -442,6 +435,11 @@ window_height = {}
             LOGI("Settings: HDR output, paper white {} nits, peak {} nits, quality {}", s.hdrPaperWhite, s.hdrPeak,
                 HdrQualityName(s.hdrHighQuality));
         return s;
+    }
+
+    bool NeuralRenderingOn(const Settings& s)
+    {
+        return s.neuralRendering && !s.neuralWeights.empty() && s.temporalUpscaler != TemporalUpscaler::Off;
     }
 
     const Settings& GetSettings()

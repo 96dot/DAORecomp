@@ -65,6 +65,8 @@ namespace d3d12 {
 namespace {
 // The first of the weights' files, which marks their folder.
 constexpr const char* kWeightsFile = "block0-ffn.f16";
+// The runtime also takes them in single precision.
+constexpr const char* kWeightsFileF32 = "block0-ffn.f32";
 
 // The runtime's options, as its packages' settings (DLSS5_*): set in the
 // environment before it loads (it copies the environment then), where they
@@ -169,7 +171,8 @@ bool NeuralRendering::Load() {
   // The runtime looks in these before the chosen folder (its FindWeightsDir).
   for (const std::filesystem::path& first :
        {assets, assets / "weights", folder}) {
-    if (std::filesystem::is_regular_file(first / kWeightsFile, ec)) {
+    if (std::filesystem::is_regular_file(first / kWeightsFile, ec) ||
+        std::filesystem::is_regular_file(first / kWeightsFileF32, ec)) {
       XELOGW(
           "Neural rendering: the weights in {} are used, not the chosen "
           "folder's (the runtime looks there first)",
@@ -212,9 +215,8 @@ bool NeuralRendering::Load() {
 }
 
 LmxxfNrFrameInfo NeuralRendering::FrameInfo(ID3D12Resource* color,
-                                            uint32_t width, uint32_t height) {
-  const float strength = float(
-      std::clamp(dao_live::Load(dao_live::values.neural_strength), 0.0, 1.0));
+                                            uint32_t width, uint32_t height,
+                                            float strength) {
   LmxxfNrFrameInfo info = {};
   info.struct_size = sizeof(info);
   // One game, one view: its history isn't shared with another session.
@@ -241,10 +243,11 @@ void NeuralRendering::Prepare(ID3D12Resource* color, uint32_t width,
   if (!Load()) {
     return;
   }
-  // A frame prepared and dropped: the network built for the size, its weights
-  // uploaded and its shaders compiled. Nothing is recorded, so dropping it
-  // only retires the job.
-  const LmxxfNrFrameInfo info = FrameInfo(color, width, height);
+  // A frame prepared and cancelled: the network built for the size, its
+  // weights uploaded and its shaders compiled. Nothing is recorded, so
+  // cancelling it only releases the job. (At full strength, whatever the
+  // slider's: the strength is a frame's setting, not the network's.)
+  const LmxxfNrFrameInfo info = FrameInfo(color, width, height, 1.0f);
   job_ = {};
   job_.struct_size = sizeof(job_);
   if (api_.PrepareFrame(session_, &info, &job_) != LMXXF_NR_OK ||
@@ -261,7 +264,8 @@ void NeuralRendering::Prepare(ID3D12Resource* color, uint32_t width,
 }
 
 ID3D12Resource* NeuralRendering::Run(ID3D12Resource* color, uint32_t width,
-                                     uint32_t height, bool reset) {
+                                     uint32_t height, float strength,
+                                     bool reset) {
   if (failed_ || (!session_ && !Load())) {
     return nullptr;
   }
@@ -282,7 +286,7 @@ ID3D12Resource* NeuralRendering::Run(ID3D12Resource* color, uint32_t width,
     api_.ResetHistory(session_);
     reset_pending_ = false;
   }
-  const LmxxfNrFrameInfo info = FrameInfo(color, width, height);
+  const LmxxfNrFrameInfo info = FrameInfo(color, width, height, strength);
   job_ = {};
   job_.struct_size = sizeof(job_);
   if (api_.PrepareFrame(session_, &info, &job_) != LMXXF_NR_OK ||

@@ -155,4 +155,7 @@ namespace dao
     // the [xenia] cvar overrides. Must run before the graphics system is created.
     const Settings& LoadSettings(const std::filesystem::path& userRoot);
     const Settings& GetSettings();
+    // Whether neural rendering runs: on, with its weights' folder, and before
+    // temporal upscaling (without it, it isn't loaded).
+    bool NeuralRenderingOn(const Settings& s);
 }

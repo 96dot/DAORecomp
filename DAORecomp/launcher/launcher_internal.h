@@ -323,10 +323,18 @@ namespace dao::launcher
         // Configure: give the selected tab the focus (switched with LB or RB).
         bool focusConfigureTab = false;
         // Neural rendering: whether the install has its runtime and kernels (checked
-        // once), and whether settings.neuralWeights has the weights, as of checkedWeights.
+        // once), and whether settings.neuralWeights has the weights, as of checkedWeights
+        // (weightsCheck: the check of a later path, on its own thread).
         std::optional<bool> neuralInstalled;
         std::string checkedWeights;
         bool weightsFound = false;
+        struct WeightsCheck
+        {
+            std::string path;
+            bool found = false;
+            std::atomic<bool> done = false;
+        };
+        std::shared_ptr<WeightsCheck> weightsCheck;
         // Whether Escape and the gamepad's B mean Back this frame: not closing a popup,
         // ending an edit or leaving a child window navigated on its own (not
         // NavFlattened, as the views' contents and their tables are).

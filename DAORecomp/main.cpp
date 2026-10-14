@@ -416,7 +416,7 @@ int main(int argc, char** argv)
     // switches between the game's own 30 fps and the frame rate set, F12 saves the
     // frame history (DAO_FRAME_HISTORY). Polled at 20 Hz: each poll is a few window
     // system calls (round trips to wineserver on Proton), and a key press is longer.
-    std::thread([frameHistory, neural = dao::GetSettings().neuralRendering] {
+    std::thread([frameHistory, neural = dao::NeuralRenderingOn(dao::GetSettings())] {
         constexpr int keys[] = { VK_F6, VK_F10, VK_F12 };
         bool wasDown[std::size(keys)] = {};
         for (;;)

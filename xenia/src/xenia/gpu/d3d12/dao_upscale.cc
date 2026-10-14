@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 
 #include "xenia/base/logging.h"
 #include "xenia/dao_live_settings.h"
@@ -819,14 +820,14 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   // Neural rendering made ready on the first frame (the logos), with the
   // linear scene's texture it will take: loading it and building its network
   // stalls the GPU thread a second or two (1.7 s on an RX 9070 XT), which the
-  // first 3D scene would show. The swaps are at the render size from the
-  // first, so the network built then is the one the scenes use. Only with
-  // temporal upscaling, which it runs before.
-  if (cvars::dao_neural_rendering && cvars::dao_temporal_upscaler != "off" &&
-      !neural_prepared_) {
+  // first 3D scene would show. The logos and the scenes have the same render
+  // size (the first 3D frame then prepares in under a millisecond); a size
+  // that differs rebuilds it in Run. Only with temporal upscaling, which it
+  // runs before, and also at strength 0, for the slider to apply at once.
+  if (!neural_prepared_ && cvars::dao_neural_rendering &&
+      cvars::dao_temporal_upscaler != "off") {
     neural_prepared_ = true;
-    if (EnsureTexture(hdr_, DXGI_FORMAT_R16G16B16A16_FLOAT, render_width,
-                      render_height, "HDR")) {
+    if (EnsureHdrTexture()) {
       Transition(hdr_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
       cp_.SubmitBarriers();
       Neural().Prepare(hdr_.resource.Get(), render_width, render_height);
@@ -882,11 +883,13 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   // the one before the UI as the game drew it, not the network's.
   const bool neural_on = cvars::dao_neural_rendering &&
                          !(neural_ && neural_->failed());
+  // Read once a frame (the Graphics tab sets it at any time); NaN as 0.
+  const double live_strength = dao_live::Load(dao_live::values.neural_strength);
+  const float neural_strength =
+      live_strength > 0.0 ? float(std::min(live_strength, 1.0)) : 0.0f;
   // Paused (F6), or at strength 0 (the network's output unused: its GPU time
   // saved): the session stays, to resume at once.
-  const bool neural_zero_strength =
-      neural_on && !(dao_live::Load(dao_live::values.neural_strength) > 0.0);
-  const bool run_neural = neural_on && !neural_zero_strength &&
+  const bool run_neural = neural_on && neural_strength > 0.0f &&
                           !dao_live::Load(dao_live::values.neural_paused);
   if (neural_on && !run_neural) {
     neural_paused_ = true;
@@ -900,7 +903,7 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
     Transition(hdr_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     cp_.SubmitBarriers();
     neural_color = Neural().Run(hdr_.resource.Get(), render_width,
-                                render_height,
+                                render_height, neural_strength,
                                 reset_history_ || neural_paused_);
     neural_paused_ = false;
     if (neural_color && dao_timing::GpuTiming::Enabled()) {
@@ -960,14 +963,13 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
       dao_live::Load(dao_live::values.temporal_sharpness), 0.0, 1.0));
   frame.frame_ms = std::clamp(frame_ms, 1.0f, 100.0f);
   // The history isn't of the same image when the network's output comes or
-  // goes (paused, resumed, or failed). Not when strength 0 skips it: the
-  // slider gets there, and near 0 the output is about its input.
-  const bool neural_used = neural_color != nullptr;
+  // goes, or its strength jumps (paused, resumed, failed, or the slider set
+  // far from where it was): not for the slider's small steps, its output
+  // changing as gradually as theirs.
+  const float neural_shown = neural_color ? neural_strength : 0.0f;
   frame.reset = reset_history_ ||
-                (!neural_zero_strength && neural_used != neural_used_);
-  if (!neural_zero_strength) {
-    neural_used_ = neural_used;
-  }
+                std::abs(neural_shown - neural_shown_) > kNeuralStrengthJump;
+  neural_shown_ = neural_shown;
   backend_->RecordDispatch(frame);
   InvalidateCommandProcessorState();
   if (dao_timing::GpuTiming::Enabled()) {

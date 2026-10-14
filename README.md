@@ -154,7 +154,9 @@ generates), `mods/`, and with the title update, `title_update/`. On a PC with an
 RDNA 4 GPU (Radeon RX 9000 series) and AMD's driver, it also gets `neural/`: neural
 rendering's GPU kernels, compiled for that GPU during the install by the driver's own
 compiler (`amd_comgr_3.dll`; a minute or two the first time, and again after a driver
-update), and the shaders it compiles, and `DLSS5-AMD/`: its settings and logs.
+update), and the shaders it compiles, and `DLSS5-AMD/`: its settings and logs. An install
+on a PC without such a GPU removes an earlier install's kernels and shaders (your own
+files there stay).
 
 When you save over a save, the version it replaces is kept in
 `userdata/save_backups/`: one per save, the one before its latest overwrite (a save
@@ -209,7 +211,8 @@ GPUs by [lmxxf's port](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) (MI
 built from its source into `LmxxfNrRuntime.dll`. The network's weights are NVIDIA's and
 don't come with the game: download lmxxf's release package (linked from its README), then
 in the launcher's *Configure → Graphics* turn on *Neural rendering* and choose the
-package's folder with *Browse* (its folder with `block0-ffn.f16` is found). The option
+package's folder with *Browse* (its folder with `block0-ffn.f16` is searched for, four
+levels down at most; if it isn't found, choose that folder itself). The option
 is there when the install has the kernels for your GPU (install again after changing
 to an RX 9000 series GPU), and needs temporal upscaling on. It's expensive: lmxxf
 measures about 7 ms of GPU time a frame for its 900-line network and 9.5 ms for 1080
