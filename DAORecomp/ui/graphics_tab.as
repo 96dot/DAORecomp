@@ -123,7 +123,7 @@ var ROWS = [
       labels: ["Off", "Auto", "FidelityFX FSR 4", "FidelityFX FSR 3.1", "Intel XeSS-SR",
                "NVIDIA DLSS 4.5 (experimental)"] },
     { key: "TemporalSharpness", label: "Temporal sharpening (FSR)", slider: SLIDER_STEPS },
-    { key: "FrameGeneration", label: "Frame generation (with temporal upscaling)", toggle: true },
+    { key: "FrameGeneration", label: "FSR Frame Generation (with temporal upscaling)", toggle: true },
     { key: "NeuralRendering", label: "Neural rendering (with temporal upscaling)", restart: true, toggle: true,
       optional: true },
     { key: "NeuralStrength", label: "Neural rendering strength", slider: SLIDER_STEPS, optional: true },

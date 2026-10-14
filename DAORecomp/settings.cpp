@@ -315,8 +315,8 @@ vsync = {}
 # Low latency (AMD Radeon Anti-Lag 2 with a current AMD driver, or NVIDIA Reflex, experimental):
 # each frame starts as late as it can still be on time, so the controller is read closer to
 # when the frame is shown. "off", "on", "boost" (Reflex's; Anti-Lag 2 has none: the same as
-# "on"). Off while frame generation is on (it would cost frames). On an NVIDIA GPU, turning it
-# on from "off" takes effect at the next start.
+# "on"). Off while FSR Frame Generation is on (it would cost frames). On an NVIDIA GPU,
+# turning it on from "off" takes effect at the next start.
 low_latency = "{}"
 # Frames per second: 30 (the game's own lock in its 3D scenes), 60, 90, 120, 144, 165, 240,
 # or 0 for unlimited. Above 60 is experimental.

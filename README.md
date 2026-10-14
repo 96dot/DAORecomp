@@ -220,7 +220,7 @@ still be on time, so the controller is read closer to when the frame is shown. I
 the most when the GPU is the limit (an unlimited frame rate, or one the GPU can't quite
 reach), where frames would otherwise wait in a queue; at a frame rate the GPU reaches
 easily there's little to gain. Anti-Lag 2 cost no frames in tests on an RX 9070 XT. It's off
-while frame generation is on: Anti-Lag 2 works with FSR 3's own way of showing generated
+while *FSR Frame Generation* is on: Anti-Lag 2 works with FSR 3's own way of showing generated
 frames, not this game's, and cost frames with it (Reflex is kept off likewise). *On +
 Boost* is Reflex's boost (more GPU clock for lower latency, at some power); on AMD GPUs
 it's the same as *On*. On other GPUs it does nothing. `userdata/xenia.log` says whether

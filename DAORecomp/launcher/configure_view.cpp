@@ -222,7 +222,7 @@ namespace dao::launcher
                      "Off is fastest on a Steam Deck.");
             ImGui::Spacing();
             ImGui::BeginDisabled(s.temporalUpscaler == TemporalUpscaler::Off);
-            ImGui::Checkbox("Frame generation (FSR 3.1)", &s.frameGeneration);
+            ImGui::Checkbox("FSR Frame Generation", &s.frameGeneration);
             ImGui::EndDisabled();
             HelpText("Generates a frame between each two of the 3D scenes: twice the frames on the display, for "
                      "half a frame more latency. Best with the frame rate at half the display's refresh rate "
@@ -309,8 +309,8 @@ namespace dao::launcher
             ComboRow("Low latency", &s.lowLatency, kLowLatencyNames, int(std::size(kLowLatencyNames)));
             HelpText("AMD Radeon Anti-Lag 2 (a current AMD driver) or NVIDIA Reflex (experimental): each frame "
                      "starts as late as it can still be on time, so the controller is read closer to when the "
-                     "frame is shown. Boost is Reflex's (the same as On on AMD GPUs). Off while frame generation "
-                     "is on (it would cost frames).");
+                     "frame is shown. Boost is Reflex's (the same as On on AMD GPUs). Off while FSR Frame "
+                     "Generation is on (it would cost frames).");
 
             Section("HDR (experimental)");
             ImGui::Checkbox("HDR output", &s.hdr);
