@@ -8,7 +8,7 @@ namespace dao::ui
     // optionsmenu.gfx with the Graphics tab (graphics_tab.as).
     bool InstallOptionsMovie();
 
-    // mainmenu.gfx (the START menu) with the Achievements row made the Photo Mode
-    // row (pause_menu.as).
+    // mainmenu.gfx (the START menu) with Photo Mode and Cheats rows below
+    // Achievements (pause_menu.as).
     bool InstallPauseMenuMovie();
 }

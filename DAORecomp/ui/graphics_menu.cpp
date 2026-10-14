@@ -482,9 +482,9 @@ namespace dao::ui
             TerminateProcess(GetCurrentProcess(), 0);
         }
 
-        // "Set <key> <value>", "RestoreDefaults", "OpenMods", "Cheats" or
-        // "PhotoMode" (the START menu's row: pause_menu.as, with menu_movies.cpp's
-        // marker), after "DAORecomp.". (All our menu scripts' messages come through
+        // "Set <key> <value>", "RestoreDefaults", "OpenMods", "Cheats" (also the
+        // START menu's row) or "PhotoMode" (the START menu's row: pause_menu.as,
+        // with menu_movies.cpp's marker), after "DAORecomp.". (All our menu scripts' messages come through
         // the engine's SendMessage, hooked here.)
         void HandleMessage(std::string_view message)
         {

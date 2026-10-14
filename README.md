@@ -28,9 +28,9 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
 - a photo mode (the START menu's Photo Mode row, or L3+R3): a free camera with the
   world paused, field of view, roll, frames from 32:9 to 9:16 and composition grids,
   saving PNGs to Pictures\DAORecomp
-- a cheats menu (*Options → Graphics → Open cheats* in a game, or F7): the developers'
-  own debug scripts, still in the game, for immortality, skill checks, gold,
-  experience and more
+- a cheats menu (the START menu's Cheats row, *Options → Graphics → Open cheats* in a
+  game, or F7): the developers' own debug scripts, still in the game, for immortality,
+  skill checks, gold, experience and more
 - an on-screen keyboard for naming characters, usable with a gamepad
 - the downloadable content (Awakening and the rest), installed from your own packages
 
@@ -300,8 +300,9 @@ first time the Mods page opens it explains this (`mods_warning_seen` in the
 `[launcher]` section of `userdata/config.toml` records that it was read). In the game,
 *Options → Graphics → Manage mods* closes it and opens the launcher's Mods page.
 
-Photo mode starts from the START menu's *Photo Mode* row (where the Xbox 360 version had
-Achievements) or by clicking both sticks (L3+R3) while exploring or in combat; the world
+Photo mode starts from the START menu's *Photo Mode* row (below *Achievements*, which
+stays greyed: there are no achievements here) or by clicking both sticks (L3+R3) while
+exploring or in combat; the world
 pauses and the camera flies free. The left stick moves it, the right stick turns it, the
 triggers lower and raise it (LB slower, RB faster); the d-pad zooms and rolls, A takes a
 photo (saved in `Pictures\DAORecomp`, cut to the chosen frame, without the overlay, and in
@@ -309,8 +310,9 @@ SDR when the game is in HDR), X opens the settings (field of view, roll, camera 
 frame, grid), Y hides the overlay, BACK resets the camera, and B or START leaves. On its
 own, a stick click reaches the game 80 ms late (the other may still come).
 
-The cheats menu opens from *Options → Graphics → Open cheats* (paused from exploration or
-combat), or with F7 (the keyboard only, while the game's window is in front), in exploration or combat;
+The cheats menu opens from the START menu's *Cheats* row or *Options → Graphics → Open
+cheats* (paused from exploration or combat), or with F7 (the keyboard only, while the
+game's window is in front), in exploration or combat;
 the world pauses under it. Each cheat runs one of the scripts BioWare's developers left in
 the game (the PC version's console ran them with `runscript`), through the game's own
 script engine:
@@ -381,7 +383,7 @@ start, so this happens once per place.
 - `scripts/make_icon.py` draws the program's icon (`DAORecomp/res/daorecomp.ico`,
   original art); it needs Pillow, and the .ico is committed, so it's only run to
   change the icon.
-- The in-game Graphics tab and the START menu's Photo Mode row are ActionScript 2
+- The in-game Graphics tab and the START menu's Photo Mode and Cheats rows are ActionScript 2
   (`DAORecomp/ui/graphics_tab.as`, `DAORecomp/ui/pause_menu.as`), which
   `scripts/as2c.py` compiles to `DAORecomp/ui/graphics_tab_as.h` and
   `DAORecomp/ui/pause_menu_as.h`; run

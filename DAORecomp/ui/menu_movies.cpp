@@ -5,7 +5,7 @@
 // of the override path, above the disc and the mods. The engine reads loose
 // files in packages/core/override before its archives.
 //   optionsmenu.gfx (the Options menu): the Graphics tab, graphics_tab.as
-//   mainmenu.gfx (the START menu): the Photo Mode row, pause_menu.as
+//   mainmenu.gfx (the START menu): the Photo Mode and Cheats rows, pause_menu.as
 #include "stdafx.h"
 #include "ui/erf.h"
 #include "files.h"
@@ -50,7 +50,7 @@ namespace dao::ui
         // in graphics_menu.cpp).
         constexpr MoviePatch kOptionsMenu{ "optionsmenu.gfx", "Options menu", "Graphics tab", kGraphicsTabScript,
             "DAORecomp_SectionHeader", SpriteExport{ 387, "LabelGameplay_mc", "DAORecomp_SectionHeader" } };
-        constexpr MoviePatch kPauseMenu{ "mainmenu.gfx", "START menu", "Photo Mode row", kPauseMenuScript,
+        constexpr MoviePatch kPauseMenu{ "mainmenu.gfx", "START menu", "Photo Mode and Cheats rows", kPauseMenuScript,
             "DAORecomp.PhotoMode", std::nullopt };
 
         std::string OverridePath(std::string_view movie)
