@@ -172,6 +172,7 @@ namespace dao::launcher
             int style = std::clamp(s.neuralStyle, 0, kMaxNeuralStyle);
             if (ComboRow("Neural rendering style", &style, kNeuralStyleNames, kMaxNeuralStyle + 1))
                 s.neuralStyle = style;
+            ImGui::Checkbox("Ease off neural rendering to hold the frame rate", &s.neuralFrameRateGuard);
             ImGui::EndDisabled();
             ImGui::EndDisabled();
             HelpText(installed
@@ -184,7 +185,9 @@ namespace dao::launcher
                       "a frame at 1080 lines, 7 ms at 900, less at 720 (Auto: 720 at 1x, 1080 above). "
                       "Each pass costs that again and strengthens the look; skin protection keeps skin as "
                       "the first pass made it. The styles are NVIDIA's three (0 is NVIDIA's default, 1 "
-                      "lmxxf's). Strength applies at once in the game; the rest on restart."
+                      "lmxxf's). Easing off fades the network out while the GPU can't hold the frame rate "
+                      "with it, and back in when it can (not with the frame rate unlimited). Strength and "
+                      "easing off apply at once in the game; the rest on restart."
                     : "Needs an AMD Radeon RX 9000 series GPU (RDNA 4) and the AMD driver on Windows: the "
                       "installer compiles its kernels for it. Install again with that GPU to get it.");
         }
@@ -438,6 +441,7 @@ namespace dao::launcher
             s.neuralPasses = defaults.neuralPasses;
             s.neuralSkinProtect = defaults.neuralSkinProtect;
             s.neuralStyle = defaults.neuralStyle;
+            s.neuralFrameRateGuard = defaults.neuralFrameRateGuard;
             s.upscaler = defaults.upscaler;
             s.sharpness = defaults.sharpness;
             s.anisotropicFiltering = defaults.anisotropicFiltering;

@@ -38,6 +38,7 @@ DECLARE_bool(dao_present_vsync);
 DECLARE_double(dao_temporal_sharpness);
 DECLARE_bool(dao_frame_generation);
 DECLARE_double(dao_neural_strength);
+DECLARE_bool(dao_neural_frame_rate_guard);
 DECLARE_int32(anisotropic_override);
 DECLARE_int32(dao_motion_blur);
 DECLARE_int32(dao_low_latency);
@@ -143,6 +144,7 @@ namespace dao::gpu
         live.hdr_paper_white = cvars::present_hdr_paper_white;
         live.hdr_peak = cvars::present_hdr_peak;
         live.neural_strength = cvars::dao_neural_strength;
+        live.neural_frame_rate_guard = cvars::dao_neural_frame_rate_guard;
         live.low_latency = cvars::dao_low_latency;
     }
 

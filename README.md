@@ -277,6 +277,11 @@ settings override it, and the runtime keeps its own logs in `DLSS5-AMD/logs`. It
 are logged to `userdata/xenia.log`, and then it's off for the session. In the game, F6
 switches it off and back on at once, to compare, when it was on as the game started (the
 keyboard only, while the game's window is in front).
+*Ease off neural rendering to hold the frame rate* (on by default, in the launcher and in
+*Options → Graphics*, where it applies at once) fades the network out while the GPU can't hold
+the frame rate with it, and back in when the GPU has room for it again; `userdata/xenia.log`
+says when ("Frame rate guard"). It measures the GPU's time a frame, so it eases off only when
+the GPU is what holds the frames back, and does nothing with the frame rate unlimited.
 
 [OptiScaler](https://github.com/optiscaler/OptiScaler) can take over the temporal upscaling
 (as can unofficial forks of it, such as AMD-NR). It isn't included: copy its files next to

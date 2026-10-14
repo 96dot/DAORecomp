@@ -135,6 +135,8 @@ var ROWS = [
       optional: true },
     { key: "NeuralStyle", label: "Neural rendering style", restart: true, optional: true, values: [0, 1, 2],
       labels: ["0 (NVIDIA's default)", "1 (lmxxf's default)", "2 (NVIDIA's third)"] },
+    { key: "NeuralFrameRateGuard", label: "Ease off neural rendering to hold the frame rate", toggle: true,
+      optional: true },
     { key: "Upscaler", label: "Output upscaler", values: [0, 1, 2],
       labels: ["Bilinear", "FidelityFX CAS", "FidelityFX FSR 1"] },
     { key: "Sharpness", label: "Output sharpening", slider: SLIDER_STEPS },

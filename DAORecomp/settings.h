@@ -88,6 +88,10 @@ namespace dao
         int neuralPasses = 1;
         bool neuralSkinProtect = false;
         int neuralStyle = 1;
+        // Holds the frame rate: the network's strength fades out while the GPU can't
+        // hold the frame rate with it, and back in when there's room for it again (not
+        // with the frame rate unlimited).
+        bool neuralFrameRateGuard = true;
         // Waits for the display's refresh when presenting: no tearing, and no more
         // frames shown than the display refreshes.
         bool vsync = true;

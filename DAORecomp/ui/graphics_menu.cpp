@@ -42,6 +42,7 @@ namespace dao::ui
             NeuralPasses,
             NeuralSkinProtect,
             NeuralStyle,
+            NeuralFrameRateGuard,
             Upscaler,
             Sharpness,
             AnisotropicFiltering,
@@ -78,6 +79,7 @@ namespace dao::ui
             { "NeuralPasses", true },
             { "NeuralSkinProtect", true },
             { "NeuralStyle", true },
+            { "NeuralFrameRateGuard", false },
             { "Upscaler", false },
             { "Sharpness", false },
             { "AnisotropicFiltering", false },
@@ -192,6 +194,7 @@ namespace dao::ui
             case Key::NeuralPasses: return s.neuralPasses;
             case Key::NeuralSkinProtect: return s.neuralSkinProtect;
             case Key::NeuralStyle: return s.neuralStyle;
+            case Key::NeuralFrameRateGuard: return s.neuralFrameRateGuard;
             case Key::Upscaler: return int(s.upscaler);
             case Key::Sharpness: return std::round(SharpnessSteps(s));
             case Key::AnisotropicFiltering: return s.anisotropicFiltering;
@@ -233,6 +236,7 @@ namespace dao::ui
             case Key::NeuralPasses: s.neuralPasses = whole; break;
             case Key::NeuralSkinProtect: s.neuralSkinProtect = whole != 0; break;
             case Key::NeuralStyle: s.neuralStyle = whole; break;
+            case Key::NeuralFrameRateGuard: s.neuralFrameRateGuard = whole != 0; break;
             case Key::Upscaler:
             {
                 // The sharpening slider keeps its position.
@@ -285,6 +289,7 @@ namespace dao::ui
             case Key::NeuralPasses: to.neuralPasses = from.neuralPasses; break;
             case Key::NeuralSkinProtect: to.neuralSkinProtect = from.neuralSkinProtect; break;
             case Key::NeuralStyle: to.neuralStyle = from.neuralStyle; break;
+            case Key::NeuralFrameRateGuard: to.neuralFrameRateGuard = from.neuralFrameRateGuard; break;
             case Key::Upscaler:
             case Key::Sharpness:
                 to.upscaler = from.upscaler;
@@ -318,6 +323,7 @@ namespace dao::ui
             case Key::TemporalSharpness: live.temporal_sharpness = s.temporalSharpness; break;
             case Key::FrameGeneration: live.frame_generation = s.frameGeneration; break;
             case Key::NeuralStrength: live.neural_strength = s.neuralStrength; break;
+            case Key::NeuralFrameRateGuard: live.neural_frame_rate_guard = s.neuralFrameRateGuard; break;
             case Key::Upscaler:
             case Key::Sharpness: gpu::XeniaSetOutputScaling(s.upscaler, s.sharpness); break;
             case Key::AnisotropicFiltering:
@@ -358,7 +364,8 @@ namespace dao::ui
             case Key::NeuralNetwork:
             case Key::NeuralPasses:
             case Key::NeuralSkinProtect:
-            case Key::NeuralStyle: return NeuralAvailable(s);
+            case Key::NeuralStyle:
+            case Key::NeuralFrameRateGuard: return NeuralAvailable(s);
             default: break;
             }
             return true;

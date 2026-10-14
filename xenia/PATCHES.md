@@ -24,7 +24,8 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
   CPU modules (interrupts, guest threads, the window).
 - `dao_live_settings.h`: the settings the in-game Graphics menu changes while the
   game runs (vsync, low latency, temporal sharpness, anisotropic filtering, motion
-  blur, frame generation, HDR paper white and peak), as atomics the GPU, presenter and render
+  blur, frame generation, HDR paper white and peak, neural rendering's strength and frame
+  rate guard; and the game's frame rate), as atomics the GPU, presenter and render
   threads read instead of their cvars (also in the upstream files `d3d12_texture_cache.cc` and
   `d3d12_presenter.cc`).
 - `gpu/d3d12/dao_upscale.*`: temporal upscaling (FidelityFX, XeSS or DLSS), motion vectors,
@@ -36,6 +37,11 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
   back to FSR), `dao_upscale_motion.cc` the motion vectors,
   `dao_upscale_hdr.cc` true HDR, `dao_motion_blur.cc` motion blur,
   `dao_upscale_fg.cc` frame generation (FSR 3.1).
+- `gpu/d3d12/dao_frame_guard.*`: the frame rate guard: GPU timestamps around each
+  submission (from `d3d12_command_processor.cc`'s `BeginSubmission` and `EndSubmission`,
+  with `dao_upscale_neural.cc` marking the one before the network),
+  and the strength of neural rendering faded out while the GPU can't hold the frame rate
+  with it, and back in when it has room again.
 - `ui/dao_frame_pacer.cc`: frame generation's presentation: the presenter's
   thread that paints each generated frame and, half a frame later, the real one.
 - `ui/d3d12/dao_low_latency.*`: low latency (AMD Radeon Anti-Lag 2, the header in
@@ -73,7 +79,7 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
   `gpu/graphics_system.*`, `gpu/gpu_flags.cc`, `gpu/draw_util.*`, `gpu/primitive_processor.cc`,
   `gpu/shader_storage.h`, `gpu/shared_memory.*`, `gpu/texture_cache.*`.
 - D3D12: `gpu/d3d12/d3d12_command_processor.*` (also low latency's markers at the
-  swap), `d3d12_graphics_system.*`,
+  swap, and the frame rate guard's submissions), `d3d12_graphics_system.*`,
   `d3d12_render_target_cache.*`, `d3d12_texture_cache.*`,
   `deferred_command_list.*`, `pipeline_cache.*`.
 - UI: `ui/presenter.*`, `ui/d3d12/d3d12_presenter.*` (HDR output and its quality High, scRGB throughout; vsync;

@@ -10,6 +10,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/dao_live_settings.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
+#include "xenia/gpu/d3d12/dao_frame_guard.h"
 #include "xenia/gpu/d3d12/dao_gpu_timing.h"
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/ui/d3d12/d3d12_presenter.h"
@@ -903,14 +904,23 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   const bool neural_on = cvars::dao_neural_rendering &&
                          !(neural_ && neural_->failed());
   // Read once a frame (the Graphics tab sets it at any time); NaN as 0.
+  // Scaled by the frame rate guard, which fades it out while the GPU can't
+  // hold the frame rate with the network (in steps under
+  // kNeuralStrengthJump: the upscaler's history stays).
   const double live_strength = dao_live::Load(dao_live::values.neural_strength);
-  const float neural_strength = live_strength >= kNeuralStrengthMin
-                                    ? float(std::min(live_strength, 1.0))
-                                    : 0.0f;
-  // Paused (F6), or at strength 0 (the network's output unused: its GPU time
-  // saved): the session stays, to resume at once.
-  const bool run_neural = neural_on && neural_strength > 0.0f &&
-                          !dao_live::Load(dao_live::values.neural_paused);
+  const bool neural_wanted = neural_on && live_strength >= kNeuralStrengthMin &&
+                             !dao_live::Load(dao_live::values.neural_paused);
+  const double guarded_strength =
+      std::min(live_strength, 1.0) *
+      DaoFrameGuard::Get().NeuralScale(neural_wanted);
+  const float neural_strength =
+      neural_wanted && guarded_strength >= kNeuralStrengthMin
+          ? float(guarded_strength)
+          : 0.0f;
+  // Paused (F6), at strength 0 or eased off by the guard (the network's output
+  // unused: its GPU time saved): the session stays, to resume at once (its
+  // history restarting).
+  const bool run_neural = neural_strength > 0.0f;
   if (neural_on && !run_neural) {
     neural_paused_ = true;
   }

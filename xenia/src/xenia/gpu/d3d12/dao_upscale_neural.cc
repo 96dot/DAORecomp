@@ -21,6 +21,7 @@
 #include "xenia/base/string.h"
 #include "xenia/dao_live_settings.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
+#include "xenia/gpu/d3d12/dao_frame_guard.h"
 #include "xenia/gpu/d3d12/dao_upscale_impl.h"
 
 DEFINE_bool(dao_neural_rendering, false,
@@ -308,7 +309,11 @@ ID3D12Resource* NeuralRendering::Run(ID3D12Resource* color, uint32_t width,
   inputs_recorded_ = false;
   cp.GetDeferredCommandList().DaoCallback(ExecuteInputs, this);
   // The commands so far, then the network, then the rest of the frame.
+  DaoFrameGuard::Get().BeforeNeural();
   const bool ended = cp.EndSubmission(false);
+  if (!ended) {
+    DaoFrameGuard::Get().NeuralNotRun();
+  }
   if (!ended || !inputs_recorded_ ||
       api_.EnqueueHip(session_, job_.handle,
                       cp.GetD3D12Provider().GetDirectQueue()) != LMXXF_NR_OK) {

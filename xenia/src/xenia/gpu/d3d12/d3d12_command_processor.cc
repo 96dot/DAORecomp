@@ -9,6 +9,7 @@
 
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/dao_host.h"
+#include "xenia/gpu/d3d12/dao_frame_guard.h"
 #include "xenia/gpu/d3d12/dao_frame_trace.h"
 #include "xenia/gpu/d3d12/dao_gpu_timing.h"
 #include "xenia/gpu/d3d12/dao_upscale.h"
@@ -3913,6 +3914,8 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
     // end of the submission (when async pipeline creation requests are
     // fulfilled).
     deferred_command_list_.Reset();
+    // DAO: the frame rate guard's GPU time.
+    DaoFrameGuard::Get().SubmissionBegan(*this);
 
     // Resume the active query segment.
     OpenQuerySegment(false);
@@ -4054,6 +4057,12 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
     primitive_processor_->EndFrame();
   }
 
+  // DAO: the frame rate guard's GPU time (with a submission open, its end
+  // marked after its last commands, the barriers).
+  if (!submission_open_) {
+    DaoFrameGuard::Get().SubmissionEnding(*this, false, is_closing_frame);
+  }
+
   if (submission_open_) {
     assert_false(scratch_buffer_used_);
 
@@ -4069,6 +4078,7 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
     // Submit barriers now because resources with the queued barriers may be
     // destroyed between frames.
     SubmitBarriers();
+    DaoFrameGuard::Get().SubmissionEnding(*this, true, is_closing_frame);
 
     // TODO(Triang3l): Error checking.
 

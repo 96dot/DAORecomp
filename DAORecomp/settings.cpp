@@ -212,6 +212,7 @@ namespace dao
         s.neuralPasses = video["neural_passes"].value_or(s.neuralPasses);
         s.neuralSkinProtect = video["neural_skin_protect"].value_or(s.neuralSkinProtect);
         s.neuralStyle = video["neural_style"].value_or(s.neuralStyle);
+        s.neuralFrameRateGuard = video["neural_frame_rate_guard"].value_or(s.neuralFrameRateGuard);
         s.vsync = video["vsync"].value_or(s.vsync);
         const std::string lowLatency = video["low_latency"].value_or(std::string());
         for (int level = 0; level <= kMaxLowLatency; ++level)
@@ -321,6 +322,8 @@ frame_generation = {}
 # a frame (a stronger look; each pass costs as much as the first), and with more than one
 # neural_skin_protect keeps skin as the first pass made it; neural_style is one of
 # NVIDIA's three styles, 0 (NVIDIA's default), 1 (lmxxf's default) or 2.
+# neural_frame_rate_guard holds the frame rate: the network fades out while the GPU can't
+# hold frame_rate with it, and back in when there's room for it again (not at frame_rate 0).
 neural_rendering = {}
 neural_weights = {}
 neural_strength = {}
@@ -328,6 +331,7 @@ neural_network = {}
 neural_passes = {}
 neural_skin_protect = {}
 neural_style = {}
+neural_frame_rate_guard = {}
 # Wait for the display's refresh when presenting: no tearing, and no more frames shown
 # than the display refreshes.
 vsync = {}
@@ -377,7 +381,7 @@ window_height = {}
             s.modsWarningSeen, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
             TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.frameGeneration, s.neuralRendering,
             Quote(s.neuralWeights), s.neuralStrength, s.neuralNetwork, s.neuralPasses, s.neuralSkinProtect,
-            s.neuralStyle, s.vsync, LowLatencyName(s.lowLatency), s.frameRate,
+            s.neuralStyle, s.neuralFrameRateGuard, s.vsync, LowLatencyName(s.lowLatency), s.frameRate,
             s.hdr, s.hdrPaperWhite, s.hdrPeak, HdrQualityName(s.hdrHighQuality), s.anisotropicFiltering, s.shadows, s.postProcessing,
             MotionBlurName(s.motionBlur), s.fov, s.conversationFov, s.fullscreen,
             s.windowWidth, s.windowHeight);
@@ -437,6 +441,7 @@ window_height = {}
         SetXeniaCvar("dao_neural_passes", toml::value<int64_t>(s.neuralPasses));
         SetXeniaCvar("dao_neural_skin_protect", toml::value<bool>(s.neuralSkinProtect));
         SetXeniaCvar("dao_neural_style", toml::value<int64_t>(s.neuralStyle));
+        SetXeniaCvar("dao_neural_frame_rate_guard", toml::value<bool>(s.neuralFrameRateGuard));
         // (Not Xenia's own vsync cvar: the guest's vblanks stay at the console's 60 Hz.)
         SetXeniaCvar("dao_present_vsync", toml::value<bool>(s.vsync));
         SetXeniaCvar("dao_low_latency", toml::value<int64_t>(s.lowLatency));
@@ -468,9 +473,10 @@ window_height = {}
         if (s.frameGeneration)
             LOGI("Settings: frame generation");
         if (NeuralRenderingOn(s))
-            LOGI("Settings: neural rendering, strength {}, network {}, {} pass(es){}, style {}, weights in {}",
+            LOGI("Settings: neural rendering, strength {}, network {}, {} pass(es){}, style {}{}, weights in {}",
                 s.neuralStrength, s.neuralNetwork ? std::to_string(s.neuralNetwork) : "auto", s.neuralPasses,
-                s.neuralSkinProtect ? " (skin protected)" : "", s.neuralStyle, s.neuralWeights);
+                s.neuralSkinProtect ? " (skin protected)" : "", s.neuralStyle,
+                s.neuralFrameRateGuard ? ", frame rate guard" : "", s.neuralWeights);
         if (s.motionBlur)
             LOGI("Settings: motion blur {}", MotionBlurName(s.motionBlur));
         if (s.lowLatency)
