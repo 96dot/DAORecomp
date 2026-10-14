@@ -5,17 +5,13 @@
 
 #include "gpu/xenia_host.h"
 #include "input/input.h"
-#include "kernel/vfs.h"
-#include "launcher/game_art.h"
 #include "text.h"
+#include "ui/overlay.h"
 #include "ui/palette.h"
 
 #include "third_party/imgui/imgui.h"
-#include "xenia/ui/graphics_provider.h"
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
-#include "xenia/ui/immediate_drawer.h"
-#include "xenia/ui/presenter.h"
 #include "xenia/ui/window.h"
 #include "xenia/ui/windowed_app_context.h"
 
@@ -28,24 +24,7 @@ namespace dao::ui
         // The game's menus' colours (ui/palette.h), as the launcher's.
         using namespace palette;
 
-        // The game's art: the Options screen's panel, section and footer bars, and the
-        // controller's buttons.
-        constexpr std::string_view kAtlases[] = { "atl_optionsmen_dxt5", "atl_shared_dxt5" };
-        constexpr const char* kPanel = "OptionsMenu_I200";
-        constexpr const char* kSectionBar = "OptionsMenu_I17E";
-        constexpr const char* kFooterBar = "OptionsMenu_I203";
-        constexpr const char* kButtonA = "XBoxGamepad_BottomAction";
-        constexpr const char* kButtonB = "XBoxGamepad_RightAction";
-        constexpr const char* kButtonX = "XBoxGamepad_LeftAction";
-        constexpr const char* kButtonY = "XBoxGamepad_TopAction";
-        constexpr const char* kButtonLT = "XBoxGamepad_LeftTrigger";
-        constexpr const char* kButtonRT = "XBoxGamepad_RightTrigger";
-        constexpr const char* kButtonStart = "XBoxGamepad_Start";
-        constexpr std::string_view kArtNames[] = { kPanel, kSectionBar, kFooterBar, kButtonA, kButtonB, kButtonX,
-            kButtonY, kButtonLT, kButtonRT, kButtonStart };
-
-        // Laid out on the game's 1280x720 stage, fitted to the window.
-        constexpr float kStageWidth = 1280.0f, kStageHeight = 720.0f;
+        // Laid out on the game's 1280x720 stage.
         constexpr float kPanelLeft = 250.0f, kPanelRight = 1030.0f, kPanelTop = 110.0f, kPanelBottom = 640.0f;
         constexpr float kInset = 30.0f;
         constexpr float kTitleY = 128.0f, kTitleSize = 26.0f, kSectionBarHeight = 40.0f;
@@ -74,8 +53,7 @@ namespace dao::ui
         };
         constexpr int kWideKeys = 5, kWideSpan = kColumns / kWideKeys;
 
-        // The characters the fonts have (and the game's, likely): Latin.
-        constexpr ImWchar kGlyphRanges[] = { 0x0020, 0x00FF, 0x0100, 0x017F, 0x2010, 0x2027, 0 };
+        // What the fonts have.
         bool Typeable(char16_t c)
         {
             for (size_t i = 0; kGlyphRanges[i]; i += 2)
@@ -139,95 +117,8 @@ namespace dao::ui
             return char16_t(w);
         }
 
-        struct Sprite
-        {
-            std::unique_ptr<xe::ui::ImmediateTexture> texture;
-            float width = 0, height = 0;
-        };
-
-        // What draws over the game window: Xenia's ImGui drawer with the fonts and
-        // the game's art, made once on the UI thread.
-        struct Overlay
-        {
-            std::unique_ptr<xe::ui::ImmediateDrawer> immediate;
-            std::unique_ptr<xe::ui::ImGuiDrawer> drawer;
-            ImFont* regular = nullptr;
-            ImFont* bold = nullptr;
-            ImFont* italic = nullptr;
-            std::unordered_map<std::string, Sprite> art;
-
-            const Sprite* Art(const char* name) const
-            {
-                const auto it = art.find(name);
-                return it != art.end() && it->second.texture ? &it->second : nullptr;
-            }
-        };
-
-        Overlay* s_overlay = nullptr;   // kept for the process's life
         std::atomic<bool> s_open{ false };
         std::atomic<bool> s_holdUntilReleased{ false };
-
-        ImFont* AddFont(ImGuiIO& io, std::initializer_list<const wchar_t*> files, float size)
-        {
-            wchar_t windows[MAX_PATH] = {};
-            if (!GetWindowsDirectoryW(windows, MAX_PATH))
-                return nullptr;
-            for (const wchar_t* file : files)
-            {
-                const fs::path path = fs::path(windows) / L"Fonts" / file;
-                std::error_code ec;
-                if (!fs::is_regular_file(path, ec))
-                    continue;
-                ImFontConfig config;
-                config.OversampleH = 2;
-                return io.Fonts->AddFontFromFileTTF(Utf8(path).c_str(), size, &config, kGlyphRanges);
-            }
-            return nullptr;
-        }
-
-        Overlay* GetOverlay(const gpu::XeniaWindow& host)
-        {
-            if (s_overlay)
-                return s_overlay;
-            auto overlay = std::make_unique<Overlay>();
-            overlay->immediate = host.provider->CreateImmediateDrawer();
-            if (!overlay->immediate)
-                return nullptr;
-            overlay->immediate->SetPresenter(host.presenter);
-            // Above everything Xenia draws.
-            constexpr size_t kZOrder = 100;
-            overlay->drawer = std::make_unique<xe::ui::ImGuiDrawer>(host.window, kZOrder);
-            ImGuiIO& io = overlay->drawer->GetIO();
-            // Keys are picked by this, not ImGui's navigation.
-            io.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad);
-            io.IniFilename = nullptr;
-            // Baked large: drawn at the window's scale, which can be 2-3x the stage's.
-            constexpr float kFontSize = 56.0f;
-            overlay->regular = AddFont(io, { L"pala.ttf", L"georgia.ttf", L"times.ttf", L"segoeui.ttf" }, kFontSize);
-            overlay->bold = AddFont(io, { L"palab.ttf", L"georgiab.ttf", L"timesbd.ttf", L"arialbd.ttf" }, kFontSize);
-            overlay->italic = AddFont(io, { L"palai.ttf", L"georgiai.ttf", L"timesi.ttf" }, kFontSize);
-            ImFont* fallback = io.Fonts->Fonts.empty() ? nullptr : io.Fonts->Fonts[0];
-            for (ImFont** font : { &overlay->regular, &overlay->bold, &overlay->italic })
-                if (!*font)
-                    *font = overlay->regular ? overlay->regular : fallback;
-            // Builds the font atlas with the fonts above.
-            overlay->drawer->SetPresenterAndImmediateDrawer(host.presenter, overlay->immediate.get());
-
-            launcher::LoadGameArt(kernel::VfsGameRoot(), kAtlases, kArtNames,
-                [&](const std::string& name, launcher::ArtImage& image) {
-                    Sprite sprite;
-                    sprite.texture = overlay->immediate->CreateTexture(uint32_t(image.width), uint32_t(image.height),
-                        xe::ui::ImmediateTextureFilter::kLinear, false, image.rgba.data());
-                    sprite.width = float(image.width);
-                    sprite.height = float(image.height);
-                    overlay->art[name] = std::move(sprite);
-                });
-            if (overlay->art.size() < std::size(kArtNames))
-                LOGW("Keyboard: {} of {} images found in the game's guiexport.erf", overlay->art.size(),
-                    std::size(kArtNames));
-            s_overlay = overlay.release();
-            return s_overlay;
-        }
 
         class KeyboardDialog final : public xe::ui::ImGuiDialog
         {
@@ -254,9 +145,7 @@ namespace dao::ui
 
             void OnDraw(ImGuiIO& io) override
             {
-                fit_ = std::min(io.DisplaySize.x / kStageWidth, io.DisplaySize.y / kStageHeight);
-                originX_ = (io.DisplaySize.x - kStageWidth * fit_) * 0.5f;
-                originY_ = (io.DisplaySize.y - kStageHeight * fit_) * 0.5f;
+                stage_ = Stage(io);
                 HandlePad();
                 HandleKeyboard(io);
                 if (finished_)
@@ -278,44 +167,29 @@ namespace dao::ui
             }
 
         private:
-            ImVec2 At(float x, float y) const { return ImVec2(originX_ + x * fit_, originY_ + y * fit_); }
-
-            void ShadowText(ImDrawList* draw, ImFont* font, float size, ImVec2 at, ImU32 color, std::string_view text)
-            {
-                const float offset = std::max(1.0f, size / 16.0f);
-                draw->AddText(font, size, ImVec2(at.x + offset, at.y + offset), kShadow, text.data(),
-                    text.data() + text.size());
-                draw->AddText(font, size, at, color, text.data(), text.data() + text.size());
-            }
-
-            void DrawStretched(ImDrawList* draw, const char* name, ImVec2 min, ImVec2 max, float alpha)
-            {
-                if (const Sprite* sprite = overlay_.Art(name))
-                    draw->AddImage(ImTextureID(uintptr_t(sprite->texture.get())), min, max, ImVec2(0, 0),
-                        ImVec2(1, 1), WithAlpha(IM_COL32_WHITE, alpha));
-            }
+            ImVec2 At(float x, float y) const { return stage_.At(x, y); }
 
             // The Options screen's background in a gold frame, the title on its section bar.
             void DrawPanel(ImDrawList* draw)
             {
                 const ImVec2 min = At(kPanelLeft, kPanelTop), max = At(kPanelRight, kPanelBottom);
                 draw->AddRectFilled(min, max, IM_COL32(18, 12, 8, 235));
-                DrawStretched(draw, kPanel, min, max, kPanelAlpha);
-                draw->AddRect(min, max, WithAlpha(kGold, 0.8f), 0, 0, std::max(1.0f, 1.5f * fit_));
+                DrawArt(draw, overlay_, art::kPanel, min, max, kPanelAlpha);
+                draw->AddRect(min, max, WithAlpha(kGold, 0.8f), 0, 0, std::max(1.0f, 1.5f * stage_.fit));
 
-                const float barHeight = kSectionBarHeight * fit_;
+                const float barHeight = kSectionBarHeight * stage_.fit;
                 const ImVec2 bar = At(kPanelLeft + kInset * 0.5f, kTitleY - 6.0f);
-                if (const Sprite* sprite = overlay_.Art(kSectionBar))
-                    draw->AddImage(ImTextureID(uintptr_t(sprite->texture.get())), bar,
+                if (const Sprite* sprite = overlay_.Art(art::kSectionBar))
+                    draw->AddImage(sprite->Id(), bar,
                         ImVec2(bar.x + sprite->width * barHeight / sprite->height, bar.y + barHeight));
-                const float size = kTitleSize * fit_;
+                const float size = kTitleSize * stage_.fit;
                 ShadowText(draw, overlay_.bold, size, At(kPanelLeft + kInset, kTitleY),
                     kText, title_.empty() ? "Enter text" : title_);
                 if (!description_.empty())
                 {
-                    const float descriptionSize = kDescriptionSize * fit_;
+                    const float descriptionSize = kDescriptionSize * stage_.fit;
                     const ImVec2 at = At(kPanelLeft + kInset, kDescriptionY);
-                    const float wrap = (kPanelRight - kPanelLeft - 2 * kInset) * fit_;
+                    const float wrap = (kPanelRight - kPanelLeft - 2 * kInset) * stage_.fit;
                     draw->AddText(overlay_.italic, descriptionSize, at, kTextDim, description_.c_str(), nullptr, wrap);
                 }
             }
@@ -326,8 +200,8 @@ namespace dao::ui
                 const ImVec2 min = At(kPanelLeft + kInset, kFieldTop);
                 const ImVec2 max = At(kPanelRight - kInset, kFieldTop + kFieldHeight);
                 draw->AddRectFilled(min, max, IM_COL32(0, 0, 0, 160));
-                draw->AddRect(min, max, WithAlpha(kGold, 0.9f), 0, 0, std::max(1.0f, fit_));
-                const float size = kFieldTextSize * fit_, pad = 12.0f * fit_;
+                draw->AddRect(min, max, WithAlpha(kGold, 0.9f), 0, 0, std::max(1.0f, stage_.fit));
+                const float size = kFieldTextSize * stage_.fit, pad = 12.0f * stage_.fit;
                 const std::string text = ToUtf8(text_);
                 const std::string before = ToUtf8(std::u16string_view(text_).substr(0, cursor_));
                 const float caretX = overlay_.regular->CalcTextSizeA(size, FLT_MAX, 0, before.c_str()).x;
@@ -341,13 +215,13 @@ namespace dao::ui
                 {
                     const float x = min.x + pad - scroll + caretX;
                     draw->AddLine(ImVec2(x, textY + size * 0.1f), ImVec2(x, textY + size * 0.95f), kGoldBright,
-                        std::max(1.0f, 2.0f * fit_));
+                        std::max(1.0f, 2.0f * stage_.fit));
                 }
                 draw->PopClipRect();
                 const std::string count = fmt::format("{}/{}", text_.size(), max_);
-                const float countSize = kCountSize * fit_;
+                const float countSize = kCountSize * stage_.fit;
                 const ImVec2 extent = overlay_.regular->CalcTextSizeA(countSize, FLT_MAX, 0, count.c_str());
-                draw->AddText(overlay_.regular, countSize, ImVec2(max.x - extent.x, max.y + 3.0f * fit_), kTextDim,
+                draw->AddText(overlay_.regular, countSize, ImVec2(max.x - extent.x, max.y + 3.0f * stage_.fit), kTextDim,
                     count.c_str());
             }
 
@@ -395,8 +269,8 @@ namespace dao::ui
                 else
                     draw->AddRectFilled(min, max, IM_COL32(20, 14, 10, hovered ? 220 : 170));
                 draw->AddRect(min, max, selected ? kGoldBright : WithAlpha(kGold, hovered ? 0.8f : 0.35f), 0, 0,
-                    std::max(1.0f, (selected ? 2.0f : 1.0f) * fit_));
-                const float size = textSize * fit_;
+                    std::max(1.0f, (selected ? 2.0f : 1.0f) * stage_.fit));
+                const float size = textSize * stage_.fit;
                 const ImVec2 extent =
                     overlay_.bold->CalcTextSizeA(size, FLT_MAX, 0, label.data(), label.data() + label.size());
                 ShadowText(draw, overlay_.bold, size,
@@ -430,31 +304,15 @@ namespace dao::ui
             // The footer: the game's bar and its button icons with what they do.
             void DrawHints(ImDrawList* draw)
             {
-                DrawStretched(draw, kFooterBar, At(kPanelLeft + kInset * 0.5f, kFooterTop),
-                    At(kPanelRight - kInset * 0.5f, kFooterTop + kHintIcon + 2 * (kHintY - kFooterTop)), 1.0f);
-                const std::pair<const char*, const char*> hints[] = { { kButtonA, "Select" }, { kButtonB, "Cancel" },
-                    { kButtonX, "Backspace" }, { kButtonY, "Space" }, { kButtonLT, "Caps" },
-                    { kButtonRT, accents_ ? "Letters" : "Accents" }, { kButtonStart, "Done" } };
-                const float icon = kHintIcon * fit_, gap = kHintGap * fit_, space = kHintSpace * fit_;
-                const float size = kHintTextSize * fit_;
-                float width = -space;
-                for (const auto& [button, label] : hints)
-                    width += icon + gap + overlay_.bold->CalcTextSizeA(size, FLT_MAX, 0, label).x + space;
-                float x = At((kPanelLeft + kPanelRight) * 0.5f, 0).x - width * 0.5f;
-                const float y = At(0, kHintY).y;
-                for (const auto& [button, label] : hints)
-                {
-                    if (const Sprite* sprite = overlay_.Art(button))
-                    {
-                        const float w = sprite->width * icon / sprite->height;
-                        draw->AddImage(ImTextureID(uintptr_t(sprite->texture.get())), ImVec2(x, y),
-                            ImVec2(x + w, y + icon));
-                        x += w + gap;
-                    }
-                    const ImVec2 extent = overlay_.bold->CalcTextSizeA(size, FLT_MAX, 0, label);
-                    ShadowText(draw, overlay_.bold, size, ImVec2(x, y + (icon - extent.y) * 0.5f), kText, label);
-                    x += extent.x + space;
-                }
+                DrawArt(draw, overlay_, art::kFooterBar, At(kPanelLeft + kInset * 0.5f, kFooterTop),
+                    At(kPanelRight - kInset * 0.5f, kFooterTop + kHintIcon + 2 * (kHintY - kFooterTop)));
+                const Hint hints[] = { { "Select", art::kButtonA }, { "Cancel", art::kButtonB },
+                    { "Backspace", art::kButtonX }, { "Space", art::kButtonY }, { "Caps", art::kButtonLT },
+                    { accents_ ? "Letters" : "Accents", art::kButtonRT }, { "Done", art::kButtonStart } };
+                const HintStyle style{ kHintIcon, kHintGap, kHintSpace, kHintTextSize };
+                const float width = HintsWidth(overlay_, stage_, hints, style);
+                ui::DrawHints(draw, overlay_, stage_, hints, style, At((kPanelLeft + kPanelRight) * 0.5f, 0).x - width * 0.5f,
+                    At(0, kHintY).y);
             }
 
             int SelectedColumn() const { return row_ == kCharacterRows ? column_ * kWideSpan : column_; }
@@ -606,7 +464,7 @@ namespace dao::ui
             bool caps_ = false, accents_ = false;
             uint32_t previous_ = 0;
             double nextRepeat_ = 0;
-            float fit_ = 1, originX_ = 0, originY_ = 0;
+            Stage stage_;
         };
     }
 

@@ -473,7 +473,8 @@ namespace dao::kernel
 
     // ------------------------------------------------------------- calls
 
-    uint64_t CallGuest(uint32_t function, std::initializer_list<uint64_t> args)
+    uint64_t CallGuest(uint32_t function, std::initializer_list<uint64_t> args,
+        std::initializer_list<double> floatArgs)
     {
         PPCContext* current = t_context;
         if (!current)
@@ -503,6 +504,14 @@ namespace dao::kernel
         {
             if (i < std::size(regs))
                 regs[i++]->u64 = arg;
+        }
+        PPCRegister* fprs[] = { &ctx.f1, &ctx.f2, &ctx.f3, &ctx.f4, &ctx.f5, &ctx.f6, &ctx.f7, &ctx.f8, &ctx.f9,
+            &ctx.f10, &ctx.f11, &ctx.f12, &ctx.f13 };
+        i = 0;
+        for (double arg : floatArgs)
+        {
+            if (i < std::size(fprs))
+                fprs[i++]->f64 = arg;
         }
 
         t_context = &ctx;

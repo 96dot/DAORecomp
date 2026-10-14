@@ -129,7 +129,8 @@ class D3D12Presenter final : public Presenter {
 
   Surface::TypeFlags GetSupportedSurfaceTypes() const override;
 
-  bool CaptureGuestOutput(RawImage& image_out) override;
+  // (dao_sdr's default is the base class's: calls are made through it.)
+  bool CaptureGuestOutput(RawImage& image_out, bool dao_sdr) override;
 
   void AwaitUISubmissionCompletionFromUIThread(uint64_t submission_index) {
     ui_completion_timeline_->AwaitSubmissionAndUpdateCompleted(
@@ -233,6 +234,8 @@ class D3D12Presenter final : public Presenter {
 
       kRTVIndexHdrSource =
           kRTVIndexGuestOutputIntermediate0 + kMaxGuestOutputPaintEffects - 1,
+      // DAO: the UI over the game's HDR (see ui_layer).
+      kRTVIndexUiLayer,
 
       kRTVCount,
     };
@@ -249,6 +252,8 @@ class D3D12Presenter final : public Presenter {
 
       kViewIndexHdrSourceSrv = kViewIndexGuestOutputIntermediate0Srv +
                                kMaxGuestOutputPaintEffects - 1,
+      // DAO: right after the HDR source's (the HDR output pass's t0, t1).
+      kViewIndexUiLayerSrv,
 
       kViewCount,
     };
@@ -330,6 +335,12 @@ class D3D12Presenter final : public Presenter {
     bool swap_chain_hdr = false;
     bool display_hdr = false;
     Microsoft::WRL::ComPtr<ID3D12Resource> hdr_source;
+    // DAO: the UI drawn over the game's own HDR, in SDR (kSwapChainFormat,
+    // premultiplied: the UI's blending from transparent black), put over it
+    // by the HDR output pass, its white at an SDR image's (paper white on HDR
+    // displays). In the HDR source itself the UI's SDR values would be read
+    // as PQ or as scRGB.
+    Microsoft::WRL::ComPtr<ID3D12Resource> ui_layer;
   };
 
   explicit D3D12Presenter(HostGpuLossCallback host_gpu_loss_callback,
@@ -367,6 +378,8 @@ class D3D12Presenter final : public Presenter {
   std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>,
              size_t(GuestOutputPaintEffect::kCount)>
       guest_output_paint_final_pipelines_;
+  // DAO: the HDR output pass (dao_hdr_output.ps.hlsl's XeHdrConstants).
+  static constexpr UINT kHdrOutputConstantCount = 5;
   Microsoft::WRL::ComPtr<ID3D12RootSignature> hdr_output_root_signature_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> hdr_output_pipeline_;
   // DAO (dao_presenter.cc): with InitializeSurfaceIndependent, the HDR output
@@ -376,22 +389,28 @@ class D3D12Presenter final : public Presenter {
       const D3D12_GRAPHICS_PIPELINE_STATE_DESC&
           guest_output_paint_pipeline_desc);
   // With the swap chain connected: its color space, whether the display is
-  // HDR, and the HDR source texture with its views (false if it can't be
-  // created).
+  // HDR, and the HDR source and UI layer textures with their views (false if
+  // the HDR source can't be created).
   bool DaoConnectHdrOutput();
   // At the start of a paint: false if the swap chain had no room for 100 ms.
   bool DaoWaitForFrameLatency();
   // The HDR output pass: back_buffer (the HDR source, a render target) into
-  // the swap chain's back buffer, which is a render target then.
+  // the swap chain's back buffer, which is a render target then; with
+  // `ui_over_hdr`, the UI layer (a render target) over it.
   void DaoEncodeHdrSource(
       ID3D12GraphicsCommandList* command_list, ID3D12Resource* back_buffer,
       ID3D12Resource* swap_chain_back_buffer,
       const D3D12_CPU_DESCRIPTOR_HANDLE& swap_chain_back_buffer_rtv,
-      bool game_hdr);
+      bool game_hdr, bool ui_over_hdr);
   // An scRGB guest output's capture (rows of 4 halfs from source) to 8 bits.
   static void DaoConvertScRgbCapture(const uint8_t* source,
                                      uint32_t row_pitch, bool game_hdr,
                                      RawImage& image_out);
+  // The game's own HDR captured (rows of 4 halfs in scRGB, or of 10-bit PQ)
+  // to 8-bit SDR: paper white at 1, the highlights above rolled off below 1
+  // (Reinhard on the brightest channel), gamma-encoded.
+  static void DaoTonemapCapture(const uint8_t* source, uint32_t row_pitch,
+                                bool scrgb, RawImage& image_out);
 
   // The first is the refresher completion timeline submission index at which
   // the guest output texture was last refreshed, the second is the reference to

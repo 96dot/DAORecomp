@@ -117,11 +117,6 @@ void DaoUpscalerImpl::BeginHdrTonemap(const RegisterFile& regs) {
   constants.curve_v = regs.Get<float>(ps + 255 * 4 + 1);
 }
 
-bool DaoUpscalerImpl::OverlayShown() const {
-  const ui::Presenter* presenter = cp_.graphics_system_->presenter();
-  return presenter && presenter->HasUIDrawers();
-}
-
 bool DaoUpscalerImpl::EnsureHdrScene() {
   if (hdr_captured_ && hudless_pixel_shader_ == kTonemapPixelShader) {
     return true;

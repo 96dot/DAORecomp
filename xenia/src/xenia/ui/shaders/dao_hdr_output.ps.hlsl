@@ -4,8 +4,10 @@
 // linearizes (scale 1, peak ratio 1). The game's own HDR is decoded from PQ
 // instead, or passed through when it's already scRGB (HDR quality High, with
 // presenter UI drawn over it; otherwise the presenter paints it to the back
-// buffer itself).
+// buffer itself). Presenter UI over the game's own HDR comes in a layer of its
+// own (SDR, premultiplied), put over the image at an SDR image's white.
 Texture2D<float4> xe_hdr_source : register(t0);
+Texture2D<float4> xe_hdr_ui : register(t1);
 
 cbuffer XeHdrConstants : register(b0) {
   // Paper white in scRGB units (nits / 80).
@@ -19,22 +21,26 @@ cbuffer XeHdrConstants : register(b0) {
   // (the game's own HDR, HDR quality High), copied. The peak ratio and gamma
   // are only for SDR.
   float xe_hdr_encoding;
+  // The UI layer's white in scRGB units; 0: no UI layer.
+  float xe_hdr_ui_scale;
 };
 
+// SMPTE ST 2084 (PQ) to nits; as PqToNits in dao_presenter.cc (keep in step).
 float3 PqToNits(float3 pq) {
   float3 p = pow(pq, 1.0f / 78.84375f);
   return 10000.0f * pow(max(p - 0.8359375f, 0.0f) / (18.8515625f - 18.6875f * p),
                         1.0f / 0.1593017578125f);
 }
 
-float4 main(float4 position : SV_Position) : SV_Target {
-  float3 color = xe_hdr_source.Load(int3(int2(position.xy), 0)).rgb;
+// The image at a pixel, in scRGB (linear, 1 = 80 nits), by xe_hdr_encoding.
+float3 Image(int2 position) {
+  float3 color = xe_hdr_source.Load(int3(position, 0)).rgb;
   if (xe_hdr_encoding > 1.5f) {
-    return float4(max(color, 0.0f), 1.0f);
+    return max(color, 0.0f);
   }
   color = saturate(color);
   if (xe_hdr_encoding > 0.5f) {
-    return float4(PqToNits(color) * xe_hdr_scale, 1.0f);
+    return PqToNits(color) * xe_hdr_scale;
   }
   float3 linear_color = pow(color, xe_hdr_gamma);
   if (xe_hdr_peak_ratio > 1.0f) {
@@ -48,5 +54,20 @@ float4 main(float4 position : SV_Position) : SV_Target {
     float target = lerp(luminance, expanded, weight * weight);
     linear_color *= luminance > 0.0f ? target / luminance : 1.0f;
   }
-  return float4(linear_color * xe_hdr_scale, 1.0f);
+  return linear_color * xe_hdr_scale;
+}
+
+float4 main(float4 position : SV_Position) : SV_Target {
+  int2 pixel = int2(position.xy);
+  float3 color = Image(pixel);
+  if (xe_hdr_ui_scale > 0.0f) {
+    // Over: the UI's colour (gamma-encoded, so un-premultiplied first)
+    // linearized at the UI's white.
+    float4 ui = xe_hdr_ui.Load(int3(pixel, 0));
+    if (ui.a > 0.0f) {
+      float3 ui_color = pow(saturate(ui.rgb / ui.a), xe_hdr_gamma);
+      color = color * (1.0f - ui.a) + ui_color * xe_hdr_ui_scale * ui.a;
+    }
+  }
+  return float4(color, 1.0f);
 }

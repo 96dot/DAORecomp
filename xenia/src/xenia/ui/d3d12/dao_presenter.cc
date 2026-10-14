@@ -1,12 +1,13 @@
 // DAO: D3D12Presenter's additions: presenting with vsync (with a frame
 // latency of two), HDR output through an scRGB swap chain, and captures of
-// an scRGB guest output.
+// an scRGB guest output or of the game's own HDR in SDR.
 #include "xenia/ui/d3d12/d3d12_presenter.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
@@ -38,6 +39,18 @@ namespace ui {
 namespace d3d12 {
 
 namespace {
+// A half float's value (IEEE: exponent 31 infinity or NaN, 0 subnormal);
+// negative ones are 0.
+float HalfToFloat(uint16_t half) {
+  if (half & 0x8000) {
+    return 0.0f;
+  }
+  const uint32_t exponent = half >> 10, mantissa = half & 0x3FF;
+  return exponent == 31 ? 65504.0f
+         : exponent ? std::ldexp(float(mantissa | 0x400), int(exponent) - 25)
+                    : std::ldexp(float(mantissa), -24);
+}
+
 // DAO: 8-bit values for the non-negative half floats (bits 0 to 0x7FFF) of an
 // scRGB guest output (HDR quality High), as its 10-bit counterpart would give:
 // SDR clamped to 1, the game's linear HDR (1 = 80 nits) PQ-encoded as in
@@ -46,13 +59,7 @@ const std::array<uint8_t, 0x8000>& HalfTo8bpc(bool game_hdr) {
   static const auto make = [](bool pq) {
     std::array<uint8_t, 0x8000> table;
     for (uint32_t half = 0; half < table.size(); ++half) {
-      // IEEE half: exponent 31 is infinity or NaN, 0 subnormal.
-      const uint32_t exponent = half >> 10, mantissa = half & 0x3FF;
-      const float value =
-          exponent == 31 ? 65504.0f
-          : exponent
-              ? std::ldexp(float(mantissa | 0x400), int(exponent) - 25)
-              : std::ldexp(float(mantissa), -24);
+      const float value = HalfToFloat(uint16_t(half));
       float encoded = std::min(value, 1.0f);
       if (pq) {
         const float y = std::pow(std::min(value * 80.0f / 10000.0f, 1.0f),
@@ -68,6 +75,16 @@ const std::array<uint8_t, 0x8000>& HalfTo8bpc(bool game_hdr) {
   static const std::array<uint8_t, 0x8000> hdr = make(true);
   return game_hdr ? hdr : sdr;
 }
+
+// SMPTE ST 2084 (PQ) decoding: 0 to 1 to nits (0 to 10000). As PqToNits in
+// dao_hdr_output.ps.hlsl and the inverse of Pq in dao_upscale_composite.hlsli:
+// keep the constants in step.
+float PqToNits(float pq) {
+  const float p = std::pow(pq, 1.0f / 78.84375f);
+  return 10000.0f * std::pow(std::max(p - 0.8359375f, 0.0f) /
+                                 (18.8515625f - 18.6875f * p),
+                             1.0f / 0.1593017578125f);
+}
 }  // namespace
 
 namespace shaders {
@@ -79,8 +96,9 @@ bool D3D12Presenter::DaoInitializeHdrOutput(
     const D3D12_GRAPHICS_PIPELINE_STATE_DESC&
         guest_output_paint_pipeline_desc) {
   ID3D12Device* device = provider_.GetDevice();
+  // The HDR source and the UI layer (t0, t1).
   D3D12_DESCRIPTOR_RANGE hdr_source_range = {D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-                                             1, 0, 0, 0};
+                                             2, 0, 0, 0};
   D3D12_ROOT_PARAMETER hdr_parameters[2] = {};
   hdr_parameters[0].ParameterType =
       D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -88,7 +106,7 @@ bool D3D12Presenter::DaoInitializeHdrOutput(
   hdr_parameters[0].DescriptorTable.pDescriptorRanges = &hdr_source_range;
   hdr_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
   hdr_parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-  hdr_parameters[1].Constants.Num32BitValues = 4;
+  hdr_parameters[1].Constants.Num32BitValues = kHdrOutputConstantCount;
   hdr_parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
   D3D12_ROOT_SIGNATURE_DESC hdr_root_signature_desc = {};
   hdr_root_signature_desc.NumParameters = 2;
@@ -119,6 +137,7 @@ bool D3D12Presenter::DaoConnectHdrOutput() {
   ID3D12Device* device = provider_.GetDevice();
   paint_context_.swap_chain_hdr = cvars::present_hdr;
   paint_context_.hdr_source.Reset();
+  paint_context_.ui_layer.Reset();
   if (paint_context_.swap_chain_hdr) {
     paint_context_.swap_chain->SetColorSpace1(
         DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
@@ -171,6 +190,39 @@ bool D3D12Presenter::DaoConnectHdrOutput() {
         provider_.OffsetViewDescriptor(
             paint_context_.view_heap->GetCPUDescriptorHandleForHeapStart(),
             PaintContext::kViewIndexHdrSourceSrv));
+
+    // The UI layer, the same size, in the UI's SDR format: made with the
+    // swap chain (4 bytes a pixel: 33 MB at 4K, 4 MB at 1280x800), not when
+    // UI is first shown, which would rewrite its view (t1) under paints in
+    // flight. Without it, UI over the game's HDR is drawn into the HDR source
+    // (its colors off), and t1 is a null view.
+    D3D12_RESOURCE_DESC ui_layer_desc = hdr_source_desc;
+    ui_layer_desc.Format = kSwapChainFormat;
+    D3D12_CLEAR_VALUE ui_layer_clear = {};
+    ui_layer_clear.Format = kSwapChainFormat;
+    if (FAILED(device->CreateCommittedResource(
+            &util::kHeapPropertiesDefault, provider_.GetHeapFlagCreateNotZeroed(),
+            &ui_layer_desc, D3D12_RESOURCE_STATE_COMMON, &ui_layer_clear,
+            IID_PPV_ARGS(&paint_context_.ui_layer)))) {
+      XELOGE("D3D12Presenter: Failed to create the UI layer texture");
+      paint_context_.ui_layer.Reset();
+    } else {
+      D3D12_RENDER_TARGET_VIEW_DESC ui_layer_rtv_desc = {};
+      ui_layer_rtv_desc.Format = kSwapChainFormat;
+      ui_layer_rtv_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+      device->CreateRenderTargetView(
+          paint_context_.ui_layer.Get(), &ui_layer_rtv_desc,
+          provider_.OffsetRTVDescriptor(
+              paint_context_.rtv_heap->GetCPUDescriptorHandleForHeapStart(),
+              PaintContext::kRTVIndexUiLayer));
+    }
+    D3D12_SHADER_RESOURCE_VIEW_DESC ui_layer_srv_desc = hdr_source_srv_desc;
+    ui_layer_srv_desc.Format = kSwapChainFormat;
+    device->CreateShaderResourceView(
+        paint_context_.ui_layer.Get(), &ui_layer_srv_desc,
+        provider_.OffsetViewDescriptor(
+            paint_context_.view_heap->GetCPUDescriptorHandleForHeapStart(),
+            PaintContext::kViewIndexUiLayerSrv));
   }
   return true;
 }
@@ -214,8 +266,8 @@ void D3D12Presenter::DaoEncodeHdrSource(
     ID3D12GraphicsCommandList* command_list, ID3D12Resource* back_buffer,
     ID3D12Resource* swap_chain_back_buffer,
     const D3D12_CPU_DESCRIPTOR_HANDLE& swap_chain_back_buffer_rtv,
-    bool game_hdr) {
-  D3D12_RESOURCE_BARRIER hdr_barriers[2] = {};
+    bool game_hdr, bool ui_over_hdr) {
+  D3D12_RESOURCE_BARRIER hdr_barriers[3] = {};
   hdr_barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
   hdr_barriers[0].Transition.pResource = back_buffer;
   hdr_barriers[0].Transition.Subresource =
@@ -227,7 +279,9 @@ void D3D12Presenter::DaoEncodeHdrSource(
   hdr_barriers[1].Transition.pResource = swap_chain_back_buffer;
   hdr_barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
   hdr_barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-  command_list->ResourceBarrier(2, hdr_barriers);
+  hdr_barriers[2] = hdr_barriers[0];
+  hdr_barriers[2].Transition.pResource = paint_context_.ui_layer.Get();
+  command_list->ResourceBarrier(ui_over_hdr ? 3 : 2, hdr_barriers);
   command_list->OMSetRenderTargets(1, &swap_chain_back_buffer_rtv, true,
                                    nullptr);
   D3D12_VIEWPORT hdr_viewport = {
@@ -255,21 +309,30 @@ void D3D12Presenter::DaoEncodeHdrSource(
   if (pq_encoded) {
     scale = 1.0f / (display_hdr ? 80.0f : paper_white);
   }
-  const float hdr_constants[4] = {
+  const float hdr_constants[kHdrOutputConstantCount] = {
       scale,
       display_hdr
           ? dao_live::HdrPeakRatio(paper_white)
           : 1.0f,
       // DAO: a gamma from the config the shader can use.
       float(std::clamp(cvars::present_hdr_gamma, 1.0, 3.0)),
-      game_hdr ? (hdr_scrgb_ ? 2.0f : 1.0f) : 0.0f};
-  command_list->SetGraphicsRoot32BitConstants(1, 4, hdr_constants, 0);
+      game_hdr ? (hdr_scrgb_ ? 2.0f : 1.0f) : 0.0f,
+      // The UI layer's white: an SDR image's.
+      ui_over_hdr ? (display_hdr ? paper_white / 80.0f : 1.0f) : 0.0f};
+  command_list->SetGraphicsRoot32BitConstants(1, kHdrOutputConstantCount,
+                                              hdr_constants, 0);
   command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   command_list->DrawInstanced(3, 1, 0, 0);
   hdr_barriers[0].Transition.StateBefore =
       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
   hdr_barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+  hdr_barriers[2].Transition.StateBefore =
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+  hdr_barriers[2].Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
   command_list->ResourceBarrier(1, hdr_barriers);
+  if (ui_over_hdr) {
+    command_list->ResourceBarrier(1, &hdr_barriers[2]);
+  }
 }
 
 void D3D12Presenter::DaoConvertScRgbCapture(const uint8_t* source,
@@ -284,6 +347,62 @@ void D3D12Presenter::DaoConvertScRgbCapture(const uint8_t* source,
       for (uint32_t c = 0; c < 3; ++c) {
         const uint16_t half = source_row[x * 4 + c];
         dest_row[x * 4 + c] = (half & 0x8000) ? 0 : to_8bpc[half];
+      }
+      dest_row[x * 4 + 3] = 0xFF;
+    }
+  }
+}
+
+void D3D12Presenter::DaoTonemapCapture(const uint8_t* source,
+                                       uint32_t row_pitch, bool scrgb,
+                                       RawImage& image_out) {
+  // Linear, 1 = the game's white (paper white), from each encoded value.
+  const float paper_white = dao_live::HdrPaperWhite();
+  std::vector<float> decode(scrgb ? 0x10000 : 0x400);
+  for (uint32_t i = 0; i < decode.size(); ++i) {
+    decode[i] = scrgb ? HalfToFloat(uint16_t(i)) * (80.0f / paper_white)
+                      : PqToNits(float(i) / 1023.0f) / paper_white;
+  }
+  // 0 to 1, gamma-encoded, in kSteps steps.
+  constexpr uint32_t kSteps = 4096;
+  const float gamma = float(std::clamp(cvars::present_hdr_gamma, 1.0, 3.0));
+  std::array<uint8_t, kSteps + 1> encode;
+  for (uint32_t i = 0; i <= kSteps; ++i) {
+    encode[i] =
+        uint8_t(std::pow(float(i) / kSteps, 1.0f / gamma) * 255.0f + 0.5f);
+  }
+  // Highlights: the brightest channel from kKnee rolled off towards 1
+  // (Reinhard), the others scaled with it (hue-preserving).
+  constexpr float kKnee = 0.8f;
+  for (uint32_t y = 0; y < image_out.height; ++y) {
+    const uint8_t* source_row = source + size_t(row_pitch) * y;
+    uint8_t* dest_row = image_out.data.data() + size_t(image_out.stride) * y;
+    for (uint32_t x = 0; x < image_out.width; ++x) {
+      float color[3];
+      if (scrgb) {
+        const uint16_t* halfs =
+            reinterpret_cast<const uint16_t*>(source_row) + x * 4;
+        for (uint32_t c = 0; c < 3; ++c) {
+          color[c] = decode[halfs[c]];
+        }
+      } else {
+        const uint32_t packed =
+            reinterpret_cast<const uint32_t*>(source_row)[x];
+        for (uint32_t c = 0; c < 3; ++c) {
+          color[c] = decode[(packed >> (10 * c)) & 0x3FF];
+        }
+      }
+      const float brightest = std::max(color[0], std::max(color[1], color[2]));
+      if (brightest > kKnee) {
+        const float over = (brightest - kKnee) / (1.0f - kKnee);
+        const float rolled = kKnee + (1.0f - kKnee) * over / (1.0f + over);
+        for (float& channel : color) {
+          channel *= rolled / brightest;
+        }
+      }
+      for (uint32_t c = 0; c < 3; ++c) {
+        dest_row[x * 4 + c] =
+            encode[uint32_t(std::min(color[c], 1.0f) * kSteps + 0.5f)];
       }
       dest_row[x * 4 + 3] = 0xFF;
     }

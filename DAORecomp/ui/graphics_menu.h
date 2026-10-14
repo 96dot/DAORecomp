@@ -13,11 +13,6 @@ namespace dao::ui
     // patched menu. Call after the settings are loaded and the mods applied.
     void InitializeGraphicsMenu();
 
-    // Writes optionsmenu.gfx with the Graphics tab to userdata/generated and serves
-    // it at the movie's override path (options_movie.cpp). Returns false (the menu
-    // stays the game's) if the movie can't be patched.
-    bool InstallOptionsMovie();
-
     // Every frame, on the render thread: enforces the engine graphics settings
     // (shadows, post-processing) the game would otherwise restore.
     void ApplyEngineGraphicsOptions(uint8_t* base);

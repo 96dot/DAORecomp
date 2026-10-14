@@ -22,6 +22,9 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
 - a launcher for settings, mods (file overrides, with a converter for PC mods) and
   code patches
 - a Graphics tab in the game's own Options menu (title and pause menus)
+- a photo mode (the START menu's Photo Mode row, or L3+R3): a free camera with the
+  world paused, field of view, roll, frames from 32:9 to 9:16 and composition grids,
+  saving PNGs to Pictures\DAORecomp
 - an on-screen keyboard for naming characters, usable with a gamepad
 - the downloadable content (Awakening and the rest), installed from your own packages
 
@@ -250,6 +253,15 @@ first time the Mods page opens it explains this (`mods_warning_seen` in the
 `[launcher]` section of `userdata/config.toml` records that it was read). In the game,
 *Options → Graphics → Manage mods* closes it and opens the launcher's Mods page.
 
+Photo mode starts from the START menu's *Photo Mode* row (where the Xbox 360 version had
+Achievements) or by clicking both sticks (L3+R3) while exploring or in combat; the world
+pauses and the camera flies free. The left stick moves it, the right stick turns it, the
+triggers lower and raise it (LB slower, RB faster); the d-pad zooms and rolls, A takes a
+photo (saved in `Pictures\DAORecomp`, cut to the chosen frame, without the overlay, and in
+SDR when the game is in HDR), X opens the settings (field of view, roll, camera speed,
+frame, grid), Y hides the overlay, BACK resets the camera, and B or START leaves. On its
+own, a stick click reaches the game 80 ms late (the other may still come).
+
 Shaders are compiled the first time something is drawn, and that draw is skipped
 until then, so new places can show objects popping in for a moment. Compiled shaders
 are kept in `userdata/shader_cache/` and compiled again in the background at every
@@ -304,12 +316,15 @@ start, so this happens once per place.
 - `scripts/make_icon.py` draws the program's icon (`DAORecomp/res/daorecomp.ico`,
   original art); it needs Pillow, and the .ico is committed, so it's only run to
   change the icon.
-- The in-game Graphics tab is ActionScript 2 (`DAORecomp/ui/graphics_tab.as`), which
-  `scripts/as2c.py` compiles to `DAORecomp/ui/graphics_tab_as.h`; run
+- The in-game Graphics tab and the START menu's Photo Mode row are ActionScript 2
+  (`DAORecomp/ui/graphics_tab.as`, `DAORecomp/ui/pause_menu.as`), which
+  `scripts/as2c.py` compiles to `DAORecomp/ui/graphics_tab_as.h` and
+  `DAORecomp/ui/pause_menu_as.h`; run
   `python scripts/as2c.py DAORecomp/ui/graphics_tab.as DAORecomp/ui/graphics_tab_as.h kGraphicsTabScript`
-  after changing it (with `--check` at the end it only checks the header, as CI does).
-  At start the runtime adds the script to the player's own `optionsmenu.gfx` and
-  serves the result from `userdata/generated/`.
+  (or `... pause_menu.as ... pause_menu_as.h kPauseMenuScript`) after changing one (with
+  `--check` at the end it only checks the header, as CI does). At start the runtime
+  adds the scripts to the player's own `optionsmenu.gfx` and `mainmenu.gfx`
+  (`DAORecomp/ui/menu_movies.cpp`) and serves the results from `userdata/generated/`.
 - `scripts/check_include_case.py` finds `#include`s whose case differs from the file on
   disk, which only breaks builds on Linux.
 - `DAO_CONSOLE=1` shows the log (`userdata/dao.log`) as it's written, in the console
@@ -341,6 +356,8 @@ start, so this happens once per place.
     logs the outcome to `userdata/dao.log` and quits (tests the converter).
   - `DAO_TEST_KEYBOARD=<seconds>`: shows the on-screen keyboard that long after the
     game starts and logs what was entered (tests it without creating a character).
+  - `DAO_PHOTO_DIR=<folder>`: photo mode saves its photos there instead of
+    `Pictures\DAORecomp` (`scripts/test/inputs/photo_mode.txt`).
 
 Never commit game files or anything generated from them (`game/`, `ppc/`, `ppc_tu6/`,
 `analysis/`, `title_update/`, `dlc/`, built executables); `.gitignore` excludes them.

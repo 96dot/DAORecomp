@@ -143,8 +143,12 @@ bool D3D12ImmediateDrawer::Initialize() {
   pipeline_blend_desc.SrcBlend = D3D12_BLEND_SRC_ALPHA;
   pipeline_blend_desc.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
   pipeline_blend_desc.BlendOp = D3D12_BLEND_OP_ADD;
+  // DAO: the coverage in alpha ("over"), not a sum: the UI layer drawn over
+  // the game's HDR is put over it by its alpha (D3D12Presenter's
+  // PaintContext::ui_layer). The other targets' alpha is never read (the
+  // swap chain ignores it, the HDR output pass takes the HDR source's rgb).
   pipeline_blend_desc.SrcBlendAlpha = D3D12_BLEND_ONE;
-  pipeline_blend_desc.DestBlendAlpha = D3D12_BLEND_ONE;
+  pipeline_blend_desc.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
   pipeline_blend_desc.BlendOpAlpha = D3D12_BLEND_OP_ADD;
   pipeline_blend_desc.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
   pipeline_desc.SampleMask = UINT_MAX;

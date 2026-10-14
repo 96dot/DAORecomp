@@ -816,10 +816,9 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   render_size_[0] = render_width;
   render_size_[1] = render_height;
 
-  overlay_shown_ = true_hdr_ && OverlayShown();
   const char* reason = nullptr;
   if (!jitter_active_) {
-    if (true_hdr_ && !size_changed && hudless_captured_ && !overlay_shown_) {
+    if (true_hdr_ && !size_changed && hudless_captured_) {
       return CompositeHdr(frontbuffer, frontbuffer_srv, srv_out, hdr_out);
     }
     reason = "off";
@@ -1057,11 +1056,10 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   constants.render_size[0] = float(render_width);
   constants.render_size[1] = float(render_height);
   constants.show_motion = cvars::dao_show_motion_vectors ? 1 : 0;
-  if (true_hdr_ && !overlay_shown_) {
+  if (true_hdr_) {
     constants.mode = kCompositeHdr;
   } else if (linear_color) {
-    // A linear upscale output in SDR: true HDR's while presenter UI is shown,
-    // or the linearized SDR image's.
+    // A linear upscale output in SDR: the linearized SDR image's.
     constants.mode = kCompositeHdrToSdr;
   } else {
     constants.mode = kCompositeSdr;
@@ -1129,7 +1127,7 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   srv_out.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
   srv_out.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
   srv_out.Texture2D.MipLevels = 1;
-  hdr_out = true_hdr_ && !overlay_shown_;
+  hdr_out = true_hdr_;
   sharpened_out = backend_->Sharpens();
   EndFrame(true, nullptr);
   return composite_.resource.Get();
@@ -1192,8 +1190,7 @@ ID3D12Resource* DaoUpscalerImpl::NotUpscaled(
     const char* reason, ID3D12Resource* frontbuffer,
     const D3D12_SHADER_RESOURCE_VIEW_DESC& frontbuffer_srv,
     D3D12_SHADER_RESOURCE_VIEW_DESC& srv_out, bool& hdr_out) {
-  // With an overlay, the presenter's SDR path.
-  const bool encode = true_hdr_ && !overlay_shown_ &&
+  const bool encode = true_hdr_ &&
                       EnsureTexture(encoded_, HdrFormat(), render_size_[0],
                                     render_size_[1], "encoded") &&
                       ConvertImage(frontbuffer, frontbuffer_srv, encoded_,

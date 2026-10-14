@@ -35,7 +35,7 @@ method given here, never by copying an address.
 | 4 | Rendering | title screen renders through Xenia's D3D12 | `xenia/` (changes in `xenia/PATCHES.md`), `gpu/xenia_host.cpp`, `gpu/xenia_memory.cpp` |
 | 5 | Audio, input, settings | music and voices play, pad works, `config.toml` read | `apu/` (XMA decoder), `input/`, `settings.cpp` |
 | 6 | Playable | new game, save, load, keyboard UI, 60 fps | `ui/keyboard.cpp`, save-name logic in `kernel/xam.cpp` |
-| 7 | Graphics | resolution scale, FSR, HDR, in-game options | `xenia/.../dao_upscale.*`, HDR shaders, `ui/options_movie.cpp` |
+| 7 | Graphics | resolution scale, FSR, HDR, in-game options | `xenia/.../dao_upscale.*`, HDR shaders, `ui/menu_movies.cpp` |
 | 8 | Distribution | installer, launcher, updater, CI; built for the player's processor | `installer/`, `install.py`, `launcher/`, `.github/workflows/`, `cpu_check.cpp` |
 | 9 | Content | DLC, title update, mods | `content/`, `mods/`, `scripts/stfs.py`, `scripts/match_build.py`, `scripts/pair_data.py`, `scripts/prefix_symbols.py` |
 
@@ -182,6 +182,7 @@ there.
 | `DAO_RES_SCALE`, `DAO_HDR`, `DAO_FRAME_RATE` | override settings for one run |
 | `DAO_XMA=fake`, `DAO_AUDIO=null`, `DAO_AUDIO_DUMP=x.wav` | audio bring-up and checks |
 | `DAO_TEST_KEYBOARD=<s>` | opens the on-screen keyboard |
+| `DAO_PHOTO_DIR=<dir>` | where photo mode saves photos |
 | `DAO_LAUNCHER_SCREENSHOTS=<dir>` | launcher screenshots, then exits |
 | `DAO_LAUNCHER_DROP=<paths>` | with the above: files dropped on the launcher (see README) |
 | `DAO_LAUNCHER_PAD=<steps>` | with the above: a virtual gamepad's script instead (see README) |

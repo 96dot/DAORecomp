@@ -13,6 +13,7 @@
 #include "mods/convert/convert.h"
 #include "ui/graphics_menu.h"
 #include "ui/keyboard.h"
+#include "ui/photo_mode.h"
 #include "program.h"
 #include "settings.h"
 #include "text.h"
@@ -336,6 +337,7 @@ int main(int argc, char** argv)
     }
     // The Options menu's Graphics tab is patched into the menu the mods leave.
     dao::ui::InitializeGraphicsMenu();
+    dao::ui::InitializePhotoMode();
     // DAO_AUDIO=null runs without sound output.
     if (const char* audio = getenv("DAO_AUDIO"); !audio || strcmp(audio, "null") != 0)
         dao::apu::InitializeAudioOutput();

@@ -47,8 +47,10 @@ Buttons, joined with `+` (`A+LB`): `A B X Y START BACK LB RB LT RT LS RS GUIDE`,
 
 `inputs/` holds DAO's: `load_latest.txt`, `camera.txt`, `walk.txt` (walks back and
 forth while turning the camera), `options_menu.txt`, `save_game.txt` (its load steps
-follow the developer's saves; adjust them) and `sandbox_overwrite_save.txt` (overwrites
-a save: only in a sandbox). To make a
+follow the developer's saves; adjust them), `sandbox_overwrite_save.txt` (overwrites
+a save: only in a sandbox) and `photo_mode.txt` (goes through photo mode's controls; with
+`EXTRA="DAO_PHOTO_DIR=<folder>"` for the photo, and `capture_window.ps1` for the overlay,
+which the game's captures leave out). To make a
 new one, run with captures every 2 s, read the times off the contact sheet, and keep
 the result here.
 

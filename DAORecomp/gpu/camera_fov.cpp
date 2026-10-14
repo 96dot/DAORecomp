@@ -8,11 +8,13 @@
 // others (the title screen, loading, character creation). The scale keeps the
 // image's proportions: the tangent of half the angle is multiplied, so a setting
 // of 110 degrees widens the 60-degree gameplay view to 110 degrees across at 16:9,
-// and a conversation shot by as much.
+// and a conversation shot by as much. In the fly camera (photo mode) the field of
+// view is photo mode's own, when it sets one.
 #include "stdafx.h"
 #include "gpu/camera_fov.h"
 #include "kernel/function.h"
 #include "kernel/game_build.h"
+#include "kernel/game_modes.h"
 #include "settings.h"
 
 #include <cmath>
@@ -23,24 +25,21 @@ namespace
     // The settings, in horizontal degrees at 16:9.
     std::atomic<int> s_gameplayFov{ dao::kOriginalFov };
     std::atomic<int> s_conversationFov{ dao::kOriginalFov };
+    // Photo mode's, in vertical radians (0: none).
+    std::atomic<double> s_photoFov{ 0 };
 
-    // The main camera (a pointer).
-    constexpr dao::kernel::GameAddress kMainCamera{ 0x83211D44, 0x832E227C };
+    using namespace dao::kernel;
 
     // The game mode, as the camera update reads it from its object: the mode
-    // controller at +280, its current mode at +120, the mode's number at +96.
+    // controller at +280 (kernel/game_modes.h has the rest).
     constexpr uint32_t kModeControllerOffset = 280;
-    constexpr uint32_t kCurrentModeOffset = 120;
-    constexpr uint32_t kModeNumberOffset = 96;
-    // The modes in the world's own camera (0 exploring; 1 to 3 taken as gameplay
-    // too, not checked one by one), and those with shots of their own (4
-    // conversations; 5 taken to be cutscenes, unverified).
-    constexpr int32_t kLastGameplayMode = 3;
-    constexpr int32_t kModeConversation = 4;
-    constexpr int32_t kModeCutscene = 5;
+    // The modes in the world's own camera (exploring, combat, dead, and the menus
+    // over the world), and those with shots of their own (conversations; cutscenes,
+    // unverified).
+    constexpr int32_t kLastGameplayMode = kModeMenu;
 
     // The field of view SetFov passes on, in radians: what the scale can give (at
-    // most 89 degrees vertical at kMaxFov), with room for a wider shot of the game's.
+    // most 88 degrees vertical at kMaxFov), with room for a wider shot of the game's.
     constexpr double kMinScaledFov = 0.01;
     constexpr double kMaxScaledFov = 3.0;
 
@@ -60,14 +59,17 @@ namespace
         return std::tan(degrees * std::numbers::pi / 360.0) / kOriginalHalfTan;
     }
 
-    // The setting for the camera update's current game mode (kOriginalFov: none).
-    int ModeFov(uint8_t* base, uint32_t cameraUpdate)
+    // The camera update's current game mode (-1: none).
+    int32_t Mode(uint8_t* base, uint32_t cameraUpdate)
     {
         const uint32_t controller = PPC_LOAD_U32(cameraUpdate + kModeControllerOffset);
         const uint32_t current = controller ? PPC_LOAD_U32(controller + kCurrentModeOffset) : 0;
-        if (!current)
-            return dao::kOriginalFov;
-        const int32_t mode = int32_t(PPC_LOAD_U32(current + kModeNumberOffset));
+        return current ? int32_t(PPC_LOAD_U32(current + kModeNumberOffset)) : -1;
+    }
+
+    // The setting for a game mode (kOriginalFov: none).
+    int ModeFov(int32_t mode)
+    {
         if (mode >= 0 && mode <= kLastGameplayMode)
             return s_gameplayFov.load(std::memory_order_relaxed);
         if (mode == kModeConversation || mode == kModeCutscene)
@@ -90,8 +92,12 @@ namespace
     {
         if (t_cameraUpdate && ctx.r3.u32 == PPC_LOAD_U32(kMainCamera.Get()))
         {
-            const int degrees = ModeFov(base, t_cameraUpdate);
-            if (degrees != dao::kOriginalFov)
+            const int32_t mode = Mode(base, t_cameraUpdate);
+            const int degrees = ModeFov(mode);
+            const double photo = s_photoFov.load(std::memory_order_relaxed);
+            if (mode == kModeFlyCam && photo > 0)
+                ctx.f1.f64 = double(float(photo));
+            else if (degrees != dao::kOriginalFov)
             {
                 const double scaled = 2.0 * std::atan(std::tan(ctx.f1.f64 / 2.0) * FovScale(degrees));
                 // (Rounded to single precision: the game stores it as a float.)
@@ -108,6 +114,24 @@ namespace dao::gpu
     {
         s_gameplayFov = std::clamp(gameplay, kMinFov, kMaxFov);
         s_conversationFov = std::clamp(conversation, kMinFov, kMaxFov);
+    }
+
+    double GameplayFovDegrees()
+    {
+        const int degrees = s_gameplayFov.load(std::memory_order_relaxed);
+        if (degrees == dao::kOriginalFov)
+            return 2.0 * std::atan(kOriginalHalfTan) * 180.0 / std::numbers::pi;
+        return degrees;
+    }
+
+    double VerticalFov(double degrees)
+    {
+        return 2.0 * std::atan(std::tan(degrees * std::numbers::pi / 360.0) * 9.0 / 16.0);
+    }
+
+    void SetPhotoFov(double radians)
+    {
+        s_photoFov = radians > 0 ? std::clamp(radians, kMinScaledFov, kMaxScaledFov) : 0.0;
     }
 }
 
