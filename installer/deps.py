@@ -157,3 +157,19 @@ XESS_VERSION = "3.0.2"
 XESS = Download(f"https://github.com/intel/xess/releases/download/v{XESS_VERSION}/XeSS_SDK_{XESS_VERSION}.zip",
                 "88b8a373f30e33f3558a77a93e634f11b8132fc3047ea1a8edeead32b8471990", 76839749)
 XESS_KEEP = ("LICENSE.txt", "third-party-programs.txt", "inc/xess", "bin/libxess.dll")
+
+# NVIDIA Streamline SDK 2.14.1 (MIT; its plug-ins, and NVIDIA's DLSS 310.9 and Reflex DLLs,
+# under NVIDIA's license terms, which the installer copies next to them): Reflex, and DLSS
+# Super Resolution and Frame Generation. Of the archive, only STREAMLINE_KEEP stays.
+STREAMLINE_VERSION = "2.14.1"
+STREAMLINE = Download("https://github.com/NVIDIA-RTX/Streamline/releases/download/"
+                      f"v{STREAMLINE_VERSION}/streamline-sdk-v{STREAMLINE_VERSION}.zip",
+                      "92c4d954631a1710da86ca3fa8d5034f2b9503838c95fc4ae977ae149319781b", 275994000)
+# sl.interposer.dll's SHA-256: the game loads only this one (it checks its plug-ins').
+STREAMLINE_INTERPOSER_SHA256 = "8c87c9499461da561edd529aa9bf7831d67d7b94ebb1c1a5ed54ef4934e1ea4c"
+# The DLLs that go next to DAORecomp.exe (DAORecomp/CMakeLists.txt has the same list): Reflex's.
+STREAMLINE_DLLS = ("sl.interposer.dll", "sl.common.dll", "sl.reflex.dll", "sl.pcl.dll")
+# DLSS's, kept from the archive for the game's DLSS (not used yet).
+STREAMLINE_DLSS_DLLS = ("sl.dlss.dll", "sl.dlss_g.dll", "nvngx_dlss.dll", "nvngx_dlssg.dll")
+STREAMLINE_KEEP = ("license.txt", "include", "bin/x64/nvngx_dlss.license.txt", "bin/x64/reflex.license.txt") + tuple(
+    f"bin/x64/{name}" for name in STREAMLINE_DLLS + STREAMLINE_DLSS_DLLS)

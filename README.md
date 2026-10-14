@@ -16,7 +16,8 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
   tonemapping redone without compressing its highlights), upscaled in HDR;
   HDR quality High keeps it 16-bit scRGB all the way to the display
 - 60 fps (the original is locked to 30), or up to 240 or unlimited (experimental)
-- low latency with AMD Radeon Anti-Lag 2 (AMD GPUs)
+- low latency with AMD Radeon Anti-Lag 2 (AMD GPUs) or NVIDIA Reflex (NVIDIA GPUs,
+  experimental)
 - field of view settings: gameplay's, and conversations' (and, it seems, cutscenes')
   separately
 - SDL3 input, including DualSense and other controllers
@@ -143,8 +144,10 @@ Everything is pinned to exact versions and checked (`installer/deps.py`):
 
 - Source code: Xenia's third-party libraries (and rapidjson, for the update check),
   XenonRecomp, SDL 3, the AMD FidelityFX SDK (headers and the signed FSR and frame generation
-  DLLs), and the Intel XeSS SDK (headers, `libxess.dll` and its license notices; the
-  release archive, of which only those are kept).
+  DLLs), the Intel XeSS SDK (headers, `libxess.dll` and its license notices; the
+  release archive, of which only those are kept), and NVIDIA's Streamline SDK 2.14.1
+  (of its release archive, only its headers, its DLLs and NVIDIA's DLSS 310.9 and
+  Reflex DLLs with their licenses are kept; only Reflex's are installed for now).
 - LLVM/Clang 22 (or your system's LLVM 18+ if it has `clang-cl`, `lld-link`, `llvm-lib`
   and `llvm-rc`), CMake and Ninja, and on Windows without git, MinGit.
 - The Microsoft C/C++ runtime headers/libraries and the Windows SDK, fetched by
@@ -211,13 +214,23 @@ blur is off by default; Low and High cost GPU time while the scene moves.
 
 **Low latency** (*Configure → Display → Frame rate* in the launcher, or *Options →
 Graphics*, where it applies at once) turns on AMD Radeon Anti-Lag 2 on AMD GPUs with a
-current driver: each frame starts as late as it can still be on time, so the
-controller is read closer to when the frame is shown. It does the most when the GPU is
-the limit (an unlimited frame rate, or one the GPU can't quite reach), where frames would
-otherwise wait in a queue; at a frame rate the GPU reaches easily there's little to gain.
-It cost no frames in tests on an RX 9070 XT. It's off while frame generation is on: Anti-Lag 2
-works with FSR 3's own way of showing generated frames, not this game's, and cost frames
-with it. *On + Boost* is the same as *On* on AMD GPUs. On other GPUs it does nothing. `userdata/xenia.log` says whether it's available and on.
+current driver, or NVIDIA Reflex on NVIDIA GPUs: each frame starts as late as it can
+still be on time, so the controller is read closer to when the frame is shown. It does
+the most when the GPU is the limit (an unlimited frame rate, or one the GPU can't quite
+reach), where frames would otherwise wait in a queue; at a frame rate the GPU reaches
+easily there's little to gain. Anti-Lag 2 cost no frames in tests on an RX 9070 XT. It's off
+while frame generation is on: Anti-Lag 2 works with FSR 3's own way of showing generated
+frames, not this game's, and cost frames with it (Reflex is kept off likewise). *On +
+Boost* is Reflex's boost (more GPU clock for lower latency, at some power); on AMD GPUs
+it's the same as *On*. On other GPUs it does nothing. `userdata/xenia.log` says whether
+it's available and on.
+
+Reflex is experimental: it's built on NVIDIA's Streamline (its DLLs, which the installer
+downloads, next to `DAORecomp.exe`) without an NVIDIA GPU to test on. Streamline only
+starts on an NVIDIA GPU, and only when *Low latency* is on as the game starts, so
+turning it on from *Off* there takes effect at the next start (the game's Graphics tab
+says so; if Streamline can't start at all, `userdata/xenia.log` says why). The game only loads Streamline's `sl.interposer.dll` if it's exactly the
+installer's, and Streamline downloads nothing while the game runs.
 
 **Neural rendering (experimental, AMD RDNA 4 only):** the 3D scenes go through the
 neural rendering network of NVIDIA's DLSS 5 before temporal upscaling, run on AMD's
@@ -395,6 +408,10 @@ start, so this happens once per place.
     game starts and logs what was entered (tests it without creating a character).
   - `DAO_PHOTO_DIR=<folder>`: photo mode saves its photos there instead of
     `Pictures\DAORecomp` (`scripts/test/inputs/photo_mode.txt`).
+  - `DAO_STREAMLINE_ANY_GPU=1`: with *Low latency* on, starts NVIDIA's Streamline on any
+    GPU, not only NVIDIA's (Reflex's sleep does nothing there, but the rest runs: its
+    proxies, the swap chain through them, its markers; Anti-Lag 2 is then not used), to
+    test it without one.
 
 Never commit game files or anything generated from them (`game/`, `ppc/`, `ppc_tu6/`,
 `analysis/`, `title_update/`, `dlc/`, built executables); `.gitignore` excludes them.
@@ -409,7 +426,9 @@ next to `libxess.dll` (`intel_xess_license.txt`, `intel_xess_third_party_program
 under theirs (MIT); both licenses are installed next to `LmxxfNrRuntime.dll`
 (`lmxxf_nr_license.txt`, `lmxxf_nr_hip_api_license.txt`). `thirdparty/antilag2` is
 AMD's Anti-Lag 2 SDK header, under its MIT license (installed as
-`amd_antilag2_license.txt`). The neural rendering network's weights are NVIDIA's; none
-of them are in this repository or the releases.
+`amd_antilag2_license.txt`). NVIDIA's Streamline (MIT) and its Reflex DLLs (under
+NVIDIA's license terms) are downloaded by the installer, and their licenses installed
+next to them (`nvidia_streamline_license.txt`, `nvidia_reflex_license.txt`). The neural rendering network's
+weights are NVIDIA's; none of them are in this repository or the releases.
 *Dragon Age* is a trademark of Electronic Arts; this project is not affiliated with EA,
 BioWare or Microsoft.

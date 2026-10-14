@@ -42,6 +42,11 @@ namespace dao::gpu
     // Low latency's wait, on the game's thread once a frame just before it reads the
     // controller (XamInputGetState).
     void XeniaLowLatencyFrameStart();
+    // Low latency's mark of the game's swap (VdSwap, its render thread).
+    void XeniaLowLatencyFrameSwapped();
+    // Turning low latency on takes effect at the next start (NVIDIA Reflex, when it was
+    // off as the game started).
+    bool XeniaLowLatencyNeedsRestart();
 
     void XeniaInitializeRingBuffer(uint32_t physicalAddress, uint32_t sizeLog2);
     void XeniaEnableReadPointerWriteBack(uint32_t address, uint32_t blockSizeLog2);

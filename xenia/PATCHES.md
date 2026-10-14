@@ -38,8 +38,15 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
 - `ui/dao_frame_pacer.cc`: frame generation's presentation: the presenter's
   thread that paints each generated frame and, half a frame later, the real one.
 - `ui/d3d12/dao_low_latency.*`: low latency (AMD Radeon Anti-Lag 2, the header in
-  `thirdparty/antilag2`): set up with the device (provider), and its once-a-frame wait,
-  which DAORecomp calls as the game reads the controller.
+  `thirdparty/antilag2`, or NVIDIA Reflex): set up with the device (provider), its
+  once-a-frame wait, which DAORecomp calls as the game reads the controller, and Reflex's
+  markers of each frame's stages (the swap, the command processor's issue and submission
+  of it, the presenter's present).
+- `ui/d3d12/dao_streamline.*`: NVIDIA Streamline (headers in `tools/Streamline-SDK`, its
+  DLLs loaded at run time), with manual hooking: the provider starts it before the
+  device on an NVIDIA GPU (any GPU with `DAO_STREAMLINE_ANY_GPU=1`) and creates the
+  direct queue through its device proxy (keeping the native queue), and the presenter
+  creates the swap chain through its factory and queue proxies.
 - `gpu/d3d12/dao_frame_trace.h`, `gpu/d3d12/dao_gpu_timing.h`: diagnostics.
 - `gpu/d3d12/dao_command_processor.cc`, `dao_render_target_cache.cc`,
   `dao_texture_cache.cc`, `ui/d3d12/dao_presenter.cc`, `dao_provider.cc`:
@@ -62,12 +69,15 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
 - GPU: `gpu/command_processor.*`, `gpu/pm4_command_processor_implement.h`,
   `gpu/graphics_system.*`, `gpu/gpu_flags.cc`, `gpu/draw_util.*`, `gpu/primitive_processor.cc`,
   `gpu/shader_storage.h`, `gpu/shared_memory.*`, `gpu/texture_cache.*`.
-- D3D12: `gpu/d3d12/d3d12_command_processor.*`, `d3d12_graphics_system.*`,
+- D3D12: `gpu/d3d12/d3d12_command_processor.*` (also low latency's markers at the
+  swap), `d3d12_graphics_system.*`,
   `d3d12_render_target_cache.*`, `d3d12_texture_cache.*`,
   `deferred_command_list.*`, `pipeline_cache.*`.
 - UI: `ui/presenter.*`, `ui/d3d12/d3d12_presenter.*` (HDR output and its quality High, scRGB throughout; vsync;
-  frame generation: a second image per mailbox slot, handed to the pacer),
-  `ui/d3d12/d3d12_provider.*`, `ui/imgui_drawer.*`, `ui/window_win.*`,
+  frame generation: a second image per mailbox slot, handed to the pacer; the swap
+  chain through Streamline's proxies, low latency's markers around Present),
+  `ui/d3d12/d3d12_provider.*` (Streamline and low latency set up with the device, the
+  direct queue through Streamline), `ui/imgui_drawer.*`, `ui/window_win.*`,
   `ui/windowed_app_context_win.h`.
 
 The first port was made by a patch script; the tree has been edited directly

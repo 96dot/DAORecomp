@@ -274,6 +274,9 @@ namespace dao::imp
         uint32_t systemBufferId, u32* frontBufferPtr, u32* textureFormatPtr, u32* colorSpacePtr, u32* widthPtr,
         u32* heightPtr)
     {
+        // Before the count: the count lets the game's thread start the next frame.
+        if (bufferPtr)
+            dao::gpu::XeniaLowLatencyFrameSwapped();
         g_video.swapCount++;
         if (g_video.swapCount == 1 || (g_video.swapCount % 600) == 0)
             LOGI("VdSwap #{}", g_video.swapCount.load());

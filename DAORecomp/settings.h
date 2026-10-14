@@ -81,9 +81,9 @@ namespace dao
         // Waits for the display's refresh when presenting: no tearing, and no more
         // frames shown than the display refreshes.
         bool vsync = true;
-        // Low latency (AMD Radeon Anti-Lag 2): each frame starts as late as it can
-        // still be on time, so the controller is read closer to when it's shown. 0
-        // off, 1 on, 2 (kMaxLowLatency) on with boost: Anti-Lag 2 has no boost, so the same as 1.
+        // Low latency (AMD Radeon Anti-Lag 2 or NVIDIA Reflex): each frame starts as late
+        // as it can still be on time, so the controller is read closer to when it's shown.
+        // 0 off, 1 on, 2 (kMaxLowLatency) on with Reflex's boost (Anti-Lag 2 has none: as 1).
         int lowLatency = 0;
         // One of kFrameRates. The game locks its 3D scenes to 30 fps through the D3D
         // presentation interval: 60 presents them every vblank, and above 60 every

@@ -151,6 +151,16 @@ namespace dao::gpu
         xe::ui::d3d12::dao_low_latency::FrameStart();
     }
 
+    void XeniaLowLatencyFrameSwapped()
+    {
+        xe::ui::d3d12::dao_low_latency::FrameSwapped();
+    }
+
+    bool XeniaLowLatencyNeedsRestart()
+    {
+        return xe::ui::d3d12::dao_low_latency::NeedsRestart();
+    }
+
     bool InitializeXeniaGraphics(const std::filesystem::path& userRoot)
     {
         cvars::log_file = userRoot / "xenia.log";

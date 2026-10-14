@@ -125,14 +125,21 @@ target_precompile_headers(DAORecomp PRIVATE stdafx.h)
 
 # The temporal upscalers' and frame generation's DLLs go next to the executable;
 # they're loaded only when enabled: AMD FidelityFX's signed loader, upscaler (FSR 3.1 /
-# FSR 4) and frame generation (FSR 3.1), and Intel's libxess.dll (XeSS). (Their own
-# rule, so a missing or changed DLL is copied without relinking the exe.)
+# FSR 4) and frame generation (FSR 3.1), Intel's libxess.dll (XeSS), and NVIDIA's
+# Streamline with its plug-ins for Reflex (installer/deps.py's STREAMLINE_DLLS, which
+# scripts/check_constants.py checks against this list). (Their own rule, so a missing or
+# changed DLL is copied without relinking the exe.)
 set(_upscaler_dlls)
+set(_streamline_dlls)
+foreach(_dll sl.interposer.dll sl.common.dll sl.reflex.dll sl.pcl.dll)
+    list(APPEND _streamline_dlls ${CMAKE_SOURCE_DIR}/tools/Streamline-SDK/bin/x64/${_dll})
+endforeach()
 foreach(_src
         ${CMAKE_SOURCE_DIR}/tools/FidelityFX-SDK/Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll
         ${CMAKE_SOURCE_DIR}/tools/FidelityFX-SDK/Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll
         ${CMAKE_SOURCE_DIR}/tools/FidelityFX-SDK/Kits/FidelityFX/signedbin/amd_fidelityfx_framegeneration_dx12.dll
-        ${CMAKE_SOURCE_DIR}/tools/XeSS-SDK/bin/libxess.dll)
+        ${CMAKE_SOURCE_DIR}/tools/XeSS-SDK/bin/libxess.dll
+        ${_streamline_dlls})
     get_filename_component(_dll ${_src} NAME)
     add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${_dll}
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_src} ${CMAKE_CURRENT_BINARY_DIR}

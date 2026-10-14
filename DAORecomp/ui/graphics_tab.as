@@ -105,7 +105,9 @@ function OpenCheats() {
 // picker (values and their labels), a checkbox (toggle) or a slider. A value not
 // in a picker's list (from config.toml, such as a resolution scale above 4) shows
 // as the closest one. An optional row is shown only where the host has it
-// (DAORecomp.Available.<key>: the cheats paused from exploration or combat).
+// (DAORecomp.Available.<key>: the cheats paused from exploration or combat). A
+// restart row asks the host whether its change waits for the next start
+// (DAORecomp.Pending.<key>: low latency's only on an NVIDIA GPU).
 var ROWS = [
     { header: "Display" },
     { key: "Fullscreen", label: "Display mode", values: [0, 1], labels: ["Windowed", "Fullscreen"] },
@@ -114,7 +116,7 @@ var ROWS = [
     { key: "FrameRate", label: "Frame rate", values: [30, 60, 90, 120, 144, 165, 240, 0],
       labels: ["30 fps (original)", "60 fps", "90 fps", "120 fps", "144 fps", "165 fps", "240 fps", "Unlimited"] },
     { key: "VSync", label: "Vertical sync", toggle: true },
-    { key: "LowLatency", label: "Low latency (AMD Anti-Lag 2)", values: [0, 1, 2],
+    { key: "LowLatency", label: "Low latency (Anti-Lag 2 / Reflex)", restart: true, values: [0, 1, 2],
       labels: ["Off", "On", "On + Boost"] },
     { header: "Upscaling" },
     { key: "TemporalUpscaler", label: "Temporal upscaling", restart: true, values: [0, 1, 2, 3, 4],

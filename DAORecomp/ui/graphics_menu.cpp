@@ -68,7 +68,7 @@ namespace dao::ui
             { "ResolutionScale", true },
             { "FrameRate", false },
             { "VSync", false },
-            { "LowLatency", false },
+            { "LowLatency", false }, // on an NVIDIA GPU, maybe: Pending asks
             { "TemporalUpscaler", true },
             { "TemporalSharpness", false },
             { "FrameGeneration", false },
@@ -383,7 +383,11 @@ namespace dao::ui
                 const auto key = FindKey(name.substr(kPendingPrefix.size()));
                 if (!key)
                     return std::nullopt;
-                return kKeys[size_t(*key)].restart && Value(s, *key) != Value(GetSettings(), *key) ? 1.0 : 0.0;
+                // (Low latency applies at once, but on an NVIDIA GPU only once Reflex was
+                // started with the game.)
+                const bool restart = kKeys[size_t(*key)].restart ||
+                                     (*key == Key::LowLatency && dao::gpu::XeniaLowLatencyNeedsRestart());
+                return restart && Value(s, *key) != Value(GetSettings(), *key) ? 1.0 : 0.0;
             }
             const auto key = FindKey(name);
             if (!key)

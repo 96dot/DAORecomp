@@ -21,6 +21,8 @@
 #include "xenia/base/math.h"
 #include "xenia/dao_live_settings.h"  // DAO
 #include "xenia/ui/d3d12/d3d12_provider.h"
+#include "xenia/ui/d3d12/dao_low_latency.h"  // DAO
+#include "xenia/ui/d3d12/dao_streamline.h"  // DAO
 #include "xenia/ui/d3d12/d3d12_util.h"
 #include "xenia/ui/surface_win.h"
 
@@ -331,8 +333,16 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
       // rate.
       swap_chain_desc.Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
     }
-    IDXGIFactory2* dxgi_factory = provider_.GetDXGIFactory();
-    ID3D12CommandQueue* direct_queue = provider_.GetDirectQueue();
+    // DAO: through NVIDIA Streamline's factory when it's on (its swap chain
+    // proxy hooks Present).
+    IDXGIFactory2* dxgi_factory = dao_streamline::SwapChainFactory();
+    if (!dxgi_factory) {
+      dxgi_factory = provider_.GetDXGIFactory();
+    }
+    ID3D12CommandQueue* direct_queue = dao_streamline::SwapChainQueue();
+    if (!direct_queue) {
+      direct_queue = provider_.GetDirectQueue();
+    }
     Microsoft::WRL::ComPtr<IDXGISwapChain1> swap_chain_1;
     switch (surface_type) {
 #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | WINAPI_PARTITION_GAMES)
@@ -1239,6 +1249,7 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
   // refresh, and RESTART discarding the first would leave the next refresh
   // without a new frame (below 60 fps shown on a 60 Hz display).
   const bool present_vsync = dao_live::Load(dao_live::values.present_vsync);
+  dao_low_latency::BeforePresent();  // DAO
   HRESULT present_result = paint_context_.swap_chain->Present(
       present_vsync ? 1 : 0,
       present_vsync ? 0
@@ -1246,6 +1257,7 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
                           (paint_context_.swap_chain_allows_tearing
                                ? DXGI_PRESENT_ALLOW_TEARING
                                : 0));
+  dao_low_latency::AfterPresent();  // DAO
   // Even if presentation has failed, work might have been enqueued anyway
   // internally before the failure according to Jesse Natalie from the DirectX
   // Discord server.

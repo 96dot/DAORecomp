@@ -17,6 +17,7 @@ CMAKE_DIR = TOOLS / "cmake"
 NINJA_DIR = TOOLS / "ninja"
 MINGIT_DIR = TOOLS / "mingit"
 XESS_DIR = TOOLS / "XeSS-SDK"
+STREAMLINE_DIR = TOOLS / "Streamline-SDK"
 LLVM_DIR = TOOLS / "llvm"
 XWIN_DIR = TOOLS / "xwin"
 WINSYSROOT = TOOLS / "winsysroot"
@@ -75,6 +76,13 @@ def ensure_build_tools(reporter):
 def ensure_xess(reporter):
     """Intel's XeSS SDK (headers and libxess.dll) in tools/XeSS-SDK."""
     _ensure_download(reporter, deps.XESS, XESS_DIR, deps.XESS_VERSION, "XeSS SDK", deps.XESS_KEEP)
+
+
+def ensure_streamline(reporter):
+    """NVIDIA's Streamline SDK (headers, its DLLs and NVIDIA's DLSS and Reflex DLLs) in
+    tools/Streamline-SDK, on any GPU (like XeSS's: the build is the same everywhere)."""
+    _ensure_download(reporter, deps.STREAMLINE, STREAMLINE_DIR, deps.STREAMLINE_VERSION, "Streamline SDK",
+                     deps.STREAMLINE_KEEP)
 
 
 def ensure_git(reporter):

@@ -305,9 +305,10 @@ namespace dao::launcher
             HelpText("Waits for the display's refresh: no tearing, and no more frames shown than the display "
                      "refreshes.");
             ComboRow("Low latency", &s.lowLatency, kLowLatencyNames, int(std::size(kLowLatencyNames)));
-            HelpText("AMD Radeon Anti-Lag 2 (a current AMD driver): each frame starts as late as it can still be on "
-                     "time, so the controller is read closer to when the frame is shown. Boost is the same as On "
-                     "on AMD GPUs. Off while frame generation is on (it would cost frames).");
+            HelpText("AMD Radeon Anti-Lag 2 (a current AMD driver) or NVIDIA Reflex (experimental): each frame "
+                     "starts as late as it can still be on time, so the controller is read closer to when the "
+                     "frame is shown. Boost is Reflex's (the same as On on AMD GPUs). Off while frame generation "
+                     "is on (it would cost frames).");
 
             Section("HDR (experimental)");
             ImGui::Checkbox("HDR output", &s.hdr);

@@ -1,7 +1,8 @@
 """Checks that the game's IDs, the title updates' hashes and the build tools' license
 link, kept in installer/deps.py for the installer, and the appended installer's
-magic (installer/pipeline.py), have the same values where the program keeps them;
-that the file and folder names both sides use are spelt the same; and that the
+magic (installer/pipeline.py) and Streamline's sl.interposer.dll hash, have the same
+values where the program keeps them; that the file and folder names both sides use are
+spelt the same, and the build copies the Streamline DLLs the installer installs; and that the
 in-game Graphics tab offers the fields of view, neural rendering options and motion blur
 and low latency levels settings.h does.
 
@@ -39,6 +40,7 @@ CHECKS = [
     ("DAORecomp/content/install.cpp", "kMediaId", f"0x{deps.GAME_MEDIA_ID:08X}"),
     ("DAORecomp/kernel/title_update.cpp", "kTu6XexpSha1", f'"{deps.TU6_XEXP_SHA1.upper()}"'),
     ("DAORecomp/kernel/title_update.cpp", "kTu7XexpSha1", f'"{deps.TU7_XEXP_SHA1.upper()}"'),
+    ("xenia/src/xenia/ui/d3d12/dao_streamline.cc", "kInterposerSha256", f'"{deps.STREAMLINE_INTERPOSER_SHA256}"'),
 ]
 
 # (file, a name the installer uses, as a string literal there)
@@ -52,6 +54,8 @@ NAMES = [
     ("DAORecomp/launcher/install_runner.cpp", "python.exe"),
     ("scripts/build_installer_engine.py", "python.exe"),
     ("installer/util.py", "DAORecomp-build"),
+    # The Streamline DLL the game loads, which the installer puts next to it.
+    ("xenia/src/xenia/ui/d3d12/dao_streamline.cc", deps.STREAMLINE_DLLS[0]),
     # Neural rendering's: the installer's layout, which the launcher and the game check.
     ("xenia/src/xenia/gpu/d3d12/dao_upscale_neural.cc", python_string("installer/neural.py", "FOLDER")),
     ("xenia/src/xenia/gpu/d3d12/dao_upscale_neural.cc", python_string("installer/neural.py", "CONFIG_FOLDER")),
@@ -112,8 +116,20 @@ def option_lists():
     return out
 
 
+def cmake_streamline_dlls():
+    """The Streamline DLLs DAORecomp/CMakeLists.txt copies next to the executable."""
+    found = re.search(r"foreach\(_dll ([^)]*)\)", read("DAORecomp/CMakeLists.txt"))
+    if not found:
+        sys.exit("DAORecomp/CMakeLists.txt: no foreach(_dll ...) (this script reads it)")
+    return tuple(found.group(1).split())
+
+
 def main():
     failed = 0
+    if cmake_streamline_dlls() != deps.STREAMLINE_DLLS:
+        print(f"DAORecomp/CMakeLists.txt: Streamline DLLs {cmake_streamline_dlls()}, "
+              f"installer/deps.py has {deps.STREAMLINE_DLLS}")
+        failed += 1
     steps, original, tab, tab_original = fov_lists()
     if steps != tab or original != tab_original:
         print(f"graphics_tab.as: FOV {tab} (original {tab_original}), settings.h has {steps} (original {original})")

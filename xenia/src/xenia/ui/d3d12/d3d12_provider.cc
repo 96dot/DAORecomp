@@ -18,6 +18,7 @@
 #include "xenia/ui/d3d12/d3d12_presenter.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
 #include "xenia/ui/d3d12/dao_low_latency.h"  // DAO
+#include "xenia/ui/d3d12/dao_streamline.h"   // DAO
 DEFINE_bool(d3d12_debug, false, "Enable Direct3D 12 and DXGI debug layer.",
             "D3D12");
 DEFINE_bool(d3d12_break_on_error, false,
@@ -80,6 +81,8 @@ std::unique_ptr<D3D12Provider> D3D12Provider::Create() {
 }
 
 D3D12Provider::~D3D12Provider() {
+  // DAO: Streamline stops before what it hooks is released.
+  dao_streamline::Shutdown();
   if (graphics_analysis_ != nullptr) {
     graphics_analysis_->Release();
   }
@@ -326,6 +329,10 @@ bool D3D12Provider::Initialize() {
     }
   }
 
+  // DAO: NVIDIA Streamline, when wanted on an NVIDIA GPU (or any, testing),
+  // starts before the device is created.
+  dao_streamline::Initialize(adapter_desc);
+
   // Create the Direct3D 12 device.
   ID3D12Device* device;
   if (FAILED(pfn_d3d12_create_device_(adapter, D3D_FEATURE_LEVEL_11_0,
@@ -382,6 +389,10 @@ bool D3D12Provider::Initialize() {
     d3d12_info_queue->Release();
   }
 
+  // DAO: Streamline gets the device; the queue and swap chain are then created
+  // through its proxies.
+  dao_streamline::SetDevice(dxgi_factory, device);
+
   // Create the command queue for graphics.
   D3D12_COMMAND_QUEUE_DESC queue_desc;
   queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -402,8 +413,8 @@ bool D3D12Provider::Initialize() {
   queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
   queue_desc.NodeMask = 0;
   ID3D12CommandQueue* direct_queue;
-  if (FAILED(device->CreateCommandQueue(&queue_desc,
-                                        IID_PPV_ARGS(&direct_queue)))) {
+  if (FAILED(dao_streamline::CreateDirectQueue(device, queue_desc,  // DAO
+                                               &direct_queue))) {
     bool queue_created = false;
     if (queue_desc.Priority == D3D12_COMMAND_QUEUE_PRIORITY_GLOBAL_REALTIME) {
       XELOGW(
@@ -411,8 +422,8 @@ bool D3D12Provider::Initialize() {
           "realtime priority, falling back to high priority, try launching "
           "Xenia as administrator");
       queue_desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
-      queue_created = SUCCEEDED(
-          device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&direct_queue)));
+      queue_created = SUCCEEDED(dao_streamline::CreateDirectQueue(  // DAO
+          device, queue_desc, &direct_queue));
     }
     if (!queue_created) {
       XELOGE("Failed to create a Direct3D 12 direct command queue");

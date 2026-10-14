@@ -12,6 +12,7 @@
 #include "xenia/gpu/d3d12/dao_frame_trace.h"
 #include "xenia/gpu/d3d12/dao_gpu_timing.h"
 #include "xenia/gpu/d3d12/dao_upscale.h"
+#include "xenia/ui/d3d12/dao_low_latency.h"
 #include <cstring>
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_order.h"
@@ -2266,6 +2267,9 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   SCOPE_profile_cpu_f("gpu");
   dao_trace::OnSwap(frontbuffer_ptr);
   EndZPDFrame();
+  // DAO: the frame this swap is (low latency's, at every swap).
+  const uint32_t dao_low_latency_frame =
+      ui::d3d12::dao_low_latency::SwapIssued();
 
   ui::Presenter* presenter = graphics_system_->presenter();
   if (!presenter) {
@@ -2318,6 +2322,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
       aspect.first, aspect.second,
       [this, &swap_texture_srv_desc, frontbuffer_format, swap_texture_resource,
        &swap_texture_desc, dao_timed, dao_hdr, dao_generated,
+       dao_low_latency_frame,
        dao_scrgb = presenter->IsHdrScrgb()](
           ui::Presenter::GuestOutputRefreshContext& context) -> bool {
         const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
@@ -2668,6 +2673,9 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
           dao_timing::GpuTiming::Get().EndFrame(*this);
         }
         EndSubmission(true);
+        // DAO: the frame's rendering is submitted, before the presenter has
+        // it (low latency's marker).
+        ui::d3d12::dao_low_latency::RenderingSubmitted(dao_low_latency_frame);
         return true;
       },
       dao_sharpened, dao_hdr, dao_generated != nullptr);
