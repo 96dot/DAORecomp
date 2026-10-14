@@ -2296,7 +2296,8 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   // is presented instead of the front buffer.
   const bool dao_timed = dao_timing::GpuTiming::Enabled();
   // FSR sharpens; at the front buffer's size it didn't scale the UI either,
-  // so the presenter's 1:1 sharpening would only add to it. XeSS doesn't, and
+  // so the presenter's 1:1 sharpening would only add to it. XeSS and DLSS
+  // don't, and
   // frames the upscaler only encoded aren't sharpened: the presenter's is
   // theirs.
   bool dao_sharpened = false;

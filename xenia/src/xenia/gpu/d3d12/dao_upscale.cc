@@ -1,6 +1,6 @@
-// DAO: temporal upscaling with AMD FSR 3.1 / FSR 4 or Intel XeSS - see
-// dao_upscale.h. This file: the frame (draws, resolves, the swap, the
-// composite).
+// DAO: temporal upscaling with AMD FSR 3.1 / FSR 4, Intel XeSS or NVIDIA
+// DLSS - see dao_upscale.h. This file: the frame (draws, resolves, the swap,
+// the composite).
 #include "xenia/gpu/d3d12/dao_upscale_impl.h"
 
 #include <algorithm>
@@ -13,11 +13,13 @@
 #include "xenia/gpu/d3d12/dao_gpu_timing.h"
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/ui/d3d12/d3d12_presenter.h"
+#include "xenia/ui/d3d12/dao_streamline.h"
 
 DEFINE_string(dao_temporal_upscaler, "off",
               "Temporal upscaling and anti-aliasing of 3D scenes: off, auto "
               "(FSR 4 where supported, otherwise FSR 3.1), fsr4, fsr3, xess "
-              "(Intel XeSS, FSR if it can't run).",
+              "(Intel XeSS, FSR if it can't run), dlss (NVIDIA DLSS through "
+              "Streamline, experimental; FSR if it can't run).",
               "GPU");
 DEFINE_double(dao_temporal_sharpness, 0.3,
               "Sharpening after temporal upscaling with FSR, 0 (off) to 1.",
@@ -295,8 +297,7 @@ bool DaoUpscalerImpl::Initialize() {
   if (!motion_available_) {
     XELOGW("Upscaler: motion vectors unavailable");
   }
-  backend_fsr_ = cvars::dao_temporal_upscaler != "xess";
-  backend_ = backend_fsr_ ? CreateFsrBackend(*this) : CreateXessBackend(*this);
+  backend_ = CreateBackend();
   jitter_active_ = cvars::dao_temporal_upscaler != "off";
   true_hdr_ = WantsTrueHdr();
   if (jitter_active_) {
@@ -691,6 +692,23 @@ void DaoUpscalerImpl::OnResolve(const draw_util::ResolveInfo& resolve_info) {
       msaa ? copy_depth_ms_pipeline_.Get() : copy_depth_pipeline_.Get(),
       constants);
   ++depth_tiles_;
+}
+
+std::unique_ptr<UpscalerBackend> DaoUpscalerImpl::CreateBackend() {
+  backend_fsr_ = false;
+  if (cvars::dao_temporal_upscaler == "xess") {
+    return CreateXessBackend(*this);
+  }
+  if (cvars::dao_temporal_upscaler == "dlss") {
+    if (ui::d3d12::dao_streamline::DlssSupported()) {
+      return CreateDlssBackend(*this);
+    }
+    XELOGW("DLSS: unavailable (it needs an NVIDIA RTX GPU and Streamline's "
+           "DLLs next to the game; on an NVIDIA GPU, the Streamline lines "
+           "above say why): FSR upscales instead");
+  }
+  backend_fsr_ = true;
+  return CreateFsrBackend(*this);
 }
 
 bool DaoUpscalerImpl::EnsureBackendContext(uint32_t render_width,

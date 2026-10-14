@@ -45,6 +45,7 @@ namespace dao
             case TemporalUpscaler::Fsr4: return "fsr4";
             case TemporalUpscaler::Fsr3: return "fsr3";
             case TemporalUpscaler::Xess: return "xess";
+            case TemporalUpscaler::Dlss: return "dlss";
             default: return "auto";
             }
         }
@@ -185,6 +186,7 @@ namespace dao
             : temporal == "fsr4"               ? TemporalUpscaler::Fsr4
             : temporal == "fsr3"               ? TemporalUpscaler::Fsr3
             : temporal == "xess"               ? TemporalUpscaler::Xess
+            : temporal == "dlss"               ? TemporalUpscaler::Dlss
                                                : TemporalUpscaler::Auto;
         s.temporalSharpness = video["temporal_sharpness"].value_or(s.temporalSharpness);
         s.frameGeneration = video["frame_generation"].value_or(s.frameGeneration);
@@ -278,7 +280,8 @@ upscaler = "{}"
 sharpness = {}
 # Temporal upscaling and anti-aliasing of the 3D scenes to the window size, with motion
 # vectors (the UI is scaled by the upscaler above): "off", "auto" (FSR 4 where supported,
-# otherwise FSR 3.1), "fsr4", "fsr3", "xess" (Intel XeSS-SR; FSR where it can't run).
+# otherwise FSR 3.1), "fsr4", "fsr3", "xess" (Intel XeSS-SR), "dlss" (NVIDIA DLSS 4.5,
+# experimental); FSR where XeSS-SR or DLSS can't run.
 # Sharpening 0..1 (FSR only).
 temporal_upscaler = "{}"
 temporal_sharpness = {}

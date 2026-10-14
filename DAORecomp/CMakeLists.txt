@@ -126,12 +126,13 @@ target_precompile_headers(DAORecomp PRIVATE stdafx.h)
 # The temporal upscalers' and frame generation's DLLs go next to the executable;
 # they're loaded only when enabled: AMD FidelityFX's signed loader, upscaler (FSR 3.1 /
 # FSR 4) and frame generation (FSR 3.1), Intel's libxess.dll (XeSS), and NVIDIA's
-# Streamline with its plug-ins for Reflex (installer/deps.py's STREAMLINE_DLLS, which
-# scripts/check_constants.py checks against this list). (Their own rule, so a missing or
-# changed DLL is copied without relinking the exe.)
+# Streamline with its plug-ins for Reflex and DLSS, and DLSS's model library (nvngx_dlss.dll)
+# (installer/deps.py's
+# STREAMLINE_DLLS, which scripts/check_constants.py checks against this list). (Their own
+# rule, so a missing or changed DLL is copied without relinking the exe.)
 set(_upscaler_dlls)
 set(_streamline_dlls)
-foreach(_dll sl.interposer.dll sl.common.dll sl.reflex.dll sl.pcl.dll)
+foreach(_dll sl.interposer.dll sl.common.dll sl.reflex.dll sl.pcl.dll sl.dlss.dll nvngx_dlss.dll)
     list(APPEND _streamline_dlls ${CMAKE_SOURCE_DIR}/tools/Streamline-SDK/bin/x64/${_dll})
 endforeach()
 foreach(_src

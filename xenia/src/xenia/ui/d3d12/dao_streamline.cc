@@ -18,6 +18,7 @@
 #include "sl.h"
 
 DECLARE_int32(dao_low_latency);
+DECLARE_string(dao_temporal_upscaler);
 
 namespace xe {
 namespace ui {
@@ -42,6 +43,8 @@ constexpr char kProjectId[] = "9b94314d-6da2-4822-a757-c0426536dca3";
 HMODULE s_module = nullptr;
 bool s_active = false;
 bool s_starts_after_restart = false;
+bool s_reflex = false;
+bool s_dlss = false;
 // Its proxies, a reference each kept for its lifetime (never released: the
 // process ends without).
 ID3D12Device* s_proxy_device = nullptr;
@@ -137,6 +140,8 @@ bool Import(Function*& function, const char* name) {
 void Stop() {
   s_shutdown();
   s_active = false;
+  s_reflex = false;
+  s_dlss = false;
   s_proxy_device = nullptr;
   s_proxy_factory = nullptr;
   s_proxy_queue = nullptr;
@@ -184,7 +189,7 @@ void Initialize(const DXGI_ADAPTER_DESC& adapter) {
                                     FILE_ATTRIBUTE_NORMAL, nullptr)};
   if (file.handle == INVALID_HANDLE_VALUE) {
     XELOGW("Streamline: no sl.interposer.dll next to the game, so no NVIDIA "
-           "Reflex");
+           "Reflex or DLSS");
     return;
   }
   if (FileSha256(file.handle, kInterposerMaxSize) != kInterposerSha256) {
@@ -192,9 +197,12 @@ void Initialize(const DXGI_ADAPTER_DESC& adapter) {
            "there, so it isn't loaded (install again to restore it)");
     return;
   }
-  // Only what needs it: NVIDIA Reflex (low latency). Turned on in the game,
-  // it starts with the next start.
-  if (cvars::dao_low_latency == 0) {
+  // Only what needs it: NVIDIA Reflex (low latency) or DLSS (the temporal
+  // upscaler, chosen for the next start; only on an NVIDIA GPU, as its license
+  // has it). Low latency turned on in the game starts it with the next start.
+  const bool reflex = cvars::dao_low_latency != 0;
+  const bool dlss = nvidia && cvars::dao_temporal_upscaler == "dlss";
+  if (!reflex && !dlss) {
     s_starts_after_restart = true;
     return;
   }
@@ -222,7 +230,14 @@ void Initialize(const DXGI_ADAPTER_DESC& adapter) {
 
   const std::wstring plugins = directory.wstring();
   const wchar_t* plugin_paths[] = {plugins.c_str()};
-  const sl::Feature features[] = {sl::kFeatureReflex, sl::kFeaturePCL};
+  // Reflex's plug-ins whatever's on (NVIDIA asks for its markers with any
+  // feature; with low latency off it doesn't wait); DLSS's only for it
+  // (loading it takes time at start).
+  sl::Feature features[3] = {sl::kFeatureReflex, sl::kFeaturePCL};
+  uint32_t feature_count = 2;
+  if (dlss) {
+    features[feature_count++] = sl::kFeatureDLSS;
+  }
   sl::Preferences preferences;
   preferences.showConsole = false;
   preferences.logLevel = sl::LogLevel::eDefault;
@@ -236,7 +251,7 @@ void Initialize(const DXGI_ADAPTER_DESC& adapter) {
   preferences.flags = sl::PreferenceFlags::eDisableCLStateTracking |
                       sl::PreferenceFlags::eUseManualHooking;
   preferences.featuresToLoad = features;
-  preferences.numFeaturesToLoad = uint32_t(std::size(features));
+  preferences.numFeaturesToLoad = feature_count;
   preferences.engine = sl::EngineType::eCustom;
   preferences.engineVersion = "1.0";
   preferences.projectId = kProjectId;
@@ -254,18 +269,38 @@ void Initialize(const DXGI_ADAPTER_DESC& adapter) {
   sl::AdapterInfo adapter_info;
   adapter_info.deviceLUID = reinterpret_cast<uint8_t*>(&luid);
   adapter_info.deviceLUIDSizeInBytes = sizeof(luid);
-  const sl::Result reflex =
+  const sl::Result reflex_supported =
       s_is_feature_supported(sl::kFeatureReflex, adapter_info);
-  if (reflex != sl::Result::eOk) {
+  s_reflex = reflex_supported == sl::Result::eOk;
+  if (!s_reflex) {
     XELOGW("Streamline: NVIDIA Reflex isn't supported here ({})",
-           uint32_t(reflex));
+           uint32_t(reflex_supported));
+  }
+  if (dlss) {
+    const sl::Result dlss_supported =
+        s_is_feature_supported(sl::kFeatureDLSS, adapter_info);
+    s_dlss = dlss_supported == sl::Result::eOk;
+    if (!s_dlss) {
+      XELOGW("Streamline: NVIDIA DLSS isn't supported here ({})",
+             uint32_t(dlss_supported));
+    }
+  }
+  // Nothing wanted that it has: not its proxies and markers every frame for
+  // nothing.
+  if (!(reflex && s_reflex) && !s_dlss) {
+    // (With low latency off, turning it on would start it next time.)
+    s_starts_after_restart = !reflex && s_reflex;
     Stop();
     // Nothing of it is in use yet.
     FreeLibrary(s_module);
     s_module = nullptr;
     return;
   }
-  XELOGI("Streamline: started, for NVIDIA Reflex");
+  XELOGI("Streamline: started (NVIDIA Reflex {}, DLSS {})",
+         s_reflex ? "supported" : "unsupported",
+         s_dlss                                   ? "on"
+         : cvars::dao_temporal_upscaler == "dlss" ? "unsupported"
+                                                  : "not chosen");
 }
 
 void SetDevice(IDXGIFactory2* factory, ID3D12Device* device) {
@@ -334,6 +369,15 @@ void Shutdown() {
 bool Active() { return s_active; }
 
 bool StartsAfterRestart() { return s_starts_after_restart; }
+
+bool ReflexSupported() { return s_reflex; }
+
+bool DlssSupported() { return s_dlss; }
+
+void* CoreFunction(const char* name) {
+  return s_active ? reinterpret_cast<void*>(GetProcAddress(s_module, name))
+                  : nullptr;
+}
 
 void* FeatureFunction(uint32_t feature, const char* name) {
   void* function = nullptr;

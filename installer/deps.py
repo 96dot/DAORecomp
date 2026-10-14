@@ -167,9 +167,11 @@ STREAMLINE = Download("https://github.com/NVIDIA-RTX/Streamline/releases/downloa
                       "92c4d954631a1710da86ca3fa8d5034f2b9503838c95fc4ae977ae149319781b", 275994000)
 # sl.interposer.dll's SHA-256: the game loads only this one (it checks its plug-ins').
 STREAMLINE_INTERPOSER_SHA256 = "8c87c9499461da561edd529aa9bf7831d67d7b94ebb1c1a5ed54ef4934e1ea4c"
-# The DLLs that go next to DAORecomp.exe (DAORecomp/CMakeLists.txt has the same list): Reflex's.
-STREAMLINE_DLLS = ("sl.interposer.dll", "sl.common.dll", "sl.reflex.dll", "sl.pcl.dll")
-# DLSS's, kept from the archive for the game's DLSS (not used yet).
-STREAMLINE_DLSS_DLLS = ("sl.dlss.dll", "sl.dlss_g.dll", "nvngx_dlss.dll", "nvngx_dlssg.dll")
+# The DLLs that go next to DAORecomp.exe (DAORecomp/CMakeLists.txt has the same list): Reflex's
+# and DLSS Super Resolution's.
+STREAMLINE_DLLS = ("sl.interposer.dll", "sl.common.dll", "sl.reflex.dll", "sl.pcl.dll", "sl.dlss.dll",
+                   "nvngx_dlss.dll")
+# DLSS Frame Generation's, kept from the archive for the game's to come (not used yet).
+STREAMLINE_DLSS_DLLS = ("sl.dlss_g.dll", "nvngx_dlssg.dll")
 STREAMLINE_KEEP = ("license.txt", "include", "bin/x64/nvngx_dlss.license.txt", "bin/x64/reflex.license.txt") + tuple(
     f"bin/x64/{name}" for name in STREAMLINE_DLLS + STREAMLINE_DLSS_DLLS)

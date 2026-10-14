@@ -1,6 +1,7 @@
 // DAO: temporal upscaling of 3D scenes with AMD FSR 3.1 / FSR 4, through the
 // FidelityFX API (amd_fidelityfx_loader_dx12.dll and
-// amd_fidelityfx_upscaler_dx12.dll), or Intel XeSS-SR (libxess.dll): the
+// amd_fidelityfx_upscaler_dx12.dll), Intel XeSS-SR (libxess.dll), or NVIDIA
+// DLSS Super Resolution through Streamline (sl.*.dll, nvngx_dlss.dll): the
 // DLLs next to the executable, loaded on demand. The upscalers are the
 // backends of dao_upscale_impl.h's UpscalerBackend. Frame generation is FSR
 // 3.1's (amd_fidelityfx_framegeneration_dx12.dll), whichever upscaled.

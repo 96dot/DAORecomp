@@ -27,12 +27,13 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
   blur, frame generation, HDR paper white and peak), as atomics the GPU, presenter and render
   threads read instead of their cvars (also in the upstream files `d3d12_texture_cache.cc` and
   `d3d12_presenter.cc`).
-- `gpu/d3d12/dao_upscale.*`: temporal upscaling (FidelityFX or XeSS), motion vectors,
+- `gpu/d3d12/dao_upscale.*`: temporal upscaling (FidelityFX, XeSS or DLSS), motion vectors,
   motion blur: `dao_upscale.h` is its interface, `dao_upscale_impl.h` the class its
   files share and the backends' interface (`UpscalerBackend`); `dao_upscale.cc` the
   frame (draws, resolves, the swap, the composite), the backends
-  `dao_upscale_fsr.cc` (FidelityFX) and `dao_upscale_xess.cc` (XeSS, falling back to
-  FSR), `dao_upscale_motion.cc` the motion vectors,
+  `dao_upscale_fsr.cc` (FidelityFX), `dao_upscale_xess.cc` (XeSS) and
+  `dao_upscale_dlss.cc` (DLSS, through `ui/d3d12/dao_streamline.*`; XeSS and DLSS fall
+  back to FSR), `dao_upscale_motion.cc` the motion vectors,
   `dao_upscale_hdr.cc` true HDR, `dao_motion_blur.cc` motion blur,
   `dao_upscale_fg.cc` frame generation (FSR 3.1).
 - `ui/dao_frame_pacer.cc`: frame generation's presentation: the presenter's
@@ -43,8 +44,10 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
   markers of each frame's stages (the swap, the command processor's issue and submission
   of it, the presenter's present).
 - `ui/d3d12/dao_streamline.*`: NVIDIA Streamline (headers in `tools/Streamline-SDK`, its
-  DLLs loaded at run time), with manual hooking: the provider starts it before the
-  device on an NVIDIA GPU (any GPU with `DAO_STREAMLINE_ANY_GPU=1`) and creates the
+  DLLs loaded at run time) for Reflex and DLSS, with manual hooking: the provider starts
+  it before the device on an NVIDIA GPU (any GPU with `DAO_STREAMLINE_ANY_GPU=1`, Reflex
+  only) when low latency is on or DLSS chosen, and stops it if neither is supported, and
+  creates the
   direct queue through its device proxy (keeping the native queue), and the presenter
   creates the swap chain through its factory and queue proxies.
 - `gpu/d3d12/dao_frame_trace.h`, `gpu/d3d12/dao_gpu_timing.h`: diagnostics.

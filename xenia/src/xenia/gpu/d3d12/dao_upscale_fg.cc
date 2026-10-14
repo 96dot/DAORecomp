@@ -232,7 +232,8 @@ bool DaoUpscalerImpl::RecordFrameGeneration(const Texture& scene,
     dispatch.minMaxLuminance[1] =
         80.0f * dao_live::HdrPeakRatio(PaperWhiteNits());
   } else if (backend_->LinearSdrColor()) {
-    // SDR linearized for the upscaler (XeSS): scRGB up to SDR white.
+    // SDR linearized for the upscaler (XeSS, not DLSS): scRGB up to SDR
+    // white.
     dispatch.backbufferTransferFunction =
         FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SCRGB;
     dispatch.minMaxLuminance[0] = 0.0f;

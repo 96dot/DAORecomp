@@ -5,9 +5,9 @@
 namespace dao
 {
     enum class Upscaler { Bilinear, Cas, Fsr };
-    // Temporal upscaling and anti-aliasing of the 3D scenes (AMD FidelityFX API, or
-    // Intel XeSS-SR, which falls back to FSR where it can't run).
-    enum class TemporalUpscaler { Off, Auto, Fsr4, Fsr3, Xess };
+    // Temporal upscaling and anti-aliasing of the 3D scenes (AMD FidelityFX API, Intel
+    // XeSS-SR or NVIDIA DLSS, experimental; those two fall back to FSR where they can't run).
+    enum class TemporalUpscaler { Off, Auto, Fsr4, Fsr3, Xess, Dlss };
     // Settings::fov and conversationFov: the game's own field of view (60 degrees
     // vertical, 91.5 across at 16:9: 91 stands for it and leaves it as it is), and
     // the limits.
@@ -57,7 +57,7 @@ namespace dao
         // Upscales the 3D scenes to the window size with motion vectors (the UI
         // is scaled separately); Auto picks FSR 4 where supported, else FSR 3.1.
         TemporalUpscaler temporalUpscaler = TemporalUpscaler::Auto;
-        float temporalSharpness = 0.3f; // 0..1, FSR's (XeSS doesn't sharpen)
+        float temporalSharpness = 0.3f; // 0..1, FSR's (XeSS and DLSS don't sharpen)
         // Frame generation (FSR 3.1): with temporal upscaling, a frame generated
         // between each two of the 3D scenes, shown half a frame apart: up to twice the
         // frames on the display (only real ones while it can't show that many), half a
@@ -130,6 +130,9 @@ namespace dao
     // Low latency's highest level (Settings::lowLatency); the in-game Graphics tab and the
     // launcher list one name per level.
     constexpr int kMaxLowLatency = 2;
+    // The last temporal upscaler (Settings::temporalUpscaler); the in-game Graphics tab and the
+    // launcher list one name per upscaler.
+    constexpr int kMaxTemporalUpscaler = int(TemporalUpscaler::Dlss);
     // Neural rendering's network sizes (Settings::neuralNetwork), passes and styles.
     constexpr int kNeuralNetworks[] = { 0, 1080, 900, 720 };
     constexpr int kMaxNeuralPasses = 3;

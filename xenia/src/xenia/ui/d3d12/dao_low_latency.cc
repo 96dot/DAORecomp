@@ -66,6 +66,7 @@ constexpr uint32_t kSwaps = 8;
 std::atomic<uint64_t> s_swap_frames[kSwaps] = {};
 uint32_t s_swaps = 0;         // The render thread's.
 uint32_t s_swaps_issued = 0;  // The GPU thread's.
+uint32_t s_issued_frame = 0;  // The GPU thread's.
 
 // Low latency's level this frame: the setting's, or off with frame
 // generation (its presents are our pacer's; Anti-Lag 2 stalls with it).
@@ -76,9 +77,7 @@ int32_t Level() {
 }
 
 void Mark(sl::PCLMarker marker, uint32_t frame) {
-  sl::FrameToken* token =
-      s_tokens[frame % sl::MAX_FRAMES_IN_FLIGHT].load(std::memory_order_acquire);
-  if (token && uint32_t(*token) == frame) {
+  if (auto* token = static_cast<sl::FrameToken*>(FrameToken(frame))) {
     s_pcl_set_marker(marker, *token);
   }
 }
@@ -96,7 +95,7 @@ uint32_t Advance(const std::atomic<uint32_t>& before,
 }
 
 void InitializeReflex() {
-  if (!dao_streamline::Active()) {
+  if (!dao_streamline::ReflexSupported()) {
     return;
   }
   s_reflex_set_options = reinterpret_cast<PFun_slReflexSetOptions*>(
@@ -114,8 +113,10 @@ void InitializeReflex() {
   if (!s_reflex_set_options || !s_reflex_sleep || !get_state ||
       !s_pcl_set_marker || s_reflex_set_options(options) != sl::Result::eOk) {
     XELOGW("Low latency: NVIDIA Reflex couldn't be set up");
-    // Nothing else uses Streamline: not its swap chain for nothing.
-    dao_streamline::Shutdown();
+    // Unless DLSS uses Streamline: not its swap chain for nothing.
+    if (!dao_streamline::DlssSupported()) {
+      dao_streamline::Shutdown();
+    }
     return;
   }
   s_reflex_mode = sl::ReflexMode::eOff;
@@ -247,7 +248,20 @@ uint32_t SwapIssued() {
   ++s_swaps_issued;
   const uint64_t swap = s_swap_frames[s_swaps_issued % kSwaps].load(
       std::memory_order_acquire);
-  return uint32_t(swap >> 32) == s_swaps_issued ? uint32_t(swap) : 0;
+  s_issued_frame =
+      uint32_t(swap >> 32) == s_swaps_issued ? uint32_t(swap) : 0;
+  return s_issued_frame;
+}
+
+uint32_t IssuedFrame() { return s_issued_frame; }
+
+void* FrameToken(uint32_t frame) {
+  if (!s_reflex || !frame) {
+    return nullptr;
+  }
+  sl::FrameToken* token =
+      s_tokens[frame % sl::MAX_FRAMES_IN_FLIGHT].load(std::memory_order_acquire);
+  return token && uint32_t(*token) == frame ? token : nullptr;
 }
 
 void RenderingSubmitted(uint32_t frame) {

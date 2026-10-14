@@ -1,6 +1,6 @@
 // DAO: NVIDIA Streamline (tools/Streamline-SDK, its DLLs next to the
 // executable): the way to NVIDIA's Reflex and DLSS. Loaded only on an NVIDIA
-// GPU and only when low latency is on as the game starts, from the
+// GPU and only when low latency or DLSS is on as the game starts, from the
 // executable's folder, its sl.interposer.dll exactly the installer's (its
 // SHA-256 pinned). Manual hooking: the device's direct queue and the swap
 // chain are created through Streamline's proxies (it hooks Present through
@@ -42,9 +42,18 @@ void Shutdown();
 
 // Streamline is running on the device.
 bool Active();
-// Streamline wasn't started only because low latency was off: turned on, it
-// starts with the next start (an NVIDIA GPU, sl.interposer.dll checked).
+// Streamline isn't running only because both were off: low latency, and DLSS
+// (not chosen, or unsupported). Low latency turned on starts it with the next
+// start (an NVIDIA GPU, sl.interposer.dll checked).
 bool StartsAfterRestart();
+// Streamline is running and the GPU supports Reflex.
+bool ReflexSupported();
+// DLSS Super Resolution was loaded (the temporal upscaler chosen as the game
+// started) and the GPU supports it.
+bool DlssSupported();
+// A function of Streamline's core API (sl_core_api.h, such as
+// slEvaluateFeature), or nullptr if it isn't running.
+void* CoreFunction(const char* name);
 
 // A feature's function (slGetFeatureFunction), or nullptr; feature is an
 // sl::Feature.

@@ -16,6 +16,7 @@ namespace dao::launcher
             {
             case TemporalUpscaler::Off: return "no temporal upscaling";
             case TemporalUpscaler::Xess: return "XeSS-SR";
+            case TemporalUpscaler::Dlss: return "DLSS 4.5";
             default: return "temporal FSR";
             }
         }

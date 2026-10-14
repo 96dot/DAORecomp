@@ -39,6 +39,13 @@ void FrameSwapped();
 // The GPU thread, as it issues each swap: the swap's frame (0 for none), for
 // RenderingSubmitted.
 uint32_t SwapIssued();
+// The GPU thread, until the next swap is issued: the frame of the swap
+// SwapIssued last returned (0 for none), for Streamline's other features.
+uint32_t IssuedFrame();
+// The token (sl::FrameToken*) Reflex has for a frame, while it's still that
+// frame's, or nullptr: Streamline keeps only so many, so its other features
+// take this one rather than another of the same frame.
+void* FrameToken(uint32_t frame);
 // The GPU thread, once a swap's frame's commands are submitted (before the
 // presenter has it).
 void RenderingSubmitted(uint32_t frame);

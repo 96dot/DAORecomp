@@ -23,8 +23,8 @@ namespace dao::launcher
         constexpr const char* kUpscalers[] = { "Bilinear", "FidelityFX CAS", "FidelityFX FSR 1" };
         // In TemporalUpscaler's order.
         constexpr const char* kTemporalUpscalers[] = { "Off", "Auto (FSR 4 where supported, else FSR 3.1)",
-            "FidelityFX FSR 4", "FidelityFX FSR 3.1", "Intel XeSS-SR" };
-        static_assert(std::size(kTemporalUpscalers) == size_t(TemporalUpscaler::Xess) + 1);
+            "FidelityFX FSR 4", "FidelityFX FSR 3.1", "Intel XeSS-SR", "NVIDIA DLSS 4.5 (experimental)" };
+        static_assert(std::size(kTemporalUpscalers) == size_t(kMaxTemporalUpscaler) + 1);
         // The names of kAnisotropicLevels.
         constexpr const char* kAnisotropicNames[] = { "Game default", "2x", "4x", "8x", "16x" };
         static_assert(std::size(kAnisotropicNames) == std::size(kAnisotropicLevels));
@@ -208,15 +208,17 @@ namespace dao::launcher
             int temporal = int(s.temporalUpscaler);
             if (ComboRow("Temporal upscaling", &temporal, kTemporalUpscalers, int(std::size(kTemporalUpscalers))))
                 s.temporalUpscaler = TemporalUpscaler(temporal);
-            // XeSS doesn't sharpen.
-            ImGui::BeginDisabled(
-                s.temporalUpscaler == TemporalUpscaler::Off || s.temporalUpscaler == TemporalUpscaler::Xess);
+            // XeSS and DLSS don't sharpen.
+            ImGui::BeginDisabled(s.temporalUpscaler == TemporalUpscaler::Off ||
+                                 s.temporalUpscaler == TemporalUpscaler::Xess ||
+                                 s.temporalUpscaler == TemporalUpscaler::Dlss);
             SliderRow("Temporal sharpening", &s.temporalSharpness, 0.0f, 1.0f, "%.2f");
             ImGui::EndDisabled();
             HelpText("Upscales and anti-aliases the 3D scenes to the window size using motion vectors; menus and "
                      "the UI use the upscaler below. In a window no larger than the rendering resolution, it only "
-                     "anti-aliases. XeSS-SR runs on most GPUs of recent years, best on Intel Arc; where it "
-                     "can't, FSR is used. XeSS-SR doesn't sharpen: the output sharpening below applies to it. "
+                     "anti-aliases. XeSS-SR runs on most GPUs of recent years, best on Intel Arc; DLSS 4.5 "
+                     "(experimental, untested) on NVIDIA RTX GPUs; where they can't, FSR is used. XeSS-SR and "
+                     "DLSS don't sharpen; the Upscaler row's sharpness (FSR 1 or CAS) still applies to them. "
                      "Off is fastest on a Steam Deck.");
             ImGui::Spacing();
             ImGui::BeginDisabled(s.temporalUpscaler == TemporalUpscaler::Off);

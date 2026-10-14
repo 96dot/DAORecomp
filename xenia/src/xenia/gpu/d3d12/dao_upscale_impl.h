@@ -1,7 +1,8 @@
 // DAO: the temporal upscaler's internals (see dao_upscale.h), shared by its
 // files: dao_upscale.cc (the frame: draws, resolves, the swap and the
-// composite), the backends dao_upscale_fsr.cc (FidelityFX) and
-// dao_upscale_xess.cc (XeSS), dao_upscale_fg.cc (frame generation),
+// composite), the backends dao_upscale_fsr.cc (FidelityFX),
+// dao_upscale_xess.cc (XeSS) and dao_upscale_dlss.cc (DLSS),
+// dao_upscale_fg.cc (frame generation),
 // dao_upscale_motion.cc (motion vectors), dao_upscale_hdr.cc (true HDR) and
 // dao_motion_blur.cc.
 #pragma once
@@ -149,7 +150,8 @@ inline float OutputGamma() {
 // display_width: 8 per render pixel's area in display pixels (at least 8), so
 // that every display pixel gets samples.
 uint32_t JitterPhaseCount(uint32_t render_width, uint32_t display_width);
-// A jitter sample offset, -0.5 to 0.5 render pixels: Halton (2, 3).
+// A jitter sample offset, -0.5 to 0.5 render pixels: Halton (2, 3) (XeSS's
+// and DLSS's; FSR has its own).
 void HaltonJitter(uint32_t index, float& x, float& y);
 
 }  // namespace dao_upscale
@@ -183,9 +185,10 @@ struct FfxApi {
   std::string proxy;
 };
 
-// A temporal upscaler: AMD FSR 3.1 / 4 (dao_upscale_fsr.cc) or Intel XeSS
+// A temporal upscaler: AMD FSR 3.1 / 4 (dao_upscale_fsr.cc), Intel XeSS
 // (dao_upscale_xess.cc), its library loaded from next to the executable when
-// first needed. Used on the command processor's thread only.
+// first needed, or NVIDIA DLSS (dao_upscale_dlss.cc), through Streamline,
+// started with the device. Used on the command processor's thread only.
 class UpscalerBackend {
  public:
   // What the context is for.
@@ -266,6 +269,7 @@ class UpscalerBackend {
 
 std::unique_ptr<UpscalerBackend> CreateFsrBackend(DaoUpscalerImpl& upscaler);
 std::unique_ptr<UpscalerBackend> CreateXessBackend(DaoUpscalerImpl& upscaler);
+std::unique_ptr<UpscalerBackend> CreateDlssBackend(DaoUpscalerImpl& upscaler);
 
 // Neural rendering of the 3D scene before the upscaler (dao_upscale_neural.cc):
 // lmxxf's HIP port of DLSS 5's neural rendering (AMD RDNA 4), its runtime
@@ -529,8 +533,11 @@ class DaoUpscalerImpl {
     std::atomic<uint32_t> status{kPending};
   };
 
+  // The backend chosen with dao_temporal_upscaler (FSR if DLSS was chosen
+  // but Streamline doesn't have it), setting backend_fsr_.
+  std::unique_ptr<UpscalerBackend> CreateBackend();
   // The context of the backend chosen with dao_temporal_upscaler, or of FSR
-  // if XeSS can't be used; false if no backend can upscale the frame.
+  // if XeSS or DLSS can't be used; false if no backend can upscale the frame.
   bool EnsureBackendContext(uint32_t render_width, uint32_t render_height,
                             uint32_t display_width, uint32_t display_height);
   bool EnsureTexture(Texture& texture, DXGI_FORMAT format, uint32_t width,

@@ -4,9 +4,10 @@ A static recompilation of the Xbox 360 version of *Dragon Age: Origins* into a n
 x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
 
 - rendering at up to 4K (and higher), with FSR 1 / CAS scaling of the whole image
-- temporal upscaling and anti-aliasing with AMD FSR 4 (RDNA 4), FSR 3.1 or Intel
-  XeSS-SR, using motion vectors generated for the game's 3D scenes, which also drive
-  optional motion blur (of the camera, characters and objects), and optional FSR 3.1
+- temporal upscaling and anti-aliasing with AMD FSR 4 (RDNA 4), FSR 3.1, Intel XeSS-SR
+  or NVIDIA DLSS 4.5 (RTX GPUs, experimental), using motion vectors generated for the
+  game's 3D scenes, which also drive optional motion blur (of the camera, characters and
+  objects), and optional FSR 3.1
   frame generation (a frame between each two, for a display at twice the frame rate;
   only real frames are shown on one that can't keep up)
 - neural rendering on AMD RDNA 4 (experimental): lmxxf's open-source port of DLSS 5's
@@ -147,7 +148,7 @@ Everything is pinned to exact versions and checked (`installer/deps.py`):
   DLLs), the Intel XeSS SDK (headers, `libxess.dll` and its license notices; the
   release archive, of which only those are kept), and NVIDIA's Streamline SDK 2.14.1
   (of its release archive, only its headers, its DLLs and NVIDIA's DLSS 310.9 and
-  Reflex DLLs with their licenses are kept; only Reflex's are installed for now).
+  Reflex DLLs with their licenses are kept; DLSS Frame Generation's aren't installed yet).
 - LLVM/Clang 22 (or your system's LLVM 18+ if it has `clang-cl`, `lld-link`, `llvm-lib`
   and `llvm-rc`), CMake and Ninja, and on Windows without git, MinGit.
 - The Microsoft C/C++ runtime headers/libraries and the Windows SDK, fetched by
@@ -204,7 +205,7 @@ read with the game closed.)
   Linux support is untested so far. The program needs Wine's support for placeholder
   memory views (`VirtualAlloc2`/`MapViewOfFile3`) and Direct3D 12 through vkd3d-proton.
   FSR 4 needs AMD's Windows driver and is unlikely to work under Proton; choose FSR 3.1
-  in the launcher (XeSS-SR is untested there).
+  in the launcher (XeSS-SR and DLSS are untested there).
 
 Most graphics settings can also be changed in the game: *Options → Graphics*. Most
 apply at once; when you leave the menu, the game lists the ones that take effect
@@ -225,12 +226,18 @@ Boost* is Reflex's boost (more GPU clock for lower latency, at some power); on A
 it's the same as *On*. On other GPUs it does nothing. `userdata/xenia.log` says whether
 it's available and on.
 
-Reflex is experimental: it's built on NVIDIA's Streamline (its DLLs, which the installer
-downloads, next to `DAORecomp.exe`) without an NVIDIA GPU to test on. Streamline only
-starts on an NVIDIA GPU, and only when *Low latency* is on as the game starts, so
-turning it on from *Off* there takes effect at the next start (the game's Graphics tab
-says so; if Streamline can't start at all, `userdata/xenia.log` says why). The game only loads Streamline's `sl.interposer.dll` if it's exactly the
-installer's, and Streamline downloads nothing while the game runs.
+Reflex and DLSS are experimental: they're built on NVIDIA's Streamline (its DLLs and
+DLSS 4.5's, `nvngx_dlss.dll` version 310.9, which the installer downloads, next to
+`DAORecomp.exe`) without an NVIDIA GPU to test on. Streamline only starts on an NVIDIA
+GPU, and only when *Low latency* is on or DLSS is the temporal upscaler as the game
+starts; turning low latency on from *Off* there otherwise takes effect at the next start,
+as does choosing DLSS (the game's Graphics tab says so; if Streamline can't start at all,
+`userdata/xenia.log` says why). DLSS uses the presets NVIDIA recommends for each mode
+(K, and the second generation models M and L for Performance and Ultra Performance);
+where it can't run (no RTX GPU, an upscaling ratio beyond what DLSS's modes cover, about
+3x), FSR upscales instead. The game only loads Streamline's `sl.interposer.dll` if it's
+exactly the installer's, and downloads nothing while it runs; NVIDIA's driver may use a
+newer DLSS it already has.
 
 **Neural rendering (experimental, AMD RDNA 4 only):** the 3D scenes go through the
 neural rendering network of NVIDIA's DLSS 5 before temporal upscaling, run on AMD's
@@ -324,8 +331,8 @@ start, so this happens once per place.
 - `cmake/clang-cl-xwin.cmake` is the toolchain the installer uses on both systems.
 - The build expects the installer's downloads under `tools/` (run `python install.py`
   once, or its `--prepare-only` step): among them the FidelityFX SDK and
-  `tools/XeSS-SDK` (`installer/toolchain.py`'s `ensure_xess`), whose DLLs are copied
-  next to the exe.
+  `tools/XeSS-SDK` (`installer/toolchain.py`'s `ensure_xess`) and `tools/Streamline-SDK`
+  (`ensure_streamline`), whose DLLs are copied next to the exe.
 - `thirdparty/lmxxf-nr` is the part of lmxxf's neural rendering source the game builds
   (`LmxxfNrRuntime.dll`, from `DAORecomp/neural/lmxxf_runtime.cpp`) and the installer
   compiles (`installer/neural.py`, its HIP kernels by `hip/build-modules.ps1`'s recipe):
@@ -426,9 +433,10 @@ next to `libxess.dll` (`intel_xess_license.txt`, `intel_xess_third_party_program
 under theirs (MIT); both licenses are installed next to `LmxxfNrRuntime.dll`
 (`lmxxf_nr_license.txt`, `lmxxf_nr_hip_api_license.txt`). `thirdparty/antilag2` is
 AMD's Anti-Lag 2 SDK header, under its MIT license (installed as
-`amd_antilag2_license.txt`). NVIDIA's Streamline (MIT) and its Reflex DLLs (under
-NVIDIA's license terms) are downloaded by the installer, and their licenses installed
-next to them (`nvidia_streamline_license.txt`, `nvidia_reflex_license.txt`). The neural rendering network's
+`amd_antilag2_license.txt`). NVIDIA's Streamline (MIT) and its Reflex and DLSS DLLs
+(under NVIDIA's license terms) are downloaded by the installer, and their licenses
+installed next to them (`nvidia_streamline_license.txt`, `nvidia_reflex_license.txt`,
+`nvidia_dlss_license.txt`). The neural rendering network's
 weights are NVIDIA's; none of them are in this repository or the releases.
 *Dragon Age* is a trademark of Electronic Arts; this project is not affiliated with EA,
 BioWare or Microsoft.

@@ -221,7 +221,7 @@ namespace dao::ui
             case Key::VSync: s.vsync = whole != 0; break;
             case Key::LowLatency: s.lowLatency = whole; break;
             case Key::TemporalUpscaler:
-                s.temporalUpscaler = TemporalUpscaler(std::clamp(whole, 0, int(TemporalUpscaler::Xess)));
+                s.temporalUpscaler = TemporalUpscaler(std::clamp(whole, 0, kMaxTemporalUpscaler));
                 break;
             case Key::TemporalSharpness:
                 s.temporalSharpness = float(value / kSliderSteps);
