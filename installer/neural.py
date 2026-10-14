@@ -325,27 +325,38 @@ def _compile_all(reporter, comgr, jobs, target, done):
 def install(reporter, built_dir, dest):
     """Puts neural rendering's kernels (compiled for this PC's RDNA 4 GPU), its shaders
     and settings in dest, and lmxxf's licenses (its DLL is in every install). Without such
-    a GPU and AMD's driver, or if they can't be put there, it's left out (the game runs
-    without it). built_dir keeps the compiled kernels between installs."""
+    a GPU and AMD's driver it's left out (the game runs without it), and an earlier
+    install's kernels and shaders are removed (the launcher would offer it, and it
+    wouldn't start); if they can't be built, an earlier install's stay. built_dir keeps
+    the compiled kernels between installs."""
     for source, name in LICENSES.items():
         shutil.copy2(LMXXF / source, Path(dest) / name)
+    out = Path(dest) / FOLDER
+
+    def remove_installed():
+        # What this installs there, the list (the launcher's and the game's check) first;
+        # anything else in the folder stays.
+        (out / "HIP" / "SHA256SUMS").unlink(missing_ok=True)
+        for folder in ("HIP", "shaders"):
+            shutil.rmtree(out / folder, ignore_errors=True)
+
     if not IS_WINDOWS:
         return
     targets = gpu_targets()
     if not targets:
-        reporter.log("Neural rendering: no AMD RDNA 4 GPU (RX 9000 series) with AMD's driver; not installed")
+        reporter.log("Neural rendering not installed: no AMD RDNA 4 GPU (RX 9000 series) with AMD's driver")
+        remove_installed()
         return
     try:
         targets = build_modules(reporter, HIP_DIR, TYPES_HEADER, built_dir, targets)
     except Cancelled:
         raise
     except InstallError as e:
-        reporter.log(f"Neural rendering: not installed: {e}")
+        reporter.log(f"Neural rendering not installed: {e}"
+                     + (" (the earlier install's kept)" if (out / "HIP" / "SHA256SUMS").is_file() else ""))
         return
-    out = Path(dest) / FOLDER
     try:
-        if out.exists():
-            shutil.rmtree(out)
+        remove_installed()
         hip = out / "HIP"
         sums = []
         for target in targets:
@@ -365,7 +376,7 @@ def install(reporter, built_dir, dest):
         # Last: the launcher and the game take the list as neural rendering installed.
         (hip / "SHA256SUMS").write_text("\n".join(sums) + "\n", encoding="utf-8")
     except OSError as e:
-        shutil.rmtree(out, ignore_errors=True)
-        reporter.log(f"Neural rendering: not installed: {e}")
+        reporter.log(f"Neural rendering not installed: {e}")
+        remove_installed()
         return
     reporter.log(f"Neural rendering: kernels for {', '.join(targets)} installed")

@@ -285,9 +285,16 @@ class NeuralRendering {
   // was, unless it failed).
   ID3D12Resource* Run(ID3D12Resource* color, uint32_t width, uint32_t height,
                       bool reset);
+  // Loads it and builds the network for frames of `color`'s size (as Run's,
+  // in NON_PIXEL_SHADER_RESOURCE), unless it's loaded or has failed: a second
+  // or two, done on the first frame rather than the first 3D scene's.
+  void Prepare(ID3D12Resource* color, uint32_t width, uint32_t height);
 
  private:
   bool Load();
+  // The runtime's description of a frame of `color`.
+  LmxxfNrFrameInfo FrameInfo(ID3D12Resource* color, uint32_t width,
+                             uint32_t height);
   // Logs the runtime's error and turns it off; false.
   bool Fail(const char* what);
   static void ExecuteInputs(void* context,
@@ -657,10 +664,20 @@ class DaoUpscalerImpl {
   std::unique_ptr<UpscalerBackend> backend_;
   // With dao_neural_rendering (dao_upscale_neural.cc), created when first used.
   std::unique_ptr<NeuralRendering> neural_;
-  // Paused with F6 since it last ran: its history restarts when it resumes.
+  NeuralRendering& Neural() {
+    if (!neural_) {
+      neural_ = std::make_unique<NeuralRendering>(*this);
+    }
+    return *neural_;
+  }
+  // Paused (F6, or strength 0) since it last ran: its history restarts when it
+  // resumes.
   bool neural_paused_ = false;
-  // Whether the last upscaled frame was the network's output.
+  // Whether the last upscaled frame was the network's output (kept while
+  // strength 0 skips it).
   bool neural_used_ = false;
+  // Whether NeuralRendering::Prepare was done (at the first swap).
+  bool neural_prepared_ = false;
   // Whether backend_ is FSR's (which the others fall back to).
   bool backend_fsr_ = false;
   // A backend replaced by FSR, kept until the GPU is done with the

@@ -430,16 +430,18 @@ namespace dao::launcher
     std::optional<fs::path> FindNeuralWeights(const fs::path& folder)
     {
         constexpr int kMaxDepth = 4;
-        // (A folder as large as a drive isn't searched through.)
+        // (A folder as large as a drive, or a slow network share, isn't searched through.)
         constexpr int kMaxEntries = 20000;
+        constexpr auto kMaxTime = std::chrono::seconds(5);
         std::error_code ec;
         if (fs::is_regular_file(folder / kNeuralWeightsFile, ec))
             return folder;
+        const auto deadline = std::chrono::steady_clock::now() + kMaxTime;
         int entries = 0;
         for (fs::recursive_directory_iterator it(folder, fs::directory_options::skip_permission_denied, ec), end;
              !ec && it != end; it.increment(ec))
         {
-            if (++entries > kMaxEntries)
+            if (++entries > kMaxEntries || std::chrono::steady_clock::now() > deadline)
                 break;
             // (Links to folders aren't followed.)
             std::error_code entryEc;

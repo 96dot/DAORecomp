@@ -428,7 +428,7 @@ namespace dao::launcher
     // The first of neural rendering's weights, which marks their folder.
     constexpr const char* kNeuralWeightsFile = "block0-ffn.f16";
     // The folder with them in `folder` or below (a package's); also used by
-    // install_view.cpp's TakeDialogChoices when one is chosen.
+    // install_view.cpp's folder dialog (on its thread) when one is chosen.
     std::optional<fs::path> FindNeuralWeights(const fs::path& folder);
 
     // mods_view.cpp: Mods, and adding, converting and reading mods in the background.

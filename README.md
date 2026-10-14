@@ -215,9 +215,11 @@ to an RX 9000 series GPU), and needs temporal upscaling on. It's expensive: lmxx
 measures about 7 ms of GPU time a frame for its 900-line network and 9.5 ms for 1080
 lines on an RX 9070 XT. It works with HDR output too (the network gets the scene in linear
 light, as DLSS 5 takes HDR, and the highlights above paper white keep their brightness),
-takes effect when the game starts, and loading the network makes the first 3D frame take a few seconds.
+takes effect when the game starts, and loading the network holds the first frames (the logos)
+for a second or two.
 *Neural rendering strength* (also in *Options → Graphics*, where it applies at once)
-sets how much of the network's change of detail and colour is kept, from none (0) to all (1).
+sets how much of the network's change of detail and colour is kept, from none (0, which skips
+the network: no GPU time for it, though it stays loaded) to all (1).
 The options lmxxf's packages have are there too (in both; they take effect when the game
 starts): *quality* is the network's size, which the 3D scenes are fitted to (Auto picks the
 smallest they fit: 720 lines at `resolution_scale = 1` and 1080 above; 900 and 720 are

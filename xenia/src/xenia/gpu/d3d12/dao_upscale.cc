@@ -816,6 +816,27 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   render_size_[0] = render_width;
   render_size_[1] = render_height;
 
+  // Neural rendering made ready on the first frame (the logos), with the
+  // linear scene's texture it will take: loading it and building its network
+  // stalls the GPU thread a second or two (1.7 s on an RX 9070 XT), which the
+  // first 3D scene would show. The swaps are at the render size from the
+  // first, so the network built then is the one the scenes use. Only with
+  // temporal upscaling, which it runs before.
+  if (cvars::dao_neural_rendering && cvars::dao_temporal_upscaler != "off" &&
+      !neural_prepared_) {
+    neural_prepared_ = true;
+    if (EnsureTexture(hdr_, DXGI_FORMAT_R16G16B16A16_FLOAT, render_width,
+                      render_height, "HDR")) {
+      Transition(hdr_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      cp_.SubmitBarriers();
+      Neural().Prepare(hdr_.resource.Get(), render_width, render_height);
+    } else {
+      XELOGW(
+          "Neural rendering: no texture to prepare it with; it loads on the "
+          "first 3D scene instead");
+    }
+  }
+
   const char* reason = nullptr;
   if (!jitter_active_) {
     if (true_hdr_ && !size_changed && hudless_captured_) {
@@ -861,9 +882,12 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   // the one before the UI as the game drew it, not the network's.
   const bool neural_on = cvars::dao_neural_rendering &&
                          !(neural_ && neural_->failed());
-  // Paused (F6): the session stays, to resume at once.
-  const bool run_neural =
-      neural_on && !dao_live::Load(dao_live::values.neural_paused);
+  // Paused (F6), or at strength 0 (the network's output unused: its GPU time
+  // saved): the session stays, to resume at once.
+  const bool neural_zero_strength =
+      neural_on && !(dao_live::Load(dao_live::values.neural_strength) > 0.0);
+  const bool run_neural = neural_on && !neural_zero_strength &&
+                          !dao_live::Load(dao_live::values.neural_paused);
   if (neural_on && !run_neural) {
     neural_paused_ = true;
   }
@@ -873,12 +897,9 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   }
   ID3D12Resource* neural_color = nullptr;
   if (run_neural) {
-    if (!neural_) {
-      neural_ = std::make_unique<NeuralRendering>(*this);
-    }
     Transition(hdr_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     cp_.SubmitBarriers();
-    neural_color = neural_->Run(hdr_.resource.Get(), render_width,
+    neural_color = Neural().Run(hdr_.resource.Get(), render_width,
                                 render_height,
                                 reset_history_ || neural_paused_);
     neural_paused_ = false;
@@ -939,10 +960,14 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
       dao_live::Load(dao_live::values.temporal_sharpness), 0.0, 1.0));
   frame.frame_ms = std::clamp(frame_ms, 1.0f, 100.0f);
   // The history isn't of the same image when the network's output comes or
-  // goes (paused, resumed, or failed).
+  // goes (paused, resumed, or failed). Not when strength 0 skips it: the
+  // slider gets there, and near 0 the output is about its input.
   const bool neural_used = neural_color != nullptr;
-  frame.reset = reset_history_ || neural_used != neural_used_;
-  neural_used_ = neural_used;
+  frame.reset = reset_history_ ||
+                (!neural_zero_strength && neural_used != neural_used_);
+  if (!neural_zero_strength) {
+    neural_used_ = neural_used;
+  }
   backend_->RecordDispatch(frame);
   InvalidateCommandProcessorState();
   if (dao_timing::GpuTiming::Enabled()) {

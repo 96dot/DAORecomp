@@ -31,7 +31,9 @@ namespace dao::launcher
         };
 
         // Opens Windows' file or folder dialog for a field. Its choice comes on SDL's
-        // dialog thread, into st.dialogs, which the next frame takes it from.
+        // dialog thread, into st.dialogs, which the next frame takes it from. For the
+        // weights, it's their folder in lmxxf's package (or the package itself), found
+        // on that thread: a large folder takes a while (Browse stays off meanwhile).
         void Browse(State& st, PathField field)
         {
             static const SDL_DialogFileFilter kDiscImage[] = { { "Xbox 360 disc image", "iso" },
@@ -44,9 +46,15 @@ namespace dao::launcher
             }
             const SDL_DialogFileCallback chosen = [](void* userdata, const char* const* files, int) {
                 const std::unique_ptr<DialogRequest> request(static_cast<DialogRequest*>(userdata));
+                std::string path = files && files[0] ? files[0] : "";
+                if (!path.empty() && request->field == PathField::NeuralWeights)
+                {
+                    if (const auto weights = FindNeuralWeights(FromUtf8(path)))
+                        path = Utf8(*weights);
+                }
                 std::lock_guard lock(request->results->mutex);
-                if (files && files[0])
-                    request->results->chosen.emplace_back(request->field, files[0]);
+                if (!path.empty())
+                    request->results->chosen.emplace_back(request->field, std::move(path));
                 request->results->open--;
             };
             const char* start = request->start.empty() ? nullptr : request->start.c_str();
@@ -63,15 +71,7 @@ namespace dao::launcher
     {
         std::lock_guard lock(st.dialogs->mutex);
         for (auto& [field, path] : st.dialogs->chosen)
-        {
-            // The weights' folder in lmxxf's package, or the package itself.
-            if (field == PathField::NeuralWeights)
-            {
-                if (const auto weights = FindNeuralWeights(FromUtf8(path)))
-                    path = Utf8(*weights);
-            }
             FieldText(st, field) = std::move(path);
-        }
         st.dialogs->chosen.clear();
     }
 

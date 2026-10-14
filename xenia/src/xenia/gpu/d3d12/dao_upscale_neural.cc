@@ -7,6 +7,7 @@
  */
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <iterator>
 #include <string>
@@ -15,6 +16,7 @@
 
 #include "LmxxfNrApi.h"
 #include "xenia/base/cvar.h"
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string.h"
 #include "xenia/dao_live_settings.h"
@@ -26,10 +28,12 @@ DEFINE_bool(dao_neural_rendering, false,
             "(lmxxf's HIP port of DLSS 5's neural rendering: AMD RDNA 4, the "
             "AMD driver's HIP 7), with the weights in dao_neural_weights.",
             "GPU");
-DEFINE_path(dao_neural_weights, "",
-            "Neural rendering: the folder of its weights (block0-ffn.f16 ...) "
-            "in lmxxf's package.",
-            "GPU");
+// A string, not a path: a path's config value has repeated separators merged,
+// which turns a network share's \\server\share into \server\share.
+DEFINE_string(dao_neural_weights, "",
+              "Neural rendering: the folder of its weights (block0-ffn.f16 "
+              "and the rest) in lmxxf's package.",
+              "GPU");
 DEFINE_double(dao_neural_strength, 1.0,
               "Neural rendering's strength, 0 (none) to 1 (the network's).",
               "GPU");
@@ -59,6 +63,9 @@ namespace gpu {
 namespace d3d12 {
 
 namespace {
+// The first of the weights' files, which marks their folder.
+constexpr const char* kWeightsFile = "block0-ffn.f16";
+
 // The runtime's options, as its packages' settings (DLSS5_*): set in the
 // environment before it loads (it copies the environment then), where they
 // override its default-config.txt (DLSS5-AMD/, the installer's).
@@ -120,15 +127,19 @@ bool NeuralRendering::Fail(const char* what) {
 }
 
 bool NeuralRendering::Load() {
-  const std::filesystem::path weights = cvars::dao_neural_weights;
   std::error_code ec;
-  // (The runtime takes the folder in a MAX_PATH buffer.)
-  if (weights.empty() || weights.native().size() >= MAX_PATH ||
-      !std::filesystem::is_regular_file(weights / "block0-ffn.f16", ec)) {
+  // Absolute, as the runtime gets it: it makes it absolute itself, in a
+  // MAX_PATH buffer.
+  std::filesystem::path weights = xe::to_path(cvars::dao_neural_weights);
+  if (!weights.empty()) {
+    weights = std::filesystem::absolute(weights, ec);
+  }
+  if (weights.empty() || ec || weights.native().size() >= MAX_PATH ||
+      !std::filesystem::is_regular_file(weights / kWeightsFile, ec)) {
     XELOGE(
         "Neural rendering: no weights in \"{}\" (the folder of lmxxf's "
         "package with block0-ffn.f16); off",
-        xe::path_to_utf8(weights));
+        cvars::dao_neural_weights);
     failed_ = true;
     return false;
   }
@@ -144,14 +155,27 @@ bool NeuralRendering::Load() {
   // the runtime compiles.
   const std::filesystem::path assets = folder / "neural";
   // And its settings: the runtime's folder for them and its logs is DLSS5-AMD
-  // when they're there, else lmxxf's development folder on D:.
-  if (!std::filesystem::is_regular_file(
+  // when they're there, else lmxxf's development folder on D:. (SHA256SUMS is
+  // the installer's last: the kernels are all there.)
+  if (!std::filesystem::is_regular_file(assets / "HIP" / "SHA256SUMS", ec) ||
+      !std::filesystem::is_regular_file(
           folder / "DLSS5-AMD" / "default-config.txt", ec)) {
     XELOGE(
-        "Neural rendering: DLSS5-AMD\\default-config.txt is missing (install "
-        "again); off");
+        "Neural rendering: not installed for this GPU (neural\\HIP or "
+        "DLSS5-AMD\\default-config.txt is missing: install again); off");
     failed_ = true;
     return false;
+  }
+  // The runtime looks in these before the chosen folder (its FindWeightsDir).
+  for (const std::filesystem::path& first :
+       {assets, assets / "weights", folder}) {
+    if (std::filesystem::is_regular_file(first / kWeightsFile, ec)) {
+      XELOGW(
+          "Neural rendering: the weights in {} are used, not the chosen "
+          "folder's (the runtime looks there first)",
+          xe::path_to_utf8(first));
+      break;
+    }
   }
   SetRuntimeOptions();
   module_ = LoadLibraryExW((folder / "LmxxfNrRuntime.dll").c_str(), nullptr,
@@ -187,6 +211,55 @@ bool NeuralRendering::Load() {
   return true;
 }
 
+LmxxfNrFrameInfo NeuralRendering::FrameInfo(ID3D12Resource* color,
+                                            uint32_t width, uint32_t height) {
+  const float strength = float(
+      std::clamp(dao_live::Load(dao_live::values.neural_strength), 0.0, 1.0));
+  LmxxfNrFrameInfo info = {};
+  info.struct_size = sizeof(info);
+  // One game, one view: its history isn't shared with another session.
+  info.session_id = 1;
+  info.frame_id = ++frame_;
+  info.color_width = width;
+  info.color_height = height;
+  info.color = color;
+  info.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+  info.flags = LMXXF_NR_FRAME_FLAG_STRENGTH;
+  info.transfer_strength = strength;
+  info.color_strength = strength;
+  // The network at its own scale (the input fitted to it).
+  info.model_scale = 1.0f;
+  return info;
+}
+
+void NeuralRendering::Prepare(ID3D12Resource* color, uint32_t width,
+                              uint32_t height) {
+  if (failed_ || session_) {
+    return;
+  }
+  const auto start = std::chrono::steady_clock::now();
+  if (!Load()) {
+    return;
+  }
+  // A frame prepared and dropped: the network built for the size, its weights
+  // uploaded and its shaders compiled. Nothing is recorded, so dropping it
+  // only retires the job.
+  const LmxxfNrFrameInfo info = FrameInfo(color, width, height);
+  job_ = {};
+  job_.struct_size = sizeof(job_);
+  if (api_.PrepareFrame(session_, &info, &job_) != LMXXF_NR_OK ||
+      !job_.private_output) {
+    Fail("can't prepare a frame");
+    return;
+  }
+  api_.CancelUnsubmitted(session_, job_.handle);
+  job_ = {};
+  XELOGI("Neural rendering: ready for {}x{} in {} ms", width, height,
+         std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now() - start)
+             .count());
+}
+
 ID3D12Resource* NeuralRendering::Run(ID3D12Resource* color, uint32_t width,
                                      uint32_t height, bool reset) {
   if (failed_ || (!session_ && !Load())) {
@@ -209,22 +282,7 @@ ID3D12Resource* NeuralRendering::Run(ID3D12Resource* color, uint32_t width,
     api_.ResetHistory(session_);
     reset_pending_ = false;
   }
-  const float strength = float(
-      std::clamp(dao_live::Load(dao_live::values.neural_strength), 0.0, 1.0));
-  LmxxfNrFrameInfo info = {};
-  info.struct_size = sizeof(info);
-  // One game, one view: its history isn't shared with another session.
-  info.session_id = 1;
-  info.frame_id = ++frame_;
-  info.color_width = width;
-  info.color_height = height;
-  info.color = color;
-  info.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-  info.flags = LMXXF_NR_FRAME_FLAG_STRENGTH;
-  info.transfer_strength = strength;
-  info.color_strength = strength;
-  // The network at its own scale (the input fitted to it).
-  info.model_scale = 1.0f;
+  const LmxxfNrFrameInfo info = FrameInfo(color, width, height);
   job_ = {};
   job_.struct_size = sizeof(job_);
   if (api_.PrepareFrame(session_, &info, &job_) != LMXXF_NR_OK ||

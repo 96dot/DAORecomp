@@ -26,6 +26,13 @@ namespace dao
 
         constexpr const char* kXeniaComment = "# Any Xenia GPU option, by its cvar name, e.g. anisotropic_override = 4.\n";
 
+        // Neural rendering runs: on, with its weights' folder, and before temporal
+        // upscaling (without it, it isn't loaded).
+        bool NeuralRenderingOn(const Settings& s)
+        {
+            return s.neuralRendering && !s.neuralWeights.empty() && s.temporalUpscaler != TemporalUpscaler::Off;
+        }
+
         const char* UpscalerName(Upscaler upscaler)
         {
             switch (upscaler)
@@ -281,10 +288,10 @@ frame_generation = {}
 # RX 9070 XT it costs about 9.5 ms a frame at 1080 lines, 7 ms at 900. The network's
 # weights don't come with the game:
 # neural_weights is the folder with them (block0-ffn.f16) in lmxxf's package.
-# Strength 0..1. The options of lmxxf's packages: neural_network is the network's size,
-# 0 (Auto: 720 lines at resolution_scale 1, 1080 above), 1080, 900 or 720 (smaller is
-# faster; the scenes are fitted to it); neural_passes runs it 1 to 3 times a frame (a
-# stronger look; each pass costs as much as the first), and with more than one
+# Strength 0..1 (0 skips the network). The options of lmxxf's packages: neural_network is
+# the network's size, 0 (Auto: 720 lines at resolution_scale 1, 1080 above), 1080, 900 or
+# 720 (smaller is faster; the scenes are fitted to it); neural_passes runs it 1 to 3 times
+# a frame (a stronger look; each pass costs as much as the first), and with more than one
 # neural_skin_protect keeps skin as the first pass made it; neural_style is one of
 # NVIDIA's three styles, 0 (NVIDIA's default), 1 (lmxxf's default) or 2.
 neural_rendering = {}
@@ -386,7 +393,7 @@ window_height = {}
         SetXeniaCvar("dao_temporal_upscaler", toml::value<std::string>(std::string(TemporalUpscalerName(s.temporalUpscaler))));
         SetXeniaCvar("dao_temporal_sharpness", toml::value<double>(s.temporalSharpness));
         SetXeniaCvar("dao_frame_generation", toml::value<bool>(s.frameGeneration));
-        SetXeniaCvar("dao_neural_rendering", toml::value<bool>(s.neuralRendering && !s.neuralWeights.empty()));
+        SetXeniaCvar("dao_neural_rendering", toml::value<bool>(NeuralRenderingOn(s)));
         SetXeniaCvar("dao_neural_weights", toml::value<std::string>(s.neuralWeights));
         SetXeniaCvar("dao_neural_strength", toml::value<double>(s.neuralStrength));
         SetXeniaCvar("dao_neural_network",
@@ -423,7 +430,7 @@ window_height = {}
             s.vsync ? ", vsync" : "");
         if (s.frameGeneration)
             LOGI("Settings: frame generation");
-        if (s.neuralRendering)
+        if (NeuralRenderingOn(s))
             LOGI("Settings: neural rendering, strength {}, network {}, {} pass(es){}, style {}, weights in {}",
                 s.neuralStrength, s.neuralNetwork ? std::to_string(s.neuralNetwork) : "auto", s.neuralPasses,
                 s.neuralSkinProtect ? " (skin protected)" : "", s.neuralStyle, s.neuralWeights);
