@@ -10,7 +10,7 @@
 #include "stdafx.h"
 #include "ui/photo_mode.h"
 
-#include <ShlObj.h>
+#include <shlobj.h>
 #include <cmath>
 #include <numbers>
 
