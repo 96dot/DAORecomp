@@ -220,7 +220,10 @@ namespace dao::ui
                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove |
                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs |
                         ImGuiWindowFlags_NoScrollWithMouse);
+                // The whole screen: a window clips to its inside (a few pixels in from
+                // its edges), which the bars would leave the game's image showing past.
                 ImDrawList* draw = ImGui::GetWindowDrawList();
+                draw->PushClipRectFullScreen();
                 DrawFrame(draw);
                 if (!hidden_)
                 {
@@ -232,6 +235,7 @@ namespace dao::ui
                     DrawToast(draw);
                 }
                 DrawFlash(draw, io);
+                draw->PopClipRect();
                 ImGui::End();
             }
 

@@ -157,12 +157,15 @@ namespace dao::ui
                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove |
                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav |
                         ImGuiWindowFlags_NoScrollWithMouse);
+                // The whole screen (a window clips to a few pixels in from its edges).
                 ImDrawList* draw = ImGui::GetWindowDrawList();
+                draw->PushClipRectFullScreen();
                 draw->AddRectFilled(ImVec2(0, 0), io.DisplaySize, WithAlpha(IM_COL32_BLACK, kSceneDim));
                 DrawPanel(draw);
                 DrawField(draw);
                 DrawKeys(draw);
                 DrawHints(draw);
+                draw->PopClipRect();
                 ImGui::End();
             }
 
