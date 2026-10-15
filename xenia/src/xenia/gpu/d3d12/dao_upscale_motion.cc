@@ -609,7 +609,8 @@ void DaoUpscalerImpl::ExecuteRestorePipeline(
 
 void DaoUpscalerImpl::ExecuteCloseStreamOut(
     void* context, ID3D12GraphicsCommandList* command_list) {
-  command_list->SOSetTargets(0, 1, nullptr);
+  const D3D12_STREAM_OUTPUT_BUFFER_VIEW empty_view = {};
+  command_list->SOSetTargets(0, 1, &empty_view);
 }
 
 void DaoUpscalerImpl::RecordMotionPass(uint32_t width, uint32_t height) {
