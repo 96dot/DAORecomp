@@ -347,6 +347,9 @@ start, so this happens once per place.
 
 ## Developing
 
+[CONTRIBUTING.md](CONTRIBUTING.md) is the map: how the code is laid out, how changes
+are tested, and the traps found so far. The build details are below.
+
 - `CMakeLists.txt` builds the runtime (`DAORecomp/`), Xenia's GPU/UI code
   (`xenia/src`, vendored and patched) and the recompiled game code (`ppc/`, generated).
 - `cmake/clang-cl-xwin.cmake` is the toolchain the installer uses on both systems.
