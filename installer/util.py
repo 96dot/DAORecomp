@@ -69,7 +69,8 @@ GIT = ["git"]
 def _version():
     """The release this installer is (its tag), for the build and the launcher's update
     check: the bundle carries it in VERSION; a source checkout of a tag is that tag
-    (with -dirty if changed, which the launcher treats as a dev build); anything else is "dev".
+    (with -dirty if changed, which the launcher treats as a build from source); anything
+    else is "dev".
     It goes into the build as a C++ string, so only plain characters are kept."""
     stamp = SOURCE / "VERSION"
     if stamp.exists():

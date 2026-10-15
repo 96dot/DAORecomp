@@ -111,6 +111,8 @@ namespace dao::launcher
             const Updater::State state = updater.GetState();
             Section(release.name.c_str());
             ImGui::Text("This is %s; %s is available.", Version(), release.tag.c_str());
+            if (const auto version = ParseVersion(release.tag); version && IsDevRelease(*version))
+                HelpText("A dev release: a test build, published between releases. It can have bugs.");
             ImGui::Spacing();
             if (!updater.CanInstall())
             {
@@ -155,7 +157,13 @@ namespace dao::launcher
     // change after).
     const Release* FoundRelease(State& st)
     {
-        if (!st.release && st.updater->HasRelease())
+        if (!st.updater->HasRelease())
+        {
+            // (None now: also after one was found, if the channel changed.)
+            st.release.reset();
+            st.releaseNotes.clear();
+        }
+        else if (!st.release)
         {
             st.release = st.updater->GetRelease();
             st.releaseNotes = ParseNotes(st.release->notes);

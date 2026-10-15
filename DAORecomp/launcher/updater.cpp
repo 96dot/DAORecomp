@@ -5,10 +5,6 @@
 #include <shellapi.h>
 #include <winhttp.h>
 
-#include <charconv>
-
-#include <rapidjson/document.h>
-
 #include "handle.h"
 #include "hash.h"
 #include "program.h"
@@ -20,23 +16,13 @@ namespace dao::launcher
 
     namespace
     {
-        // The releases of github.com/96dot/DAORecomp (the 20 newest: an update is
-        // always among them). Release pages and installers anywhere else in the
-        // list are ignored.
-        constexpr const char* kReleasesUrl = "https://api.github.com/repos/96dot/DAORecomp/releases?per_page=20";
-        constexpr std::string_view kPagePrefix = "https://github.com/96dot/DAORecomp/releases/";
-        constexpr std::string_view kDownloadPrefix = "https://github.com/96dot/DAORecomp/releases/download/";
-        // The exe players download (setup, scripts/build_setup_exe.py): it updates
-        // the install it's given. Releases also carry it as DAORecomp-Installer.exe,
-        // the name launchers up to v0.5.1 look for.
-        constexpr std::string_view kInstallerName = "DAORecomp.exe";
-        constexpr std::string_view kDigestPrefix = "sha256:";
-        // Sanity bounds on what's downloaded: the list is ~100 KB, the installer
-        // ~15 MB (v0.2.0).
+        // The releases of github.com/96dot/DAORecomp, the 100 newest (GitHub's most
+        // in one answer): a release is among them unless 99 dev releases came
+        // after it. Release pages and installers anywhere else in the list are
+        // ignored (see release_list.cpp).
+        constexpr const char* kReleasesUrl = "https://api.github.com/repos/96dot/DAORecomp/releases?per_page=100";
+        // Sanity bound on the list's size (~5 KB a release).
         constexpr uint64_t kMaxListSize = 4u << 20;
-        constexpr uint64_t kMaxInstallerSize = 256u << 20;
-        // The notes shown in the launcher are cut to about this long.
-        constexpr size_t kMaxNotes = 16 * 1024;
         // Where in the install folder the installer is downloaded to and run from
         // (a folder of its own: Windows looks for the programs it starts in the
         // folder of the one starting them first). Emptied at the next start.
@@ -172,140 +158,6 @@ namespace dao::launcher
                 return std::nullopt;
             return digest;
         }
-
-        std::optional<std::array<uint8_t, 32>> ParseSha256(std::string_view digest)
-        {
-            if (!digest.starts_with(kDigestPrefix))
-                return std::nullopt;
-            digest.remove_prefix(kDigestPrefix.size());
-            std::array<uint8_t, 32> out;
-            if (digest.size() != out.size() * 2)
-                return std::nullopt;
-            for (size_t i = 0; i < out.size(); i++)
-            {
-                const auto [end, ec] = std::from_chars(digest.data() + i * 2, digest.data() + i * 2 + 2, out[i], 16);
-                if (ec != std::errc() || end != digest.data() + i * 2 + 2)
-                    return std::nullopt;
-            }
-            return out;
-        }
-
-        std::string_view String(const rapidjson::Value& object, const char* key)
-        {
-            const auto it = object.FindMember(key);
-            if (it == object.MemberEnd() || !it->value.IsString())
-                return {};
-            return std::string_view(it->value.GetString(), it->value.GetStringLength());
-        }
-
-        // Whether `key` is present and anything but false.
-        bool Flag(const rapidjson::Value& object, const char* key)
-        {
-            const auto it = object.FindMember(key);
-            return it != object.MemberEnd() && !(it->value.IsBool() && !it->value.GetBool());
-        }
-
-        // A release's notes for the launcher: without carriage returns, cut at a
-        // line end (or a whole character) if very long.
-        std::string Notes(std::string_view body)
-        {
-            std::string notes;
-            for (const char c : body.substr(0, kMaxNotes))
-            {
-                if (c != '\r')
-                    notes += c;
-            }
-            if (body.size() > kMaxNotes)
-            {
-                if (const size_t line = notes.rfind('\n'); line != std::string::npos)
-                    notes.resize(line + 1);
-                else
-                {
-                    while (!notes.empty() && (uint8_t(notes.back()) & 0xC0) == 0x80)
-                        notes.pop_back();
-                    if (!notes.empty() && uint8_t(notes.back()) >= 0xC0)
-                        notes.pop_back();
-                    notes += '\n';
-                }
-                notes += "...\n";
-            }
-            return notes;
-        }
-    }
-
-    std::optional<std::array<int, 3>> ParseVersion(std::string_view tag)
-    {
-        if (!tag.starts_with('v'))
-            return std::nullopt;
-        std::array<int, 3> version;
-        const char* at = tag.data() + 1;
-        const char* end = tag.data() + tag.size();
-        for (size_t i = 0; i < version.size(); i++)
-        {
-            if (i > 0 && (at == end || *at++ != '.'))
-                return std::nullopt;
-            // Digits only (from_chars would take a sign).
-            if (at == end || *at < '0' || *at > '9')
-                return std::nullopt;
-            const auto [next, ec] = std::from_chars(at, end, version[i]);
-            if (ec != std::errc())
-                return std::nullopt;
-            at = next;
-        }
-        if (at != end)
-            return std::nullopt;
-        return version;
-    }
-
-    bool FindUpdate(std::string_view json, std::string_view current, std::optional<Release>& update)
-    {
-        update.reset();
-        const auto currentVersion = ParseVersion(current);
-        rapidjson::Document document;
-        // Iterative: deeply nested input can't exhaust the stack.
-        document.Parse<rapidjson::kParseIterativeFlag>(json.data(), json.size());
-        if (!currentVersion || document.HasParseError() || !document.IsArray())
-            return false;
-
-        // Pre-releases are offered while this is one too (0.x).
-        const bool takePrereleases = (*currentVersion)[0] == 0;
-        std::array<int, 3> newest = *currentVersion;
-        for (const rapidjson::Value& item : document.GetArray())
-        {
-            if (!item.IsObject() || Flag(item, "draft") || (!takePrereleases && Flag(item, "prerelease")))
-                continue;
-            const auto version = ParseVersion(String(item, "tag_name"));
-            const std::string_view page = String(item, "html_url");
-            const auto assets = item.FindMember("assets");
-            if (!version || *version <= newest || !page.starts_with(kPagePrefix) || assets == item.MemberEnd() ||
-                !assets->value.IsArray())
-                continue;
-            for (const rapidjson::Value& asset : assets->value.GetArray())
-            {
-                if (!asset.IsObject() || String(asset, "name") != kInstallerName)
-                    continue;
-                const std::string_view url = String(asset, "browser_download_url");
-                const auto size = asset.FindMember("size");
-                const auto sha256 = ParseSha256(String(asset, "digest"));
-                if (!url.starts_with(kDownloadPrefix) || size == asset.MemberEnd() || !size->value.IsUint64() ||
-                    size->value.GetUint64() == 0 || size->value.GetUint64() > kMaxInstallerSize || !sha256)
-                    continue;
-                Release release;
-                release.tag = String(item, "tag_name");
-                release.name = String(item, "name");
-                if (release.name.empty())
-                    release.name = release.tag;
-                release.notes = Notes(String(item, "body"));
-                release.pageUrl = page;
-                release.installerUrl = url;
-                release.installerSize = size->value.GetUint64();
-                release.installerSha256 = *sha256;
-                update = std::move(release);
-                newest = *version;
-                break;
-            }
-        }
-        return true;
     }
 
     // What the background threads share with the launcher (they keep it alive if
@@ -317,6 +169,8 @@ namespace dao::launcher
         std::atomic<bool> found = false;
         std::atomic<float> progress = 0.0f;
         std::mutex mutex;
+        // The channel of the last check (and of `release`).
+        UpdateChannel channel = UpdateChannel::Release;
         Release release;
         std::string error;
         fs::path installer;
@@ -347,14 +201,22 @@ namespace dao::launcher
         return ParseVersion(Version()).has_value();
     }
 
-    void Updater::Check()
+    void Updater::Check(UpdateChannel channel)
     {
         const State state = shared_->state;
-        // Once a release is found it stays (a later check couldn't add anything).
-        if (!IsRelease() || state == State::Checking || shared_->found)
+        if (!IsRelease() || state == State::Checking || state == State::Downloading || state == State::Ready)
             return;
+        {
+            std::lock_guard lock(shared_->mutex);
+            // Once a release is found it stays (a later check couldn't add
+            // anything), unless the channel changed.
+            if (shared_->found && channel == shared_->channel)
+                return;
+            shared_->found = false;
+            shared_->channel = channel;
+        }
         shared_->state = State::Checking;
-        std::thread([shared = shared_] {
+        std::thread([shared = shared_, channel] {
             std::string list, error;
             bool ok = HttpGet(kReleasesUrl,
                 L"Accept: application/vnd.github+json\r\nX-GitHub-Api-Version: 2022-11-28\r\n", kMaxListSize,
@@ -365,7 +227,7 @@ namespace dao::launcher
                 },
                 error);
             std::optional<Release> update;
-            if (ok && !FindUpdate(list, Version(), update))
+            if (ok && !FindUpdate(list, Version(), channel, update))
             {
                 ok = false;
                 error = "can't read GitHub's list of releases";
@@ -497,7 +359,7 @@ namespace dao::launcher
     void Updater::OpenReleasePage() const
     {
         const std::string url = GetRelease().pageUrl;
-        if (url.starts_with(kPagePrefix))
+        if (url.starts_with(kReleasePagePrefix))
             ShellExecuteW(nullptr, L"open", Widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
 

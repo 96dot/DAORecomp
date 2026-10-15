@@ -6,20 +6,10 @@
 // checksum guards against a damaged or altered download, not against a release
 // made by someone who controls the repository.
 
+#include "launcher/release_list.h"
+
 namespace dao::launcher
 {
-    struct Release
-    {
-        std::string tag;
-        std::string name;
-        // Its notes (Markdown), shortened if very long.
-        std::string notes;
-        std::string pageUrl;
-        std::string installerUrl;
-        uint64_t installerSize = 0;
-        std::array<uint8_t, 32> installerSha256 = {};
-    };
-
     class Updater
     {
     public:
@@ -41,16 +31,17 @@ namespace dao::launcher
         Updater(const Updater&) = delete;
         Updater& operator=(const Updater&) = delete;
 
-        // Whether this build has a version to compare (a release, not "dev").
+        // Whether this build has a version to compare (a release or dev release,
+        // not a build from source).
         static bool IsRelease();
         // Whether the installer can be run on this install: not under Wine/Proton,
         // and only on an install made by the installer. Otherwise the release page
         // is offered instead.
         bool CanInstall() const { return installable_; }
 
-        // Looks for a newer release in the background (not while busy, nor once
-        // one is found).
-        void Check();
+        // Looks for a newer release on `channel` in the background (not while
+        // busy, nor once one is found on the same channel).
+        void Check(UpdateChannel channel);
         // Downloads the available release's installer in the background.
         void Download();
         // Starts the downloaded installer on this install; the launcher must then
@@ -61,7 +52,7 @@ namespace dao::launcher
 
         State GetState() const;
         // Whether a newer release was found (it stays found, also if its download
-        // fails).
+        // fails, until a check on another channel).
         bool HasRelease() const;
         // The newer release, from Available on.
         Release GetRelease() const;
@@ -76,11 +67,4 @@ namespace dao::launcher
         std::filesystem::path installRoot_;
         bool installable_ = false;
     };
-
-    // "vX.Y.Z" as numbers; nothing for anything else.
-    std::optional<std::array<int, 3>> ParseVersion(std::string_view tag);
-    // Sets `update` to the newest release in GitHub's release list (JSON) newer
-    // than `current` with a verifiable installer, or nothing if there is none;
-    // false if the list can't be read.
-    bool FindUpdate(std::string_view json, std::string_view current, std::optional<Release>& update);
 }

@@ -8,6 +8,12 @@ namespace dao
     // Temporal upscaling and anti-aliasing of the 3D scenes (AMD FidelityFX API, Intel
     // XeSS-SR or NVIDIA DLSS, experimental; those two fall back to FSR where they can't run).
     enum class TemporalUpscaler { Off, Auto, Fsr4, Fsr3, Xess, Dlss };
+    // Which releases the launcher offers as updates: Release, only releases (vX.Y.Z);
+    // Dev, dev releases too (vX.Y.Z-dev.N, test builds published between releases).
+    enum class UpdateChannel { Release, Dev };
+    // Dev on a dev release, Release on anything else (defined in
+    // launcher/release_list.cpp, with the version tags).
+    UpdateChannel DefaultUpdateChannel();
     // Settings::fov and conversationFov: the game's own field of view (60 degrees
     // vertical, 91.5 across at 16:9: 91 stands for it and leaves it as it is), and
     // the limits.
@@ -42,6 +48,10 @@ namespace dao
         bool showLauncher = true;
         // Look for a newer release on GitHub when the launcher opens.
         bool checkForUpdates = true;
+        UpdateChannel updateChannel = DefaultUpdateChannel();
+        // Whether the player chose updateChannel (config.toml has it); until then it
+        // follows the running build, and isn't written.
+        bool updateChannelChosen = false;
         // The warning that not every mod works was accepted (shown before the Mods
         // screen first opens).
         bool modsWarningSeen = false;
@@ -152,6 +162,9 @@ namespace dao
 
     // The HDR quality as config.toml writes it: "high", "standard".
     std::string_view HdrQualityName(bool high);
+
+    // The update channel as config.toml writes it: "release", "dev".
+    std::string_view UpdateChannelName(UpdateChannel channel);
 
     // A frame rate for the log: "60 fps", "unlimited".
     std::string FrameRateName(int frameRate);

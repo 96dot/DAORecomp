@@ -126,12 +126,20 @@ into `update/` in the install folder, checks it against the SHA-256 GitHub lists
 and runs it on the same folder; it rebuilds only what changed (the disc image isn't
 needed again) and keeps your saves, settings and mods. The checksum catches a damaged
 or altered download; like the release itself, it comes from this GitHub repository.
-While the version is 0.x, pre-releases are offered too.
+
+There are two update channels, chosen in *Configure → Advanced* (or with
+`update_channel = "release"` or `"dev"` in `[launcher]`):
+
+- **Release** (the default): releases only (`vX.Y.Z`; while the version is 0.x they're
+  marked pre-release on GitHub, and offered all the same).
+- **Dev**: dev releases too (`vX.Y.Z-dev.N`): test builds published between releases, for
+  trying what's next early. They can have bugs. An install made from a dev release starts
+  on this channel.
 
 The check asks `api.github.com/repos/96dot/DAORecomp/releases` for the list of releases;
 the request carries only the program's version. Turn it off in *Configure → Advanced*
 or with `check_updates = false` in the `[launcher]` section of `userdata/config.toml`.
-Builds that aren't releases (`dev`, or a changed checkout of a release) don't check.
+Builds from source (`dev`, or a changed checkout of a release or dev release) don't check.
 With the launcher hidden there is no check: open it now and then (hold Shift).
 
 To update by hand, run a newer release's `DAORecomp.exe` and choose the same install

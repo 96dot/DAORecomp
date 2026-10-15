@@ -144,6 +144,11 @@ namespace dao
         return high ? "high" : "standard";
     }
 
+    std::string_view UpdateChannelName(UpdateChannel channel)
+    {
+        return channel == UpdateChannel::Dev ? "dev" : "release";
+    }
+
     std::string FrameRateName(int frameRate)
     {
         return frameRate ? fmt::format("{} fps", frameRate) : std::string("unlimited");
@@ -174,6 +179,16 @@ namespace dao
 
         s.showLauncher = table["launcher"]["show"].value_or(s.showLauncher);
         s.checkForUpdates = table["launcher"]["check_updates"].value_or(s.checkForUpdates);
+        // (Anything else, or nothing: the running build's default.)
+        const std::string channel = table["launcher"]["update_channel"].value_or(std::string());
+        for (const UpdateChannel c : { UpdateChannel::Release, UpdateChannel::Dev })
+        {
+            if (channel == UpdateChannelName(c))
+            {
+                s.updateChannel = c;
+                s.updateChannelChosen = true;
+            }
+        }
         s.modsWarningSeen = table["launcher"]["mods_warning_seen"].value_or(s.modsWarningSeen);
 
         const auto video = table["video"];
@@ -266,6 +281,10 @@ namespace dao
 show = {}
 # Look for a newer release on GitHub (github.com/96dot/DAORecomp) when the launcher opens.
 check_updates = {}
+# The updates offered: "release" (releases only) or "dev" (dev releases too: test builds
+# published between releases, for trying what's next; they can have bugs). Unset: "dev"
+# on a dev release, "release" otherwise.
+{}
 # The warning that not every mod works was accepted (it's shown before the Mods screen).
 mods_warning_seen = {}
 
@@ -352,7 +371,10 @@ window_height = {}
 # Code patches (true = on). Unlisted patches use their default.
 [patches]
 )",
-            s.showLauncher, s.checkForUpdates, s.modsWarningSeen, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
+            s.showLauncher, s.checkForUpdates,
+            s.updateChannelChosen ? fmt::format("update_channel = \"{}\"", UpdateChannelName(s.updateChannel))
+                                  : std::string("# update_channel = \"release\""),
+            s.modsWarningSeen, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
             TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.frameGeneration, s.neuralRendering,
             Quote(s.neuralWeights), s.neuralStrength, s.neuralNetwork, s.neuralPasses, s.neuralSkinProtect,
             s.neuralStyle, s.vsync, LowLatencyName(s.lowLatency), s.frameRate,

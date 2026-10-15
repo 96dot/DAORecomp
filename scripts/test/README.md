@@ -90,6 +90,13 @@ walk each time); it also lists the frames and blocks most like a one-frame flash
 - `installer_cancel.py`: Cancel must end a silent build step and what it started at once,
   also when the step has exited and a child of it still holds its output.
 - `installer_play.py <install folder>`: the installer's Play button after an install.
+- `release_list_test.cpp`: the update the launcher offers (version tags, the release and
+  dev channels, unusable releases), without the network. From the repo root:
+
+  ```
+  mkdir build\release_list_test
+  scripts\env.cmd clang-cl /nologo /std:c++20 /EHsc /DDAO_LAUNCHER_ONLY /DFMT_HEADER_ONLY /IDAORecomp /Itools\XenonRecomp\XenonUtils /Itools\xenia-canary\third_party\fmt\include /Itools\xenia-canary\third_party\rapidjson\include scripts\test\release_list_test.cpp DAORecomp\launcher\release_list.cpp DAORecomp\version.cpp /Fobuild\release_list_test\ /Febuild\release_list_test\test.exe && build\release_list_test\test.exe
+  ```
 - `capture_window.ps1 <png>`: the launcher window's contents, even behind other windows;
   `watch_windows.ps1`: logs the game window's size, position and DPI on every change.
 

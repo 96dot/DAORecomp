@@ -1,6 +1,8 @@
 # Builds DAORecomp.exe, what players download (the launcher with the installer in it).
 # Run it from the Actions tab (the exe is an artifact of the run), or push a version tag
-# (vX.Y.Z, as the launcher's update check reads them) to publish it on a release.
+# to publish it on a release, as the launcher's update check reads them: vX.Y.Z for a
+# release, vX.Y.Z-dev.N for a dev release (a test build on the way to vX.Y.Z, offered
+# only to launchers on the dev update channel).
 name: Windows installer
 
 on:
@@ -56,9 +58,10 @@ jobs:
           # (Through the environment: a tag's name isn't pasted into the script.)
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
-        # v0.x tags are marked as pre-releases.
+        # Pre-releases: v0.x, and any tag but a plain vX.Y.Z (dev releases, and other
+        # suffixes the launcher doesn't read).
         run: |
           flags=""
-          [[ "$TAG" == v0.* ]] && flags="--prerelease"
+          [[ "$TAG" == v0.* || ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && flags="--prerelease"
           gh release create "$TAG" dist/DAORecomp.exe dist/DAORecomp-Installer.exe --repo "$REPO" \
             --generate-notes $flags

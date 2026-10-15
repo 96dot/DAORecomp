@@ -336,7 +336,7 @@ namespace dao::launcher
             st.steamStep = SteamStep::Start;
         st.updater = std::make_unique<Updater>();
         if (st.settings.checkForUpdates && !mode.setup)
-            st.updater->Check();
+            st.updater->Check(st.settings.updateChannel);
 
         // Screenshot mode: kFramesPerShot frames per shot (main, the configure tabs,
         // mods, save backups, DLC, and the update's page if the check finds one), captured

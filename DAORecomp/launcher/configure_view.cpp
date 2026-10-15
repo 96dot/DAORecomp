@@ -45,6 +45,9 @@ namespace dao::launcher
         constexpr const char* kNeuralStyleNames[] = { "0 (NVIDIA's default)", "1 (lmxxf's default)",
             "2 (NVIDIA's third)" };
         static_assert(std::size(kNeuralStyleNames) == kMaxNeuralStyle + 1);
+        // In UpdateChannel's order.
+        constexpr const char* kUpdateChannelNames[] = { "Release", "Dev (test builds too)" };
+        static_assert(std::size(kUpdateChannelNames) == size_t(UpdateChannel::Dev) + 1);
 
         // A setting as the game's menus show it: the name above the picker or slider,
         // which `widget` adds as "##value", returning whether it changed.
@@ -370,11 +373,30 @@ namespace dao::launcher
             Label(fmt::format("Version {}", Version()).c_str());
             if (!Updater::IsRelease())
             {
-                HelpText("A development build: it's updated by building the source, not from the releases.");
+                HelpText("A build from source: it's updated by building the source, not from the releases.");
                 return;
             }
             ImGui::Checkbox("Check for updates when the launcher opens", &st.settings.checkForUpdates);
             Updater& updater = *st.updater;
+            // (Not while a check or download runs, or an installer is ready: each is
+            // for the channel it started on.)
+            const Updater::State busy = updater.GetState();
+            ImGui::BeginDisabled(busy == Updater::State::Checking || busy == Updater::State::Downloading ||
+                busy == Updater::State::Ready);
+            int channel = int(st.settings.updateChannel);
+            if (ComboRow("Update channel", &channel, kUpdateChannelNames, int(std::size(kUpdateChannelNames))) &&
+                UpdateChannel(channel) != st.settings.updateChannel)
+            {
+                st.settings.updateChannel = UpdateChannel(channel);
+                st.settings.updateChannelChosen = true;
+                // What was found was for the other channel: checked again.
+                st.release.reset();
+                st.releaseNotes.clear();
+                updater.Check(st.settings.updateChannel);
+            }
+            ImGui::EndDisabled();
+            HelpText("Dev releases are test builds published between releases, for trying what's next early: "
+                     "they can have bugs. Changing the channel checks again.");
             if (const Release* release = FoundRelease(st))
             {
                 ImGui::Text("%s is available.", release->tag.c_str());
@@ -387,7 +409,7 @@ namespace dao::launcher
                 const Updater::State state = updater.GetState();
                 ImGui::BeginDisabled(state == Updater::State::Checking);
                 if (ImGui::Button("Check now"))
-                    updater.Check();
+                    updater.Check(st.settings.updateChannel);
                 ImGui::EndDisabled();
                 ImGui::SameLine();
                 if (state == Updater::State::Checking)
