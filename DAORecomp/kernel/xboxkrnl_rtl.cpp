@@ -3,6 +3,7 @@
 #include "function.h"
 #include "module.h"
 #include "thread.h"
+#include "kernel/console_config.h"
 
 namespace dao::imp
 {
@@ -570,7 +571,7 @@ namespace dao::imp
             switch (setting)
             {
             case 0x01: set32(0); break;                // time zone bias
-            case 0x09: set32(1); break;                // language: English
+            case 0x09: set32(kernel::ConsoleLanguage()); break; // language
             case 0x0A: set32(0x00040000); break;       // video flags: widescreen
             case 0x0B: set32(0x00010001); break;       // audio flags: stereo
             case 0x0C: set32(0x40); break;             // retail flags

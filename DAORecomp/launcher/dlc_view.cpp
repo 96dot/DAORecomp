@@ -172,7 +172,7 @@ namespace dao::launcher
                      "in .../000B0000/. They're checked, then installed where the game finds them; the packages "
                      "are left as they are. (Mods dropped here are added too, to the Mods page.)");
             HelpText("Only packages as Xbox Live delivers them (LIVE or PIRS) are read. The title update has to be "
-                     "the one for the English disc (media ID 186A1115); Title Update 7 replaces 6. The installer "
+                     "the one for the English, Italian and Spanish disc (media ID 186A1115); Title Update 7 replaces 6. The installer "
                      "can take it too (Title Update 6 or 7).");
             ImGui::Spacing();
             if (AddingMods(st))

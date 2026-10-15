@@ -33,6 +33,8 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
   skill checks, gold, experience and more
 - an on-screen keyboard for naming characters, usable with a gamepad
 - the downloadable content (Awakening and the rest), installed from your own packages
+- the game's text in English, Italian or Spanish (the languages on the disc; the voices
+  are English in each), chosen in the launcher
 
 **This repository contains no game code or data.** You need your own copy of the
 game: an ISO image of the Xbox 360 disc. The installer extracts it, translates the
@@ -47,8 +49,12 @@ You need:
   with AVX2 (Intel from 2013, AMD from 2015) it uses those newer instructions. A copy
   built that way and moved to a PC without them says so when it starts; run the
   installer on that PC to build it for its processor.
-- The disc image of *Dragon Age: Origins* for Xbox 360 (title ID 454108C0). The
-  installer checks that it is the supported release.
+- The disc image of *Dragon Age: Origins* for Xbox 360 (title ID 454108C0): the
+  English, Italian and Spanish edition (media ID 186A1115), which is also disc 1 of that
+  edition's *Ultimate Edition*. The installer checks that it is the supported release
+  (the French and German editions are other discs, not supported). The game's language
+  is chosen in the launcher (*Configure → Advanced → Game language*, or `language` in
+  the `[game]` section of `userdata/config.toml`).
 - About 25 GB of disk space: 8 GB for the game, the rest for the tools and the build.
   The first build takes 30–60 minutes, depending on the CPU.
 
@@ -85,7 +91,7 @@ them) and:
 
 - give the installer the title update's package: *Title Update 6 or 7 (optional)* in the
   window, or `--title-update <package>`. It is checked (it must be the one for the
-  English disc, media ID 186A1115), extracted to `title_update/` in the install folder,
+  English, Italian and Spanish disc, media ID 186A1115), extracted to `title_update/` in the install folder,
   and the game's code is translated a second time from the updated executable (about as
   long again). The program then holds both versions and runs the updated one while
   `title_update/` is there.

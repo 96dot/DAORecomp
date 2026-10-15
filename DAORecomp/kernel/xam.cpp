@@ -8,6 +8,7 @@
 #include "content/content.h"
 #include "content/save_backups.h"
 #include "files.h"
+#include "kernel/console_config.h"
 
 #include "gpu/video.h"
 #include "gpu/xenia_host.h"
@@ -126,7 +127,7 @@ namespace dao::imp
         mode->unknown0x01 = 0x01;
     }
 
-    uint32_t XGetLanguage() { return 1; }       // English
+    uint32_t XGetLanguage() { return kernel::ConsoleLanguage(); }
     uint32_t XGetGameRegion() { return 0xFFFF; }
     uint32_t XGetAVPack() { return 8; }         // HDMI
     uint32_t XamGetSystemVersion() { return 0x20446700; }

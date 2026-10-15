@@ -11,6 +11,9 @@ namespace dao
     // Which releases the launcher offers as updates: Release, only releases (vX.Y.Z);
     // Dev, dev releases too (vX.Y.Z-dev.N, test builds published between releases).
     enum class UpdateChannel { Release, Dev };
+    // The game's language: the ones the supported disc has text for (its voices are
+    // English in each). The game reads it as the console's language.
+    enum class Language { English, Italian, Spanish };
     // Dev on a dev release, Release on anything else (defined in
     // launcher/release_list.cpp, with the version tags).
     UpdateChannel DefaultUpdateChannel();
@@ -55,6 +58,8 @@ namespace dao
         // The warning that not every mod works was accepted (shown before the Mods
         // screen first opens).
         bool modsWarningSeen = false;
+
+        Language language = Language::English;
 
         // Internal rendering resolution multiplier (the game renders at 1280x720):
         // 2 = 2560x1440, 3 = 3840x2160.
@@ -144,6 +149,8 @@ namespace dao
     // Low latency's highest level (Settings::lowLatency); the in-game Graphics tab and the
     // launcher list one name per level.
     constexpr int kMaxLowLatency = 2;
+    // The last language (Settings::language); the launcher lists one name per language.
+    constexpr int kMaxLanguage = int(Language::Spanish);
     // The last temporal upscaler (Settings::temporalUpscaler); the in-game Graphics tab and the
     // launcher list one name per upscaler.
     constexpr int kMaxTemporalUpscaler = int(TemporalUpscaler::Dlss);
@@ -166,6 +173,9 @@ namespace dao
 
     // The HDR quality as config.toml writes it: "high", "standard".
     std::string_view HdrQualityName(bool high);
+
+    // The language as config.toml writes it: "english", "italian", "spanish".
+    std::string_view LanguageName(Language language);
 
     // The update channel as config.toml writes it: "release", "dev".
     std::string_view UpdateChannelName(UpdateChannel channel);

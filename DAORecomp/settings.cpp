@@ -144,6 +144,16 @@ namespace dao
         return high ? "high" : "standard";
     }
 
+    std::string_view LanguageName(Language language)
+    {
+        switch (language)
+        {
+        case Language::Italian: return "italian";
+        case Language::Spanish: return "spanish";
+        default: return "english";
+        }
+    }
+
     std::string_view UpdateChannelName(UpdateChannel channel)
     {
         return channel == UpdateChannel::Dev ? "dev" : "release";
@@ -190,6 +200,14 @@ namespace dao
             }
         }
         s.modsWarningSeen = table["launcher"]["mods_warning_seen"].value_or(s.modsWarningSeen);
+
+        // (Anything else, or nothing: English.)
+        const std::string language = table["game"]["language"].value_or(std::string());
+        for (int l = 0; l <= kMaxLanguage; ++l)
+        {
+            if (language == LanguageName(Language(l)))
+                s.language = Language(l);
+        }
 
         const auto video = table["video"];
         s.resolutionScale = video["resolution_scale"].value_or(s.resolutionScale);
@@ -289,6 +307,11 @@ check_updates = {}
 # The warning that not every mod works was accepted (it's shown before the Mods screen).
 mods_warning_seen = {}
 
+[game]
+# The game's language: "english", "italian" or "spanish" (the text and menus; the voices are
+# English in each), the ones the disc has text for. Takes effect at the next start.
+language = "{}"
+
 [video]
 # Internal rendering resolution multiplier (the game renders at 1280x720):
 # 1 = 720p, 2 = 1440p, 3 = 2160p (4K). Needs a GPU with tiled resources.
@@ -378,7 +401,7 @@ window_height = {}
             s.showLauncher, s.checkForUpdates,
             s.updateChannelChosen ? fmt::format("update_channel = \"{}\"", UpdateChannelName(s.updateChannel))
                                   : std::string("# update_channel = \"release\""),
-            s.modsWarningSeen, s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
+            s.modsWarningSeen, LanguageName(s.language), s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
             TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.frameGeneration, s.neuralRendering,
             Quote(s.neuralWeights), s.neuralStrength, s.neuralNetwork, s.neuralPasses, s.neuralSkinProtect,
             s.neuralStyle, s.neuralFrameRateGuard, s.vsync, LowLatencyName(s.lowLatency), s.frameRate,
@@ -470,6 +493,8 @@ window_height = {}
             s.resolutionScale, UpscalerName(s.upscaler), s.sharpness, TemporalUpscalerName(s.temporalUpscaler),
             s.windowWidth, s.windowHeight, s.fullscreen ? " fullscreen" : "", FrameRateName(s.frameRate),
             s.vsync ? ", vsync" : "");
+        if (s.language != Language::English)
+            LOGI("Settings: language {}", LanguageName(s.language));
         if (s.frameGeneration)
             LOGI("Settings: frame generation");
         if (NeuralRenderingOn(s))

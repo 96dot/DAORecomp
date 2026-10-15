@@ -45,6 +45,9 @@ namespace dao::launcher
         constexpr const char* kNeuralStyleNames[] = { "0 (NVIDIA's default)", "1 (lmxxf's default)",
             "2 (NVIDIA's third)" };
         static_assert(std::size(kNeuralStyleNames) == kMaxNeuralStyle + 1);
+        // In Language's order; each in its own language too, as a player looks for it.
+        constexpr const char* kLanguageNames[] = { "English", "Italiano (Italian)", "Espa\u00F1ol (Spanish)" };
+        static_assert(std::size(kLanguageNames) == size_t(kMaxLanguage) + 1);
         // In UpdateChannel's order.
         constexpr const char* kUpdateChannelNames[] = { "Release", "Dev (test builds too)" };
         static_assert(std::size(kUpdateChannelNames) == size_t(UpdateChannel::Dev) + 1);
@@ -351,6 +354,13 @@ namespace dao::launcher
 
         void AdvancedTab(State& st)
         {
+            Section("Language");
+            int language = int(st.settings.language);
+            if (ComboRow("Game language", &language, kLanguageNames, int(std::size(kLanguageNames))))
+                st.settings.language = Language(language);
+            HelpText("The text and menus of the game (the voices are English in each). Takes effect at the next "
+                     "start.");
+
             Section("Files");
             if (ImGui::Button("Open user data folder"))
                 OpenFolder(st.userRoot);
