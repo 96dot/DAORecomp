@@ -12,13 +12,13 @@
 #include <vector>
 
 #include "xenia/base/cvar.h"
+#include "xenia/dao_temporal_upscaler.h"
 #include "xenia/base/logging.h"
 #include "xenia/ui/graphics_provider.h"
 
 #include "sl.h"
 
 DECLARE_int32(dao_low_latency);
-DECLARE_string(dao_temporal_upscaler);
 
 namespace xe {
 namespace ui {
@@ -36,6 +36,12 @@ constexpr std::string_view kInterposerSha256 =
 constexpr uint64_t kInterposerMaxSize = 16 * 1024 * 1024;
 // This project's ID: it identifies a game that has no NVIDIA application ID.
 constexpr char kProjectId[] = "9b94314d-6da2-4822-a757-c0426536dca3";
+
+// DLSS is the temporal upscaler chosen.
+bool DlssChosen() {
+  return dao_options::GetTemporalUpscaler() ==
+         dao_options::TemporalUpscaler::kDlss;
+}
 
 // Set by Initialize, SetDevice and CreateDirectQueue on the provider's thread
 // before the others start (Stop too, if they fail), and by Shutdown after
@@ -201,7 +207,7 @@ void Initialize(const DXGI_ADAPTER_DESC& adapter) {
   // upscaler, chosen for the next start; only on an NVIDIA GPU, as its license
   // has it). Low latency turned on in the game starts it with the next start.
   const bool reflex = cvars::dao_low_latency != 0;
-  const bool dlss = nvidia && cvars::dao_temporal_upscaler == "dlss";
+  const bool dlss = nvidia && DlssChosen();
   if (!reflex && !dlss) {
     s_starts_after_restart = true;
     return;
@@ -298,9 +304,7 @@ void Initialize(const DXGI_ADAPTER_DESC& adapter) {
   }
   XELOGI("Streamline: started (NVIDIA Reflex {}, DLSS {})",
          s_reflex ? "supported" : "unsupported",
-         s_dlss                                   ? "on"
-         : cvars::dao_temporal_upscaler == "dlss" ? "unsupported"
-                                                  : "not chosen");
+         s_dlss ? "on" : DlssChosen() ? "unsupported" : "not chosen");
 }
 
 void SetDevice(IDXGIFactory2* factory, ID3D12Device* device) {

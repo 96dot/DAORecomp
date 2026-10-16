@@ -23,6 +23,7 @@
 
 #include "xenia/base/cvar.h"
 #include "xenia/dao_live_settings.h"
+#include "xenia/dao_temporal_upscaler.h"
 #include "xenia/gpu/d3d12/d3d12_render_target_cache.h"
 #include "xenia/gpu/d3d12/dao_upscale.h"
 #include "xenia/gpu/d3d12/pipeline_cache.h"
@@ -146,10 +147,22 @@ inline float OutputGamma() {
   return float(std::clamp(cvars::present_hdr_gamma, 1.0, 3.0));
 }
 
+// The phases of a jitter sequence at the native size (the display's), and
+// before an upscaler's context gives its own.
+inline constexpr uint32_t kNativeJitterPhases = 8;
 // The phases of a jitter sequence for upscaling render_width pixels to
-// display_width: 8 per render pixel's area in display pixels (at least 8), so
-// that every display pixel gets samples.
+// display_width: kNativeJitterPhases per render pixel's area in display pixels
+// (at least that many), so that every display pixel gets samples.
 uint32_t JitterPhaseCount(uint32_t render_width, uint32_t display_width);
+
+// The camera as FSR's depth-based heuristics take it (the upscaler's and frame
+// generation's), roughly: the game's draws don't give it. The vertical field of
+// view is about the game's own (91.5 degrees horizontal at 16:9 is 60 degrees,
+// 1.05 rad, vertical); the field of view setting only shifts the heuristics a
+// little.
+inline constexpr float kFfxCameraNear = 0.1f;
+inline constexpr float kFfxCameraFar = 1000.0f;
+inline constexpr float kFfxCameraFovVertical = 1.0f;
 // A jitter sample offset, -0.5 to 0.5 render pixels: Halton (2, 3) (XeSS's
 // and DLSS's; FSR has its own).
 void HaltonJitter(uint32_t index, float& x, float& y);
@@ -157,6 +170,8 @@ void HaltonJitter(uint32_t index, float& x, float& y);
 }  // namespace dao_upscale
 
 using namespace dao_upscale;
+using dao_options::GetTemporalUpscaler;
+using dao_options::TemporalUpscaler;
 
 class DaoUpscalerImpl;
 
@@ -168,6 +183,14 @@ struct FfxApi {
   // False if the loader is missing or incomplete (logged once): not tried
   // again. configure may be null (only frame generation needs it).
   bool Load();
+  // The versions of an effect (an FFX_API_CREATE_CONTEXT_DESC_TYPE_*) the
+  // loader offers, in its order; a name may be null.
+  struct Version {
+    uint64_t id;
+    const char* name;
+  };
+  std::vector<Version> Versions(uint64_t create_desc_type,
+                                ID3D12Device* device) const;
   // " - see the log of <proxy>", or nothing: for FidelityFX's error messages.
   std::string ProxyNote() const {
     return proxy.empty() ? std::string() : " - see the log of " + proxy;

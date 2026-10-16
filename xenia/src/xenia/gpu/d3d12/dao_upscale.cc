@@ -82,14 +82,15 @@ namespace dao_upscale {
 
 uint32_t JitterPhaseCount(uint32_t render_width, uint32_t display_width) {
   if (!render_width) {
-    return 8;
+    return kNativeJitterPhases;
   }
-  // 8 * (display / render)^2, rounded up, in integers.
+  // kNativeJitterPhases * (display / render)^2, rounded up, in integers.
   const uint64_t render_area = uint64_t(render_width) * render_width;
-  const uint64_t phases =
-      (8 * uint64_t(display_width) * display_width + render_area - 1) /
-      render_area;
-  return uint32_t(std::max(phases, uint64_t(8)));
+  const uint64_t phases = (kNativeJitterPhases * uint64_t(display_width) *
+                               display_width +
+                           render_area - 1) /
+                          render_area;
+  return uint32_t(std::max(phases, uint64_t(kNativeJitterPhases)));
 }
 
 void HaltonJitter(uint32_t index, float& x, float& y) {
@@ -299,7 +300,7 @@ bool DaoUpscalerImpl::Initialize() {
     XELOGW("Upscaler: motion vectors unavailable");
   }
   backend_ = CreateBackend();
-  jitter_active_ = cvars::dao_temporal_upscaler != "off";
+  jitter_active_ = GetTemporalUpscaler() != TemporalUpscaler::kOff;
   true_hdr_ = WantsTrueHdr();
   if (jitter_active_) {
     backend_->Prepare(true_hdr_);
@@ -697,10 +698,11 @@ void DaoUpscalerImpl::OnResolve(const draw_util::ResolveInfo& resolve_info) {
 
 std::unique_ptr<UpscalerBackend> DaoUpscalerImpl::CreateBackend() {
   backend_fsr_ = false;
-  if (cvars::dao_temporal_upscaler == "xess") {
+  const TemporalUpscaler upscaler = GetTemporalUpscaler();
+  if (upscaler == TemporalUpscaler::kXess) {
     return CreateXessBackend(*this);
   }
-  if (cvars::dao_temporal_upscaler == "dlss") {
+  if (upscaler == TemporalUpscaler::kDlss) {
     if (ui::d3d12::dao_streamline::DlssSupported()) {
       return CreateDlssBackend(*this);
     }
@@ -845,7 +847,7 @@ ID3D12Resource* DaoUpscalerImpl::OnSwap(
   // it). Only with temporal upscaling, which it runs before, and also at
   // strength 0, for the slider to apply at once.
   if (!neural_prepared_ && cvars::dao_neural_rendering &&
-      cvars::dao_temporal_upscaler != "off") {
+      GetTemporalUpscaler() != TemporalUpscaler::kOff) {
     neural_prepared_ = true;
     if (EnsureHdrTexture()) {
       Transition(hdr_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -1290,7 +1292,7 @@ void DaoUpscalerImpl::EndFrame(bool upscaled, const char* reason) {
   depth_less_draws_ = depth_greater_draws_ = 0;
   // If a 3D scene couldn't be upscaled, stop jittering it for a while (a few
   // jittered frames shown as they are look like a small shake).
-  const bool enabled = cvars::dao_temporal_upscaler != "off";
+  const bool enabled = GetTemporalUpscaler() != TemporalUpscaler::kOff;
   if (HasScene() && !upscaled && jitter_active_) {
     if (++fail_streak_ >= 3) {
       jitter_cooldown_ = 300;

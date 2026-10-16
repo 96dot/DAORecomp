@@ -122,7 +122,7 @@ class XessBackend : public UpscalerBackend {
   // xessD3D12Init succeeded for context_desc_.
   bool initialized_ = false;
   ContextDesc context_desc_ = {};
-  uint32_t jitter_phase_count_ = 8;
+  uint32_t jitter_phase_count_ = kNativeJitterPhases;
   // What the deferred dispatch needs when the command list is executed.
   xess_d3d12_execute_params_t execute_params_ = {};
 };

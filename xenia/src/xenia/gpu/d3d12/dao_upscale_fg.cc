@@ -77,22 +77,11 @@ bool DaoUpscalerImpl::EnsureFrameGeneration(uint32_t render_width,
   // one (4.x) also needs the camera's position and orientation, which the
   // game's draws don't give.
   ID3D12Device* device = cp_.GetD3D12Provider().GetDevice();
-  ffxQueryDescGetVersions versions = {};
-  versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
-  versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
-  versions.device = device;
-  uint64_t count = 0;
-  versions.outputCount = &count;
-  ffx_.query(nullptr, &versions.header);
-  std::vector<uint64_t> ids(count);
-  std::vector<const char*> names(count);
-  versions.versionIds = ids.data();
-  versions.versionNames = names.data();
-  ffx_.query(nullptr, &versions.header);
   uint64_t version_id = 0;
-  for (uint64_t i = 0; i < count; ++i) {
-    if (names[i] && std::strncmp(names[i], "3.", 2) == 0) {
-      version_id = ids[i];
+  for (const FfxApi::Version& version : ffx_.Versions(
+           FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION, device)) {
+    if (version.name && std::strncmp(version.name, "3.", 2) == 0) {
+      version_id = version.id;
       break;
     }
   }
@@ -203,14 +192,13 @@ bool DaoUpscalerImpl::RecordFrameGeneration(const Texture& scene,
   prepare.renderSize = {render_width, render_height};
   prepare.jitterOffset = {jitter_[0], jitter_[1]};
   // As the upscaler's (OnSwap): motion vectors in pixels, the frame time
-  // clamped (a pause or a hitch isn't one), and rough camera values for FSR's
-  // depth-based heuristics.
+  // clamped (a pause or a hitch isn't one), and the rough camera.
   prepare.motionVectorScale = {1.0f, 1.0f};
   prepare.frameTimeDelta = std::clamp(frame_ms, 1.0f, 100.0f);
   prepare.reset = reset;
-  prepare.cameraNear = 0.1f;
-  prepare.cameraFar = 1000.0f;
-  prepare.cameraFovAngleVertical = 1.0f;
+  prepare.cameraNear = kFfxCameraNear;
+  prepare.cameraFar = kFfxCameraFar;
+  prepare.cameraFovAngleVertical = kFfxCameraFovVertical;
   prepare.viewSpaceToMetersFactor = 1.0f;
   prepare.depth = ffxApiGetResourceDX12(depth_.resource.Get());
   prepare.motionVectors = ffxApiGetResourceDX12(motion_vectors_.resource.Get());

@@ -18,7 +18,6 @@
 #include "dx12/ffx_api_dx12.h"
 #include "ffx_upscale.h"
 
-DECLARE_string(dao_temporal_upscaler);
 
 namespace xe {
 namespace gpu {
@@ -106,8 +105,6 @@ class FsrBackend : public UpscalerBackend {
  private:
   bool Load();
   // The upscaler versions available, newest first.
-  void QueryVersions(std::vector<uint64_t>& ids,
-                     std::vector<const char*>& names) const;
   void DestroyContext();
   static void ExecuteDispatch(void* context,
                               ID3D12GraphicsCommandList* command_list);
@@ -118,7 +115,7 @@ class FsrBackend : public UpscalerBackend {
   mutable ffxContext context_ = nullptr;
   ContextDesc context_desc_ = {};
   std::string version_name_;
-  uint32_t jitter_phase_count_ = 8;
+  uint32_t jitter_phase_count_ = kNativeJitterPhases;
   // What the deferred dispatch needs when the command list is executed.
   ffxDispatchDescUpscale dispatch_desc_ = {};
   // Set by a dispatch that failed (when the command list is executed), seen
@@ -140,29 +137,11 @@ bool FsrBackend::Load() {
   }
   loaded_ = true;
   // The available upscaler versions, for the log.
-  std::vector<uint64_t> ids;
-  std::vector<const char*> names;
-  QueryVersions(ids, names);
-  for (const char* name : names) {
-    XELOGI("FSR: available upscaler {}", name ? name : "?");
+  for (const FfxApi::Version& version : ffx_.Versions(
+           FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE, upscaler_.device())) {
+    XELOGI("FSR: available upscaler {}", version.name ? version.name : "?");
   }
   return true;
-}
-
-void FsrBackend::QueryVersions(std::vector<uint64_t>& ids,
-                               std::vector<const char*>& names) const {
-  ffxQueryDescGetVersions versions = {};
-  versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
-  versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-  versions.device = upscaler_.device();
-  uint64_t count = 0;
-  versions.outputCount = &count;
-  ffx_.query(nullptr, &versions.header);
-  ids.assign(count, 0);
-  names.assign(count, nullptr);
-  versions.versionIds = ids.data();
-  versions.versionNames = names.data();
-  ffx_.query(nullptr, &versions.header);
 }
 
 bool FsrBackend::EnsureContext(const ContextDesc& desc) {
@@ -194,20 +173,18 @@ bool FsrBackend::EnsureContext(const ContextDesc& desc) {
   // Pick the version: the newest by default (FSR 4 on RDNA 4), or the one
   // asked for.
   uint64_t version_id = 0;
-  const std::string& wanted = cvars::dao_temporal_upscaler;
-  if (wanted == "fsr3" || wanted == "fsr4") {
-    std::vector<uint64_t> ids;
-    std::vector<const char*> names;
-    QueryVersions(ids, names);
-    const char prefix = wanted == "fsr3" ? '3' : '4';
-    for (size_t i = 0; i < names.size(); ++i) {
-      if (names[i] && names[i][0] == prefix) {
-        version_id = ids[i];
+  const TemporalUpscaler wanted = GetTemporalUpscaler();
+  if (wanted == TemporalUpscaler::kFsr3 || wanted == TemporalUpscaler::kFsr4) {
+    const char prefix = wanted == TemporalUpscaler::kFsr3 ? '3' : '4';
+    for (const FfxApi::Version& version : ffx_.Versions(
+             FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE, upscaler_.device())) {
+      if (version.name && version.name[0] == prefix) {
+        version_id = version.id;
         break;
       }
     }
     if (!version_id) {
-      XELOGW("FSR: no {} upscaler available, using the default", wanted);
+      XELOGW("FSR: no FSR {} upscaler available, using the default", prefix);
     }
   }
 
@@ -278,7 +255,7 @@ void FsrBackend::DestroyContext() {
   }
   ffx_.destroy(&context_, nullptr);
   context_ = nullptr;
-  jitter_phase_count_ = 8;
+  jitter_phase_count_ = kNativeJitterPhases;
 }
 
 void FsrBackend::JitterOffset(uint32_t index, float& x, float& y) const {
@@ -314,10 +291,9 @@ void FsrBackend::RecordDispatch(const Frame& frame) {
   desc.frameTimeDelta = frame.frame_ms;
   desc.preExposure = 1.0f;
   desc.reset = frame.reset;
-  // Rough camera values; FSR uses them for its depth-based heuristics.
-  desc.cameraNear = 0.1f;
-  desc.cameraFar = 1000.0f;
-  desc.cameraFovAngleVertical = 1.0f;
+  desc.cameraNear = kFfxCameraNear;
+  desc.cameraFar = kFfxCameraFar;
+  desc.cameraFovAngleVertical = kFfxCameraFovVertical;
   desc.viewSpaceToMetersFactor = 1.0f;
   desc.flags = context_desc_.hdr ? 0 : FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
   upscaler_.command_processor().GetDeferredCommandList().DaoCallback(
@@ -344,6 +320,27 @@ void FsrBackend::ExecuteDispatch(void* context,
 }
 
 }  // namespace
+
+std::vector<FfxApi::Version> FfxApi::Versions(uint64_t create_desc_type,
+                                              ID3D12Device* device) const {
+  ffxQueryDescGetVersions versions = {};
+  versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+  versions.createDescType = create_desc_type;
+  versions.device = device;
+  uint64_t count = 0;
+  versions.outputCount = &count;
+  query(nullptr, &versions.header);
+  std::vector<uint64_t> ids(count);
+  std::vector<const char*> names(count);
+  versions.versionIds = ids.data();
+  versions.versionNames = names.data();
+  query(nullptr, &versions.header);
+  std::vector<Version> result(count);
+  for (uint64_t i = 0; i < count; ++i) {
+    result[i] = {ids[i], names[i]};
+  }
+  return result;
+}
 
 FfxApi::~FfxApi() {
   if (module) {

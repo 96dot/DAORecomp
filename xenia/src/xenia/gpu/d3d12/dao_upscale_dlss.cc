@@ -98,7 +98,7 @@ class DlssBackend : public UpscalerBackend {
   // slDLSSSetOptions succeeded for context_desc_.
   bool initialized_ = false;
   ContextDesc context_desc_ = {};
-  uint32_t jitter_phase_count_ = 8;
+  uint32_t jitter_phase_count_ = kNativeJitterPhases;
   // What the deferred dispatch needs when the command list is executed.
   Frame frame_ = {};
   uint32_t frame_index_ = 0;
