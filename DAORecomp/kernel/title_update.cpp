@@ -8,6 +8,8 @@ namespace dao::kernel
 {
     namespace
     {
+        // The disc's default.xex (installer/deps.py GAME_XEX_SHA1).
+        constexpr std::string_view kGameXexSha1 = "532C0EC164F44BC8784CC0E8F6F67F72C1ED3751";
         // Title Update 6's and 7's default.xexp (installer/deps.py TU6_XEXP_SHA1,
         // TU7_XEXP_SHA1).
         constexpr std::string_view kTu6XexpSha1 = "4141B608E44C4ED35EB4E24BA2C05844A2F57A54";
@@ -33,5 +35,10 @@ namespace dao::kernel
     int TitleUpdateNumber(std::span<const uint8_t> xexp)
     {
         return NumberOf(Sha1(xexp));
+    }
+
+    bool IsGameXex(std::span<const uint8_t> xex)
+    {
+        return Sha1(xex) == kGameXexSha1;
     }
 }

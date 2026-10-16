@@ -1,6 +1,6 @@
 #pragma once
-// The title update's files, apart from the recompiled code (so the launcher-only
-// build can check them too).
+// The game's executable and the title update's files, apart from the recompiled code
+// (so the launcher-only build can check them too).
 
 namespace dao::kernel
 {
@@ -15,4 +15,9 @@ namespace dao::kernel
     int TitleUpdateNumber(const std::filesystem::path& xexp);
     // The same for a default.xexp read into memory.
     int TitleUpdateNumber(std::span<const uint8_t> xexp);
+
+    // Whether a default.xex read into memory is the disc's the code was recompiled
+    // from (by its SHA-1), the only one the loader and the patcher trust what they read
+    // in.
+    bool IsGameXex(std::span<const uint8_t> xex);
 }

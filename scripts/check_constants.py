@@ -38,6 +38,7 @@ CHECKS = [
     ("DAORecomp/launcher/install_runner.cpp", "kEngineMagic", f'"{ENGINE_MAGIC}"'),
     ("DAORecomp/content/content.h", "kTitleId", f"0x{deps.GAME_TITLE_ID:08X}"),
     ("DAORecomp/content/install.cpp", "kMediaId", f"0x{deps.GAME_MEDIA_ID:08X}"),
+    ("DAORecomp/kernel/title_update.cpp", "kGameXexSha1", f'"{deps.GAME_XEX_SHA1.upper()}"'),
     ("DAORecomp/kernel/title_update.cpp", "kTu6XexpSha1", f'"{deps.TU6_XEXP_SHA1.upper()}"'),
     ("DAORecomp/kernel/title_update.cpp", "kTu7XexpSha1", f'"{deps.TU7_XEXP_SHA1.upper()}"'),
     ("xenia/src/xenia/ui/d3d12/dao_streamline.cc", "kInterposerSha256", f'"{deps.STREAMLINE_INTERPOSER_SHA256}"'),

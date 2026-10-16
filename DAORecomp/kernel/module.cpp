@@ -120,6 +120,12 @@ namespace dao::kernel
             LOGE("Failed to read {}", Utf8(path));
             return false;
         }
+        // (The patcher and the parser below trust what they read: only the known file.)
+        if (!IsGameXex(file))
+        {
+            LOGE("{} isn't the one the code was recompiled from (the disc with media ID 186A1115)", Utf8(path));
+            return false;
+        }
         if (!patchPath.empty())
         {
             const auto patch = LoadFile(patchPath);
