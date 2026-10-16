@@ -467,7 +467,9 @@ namespace dao::gpu
     void CallInterruptCallback(uint32_t callback, uint32_t userData, uint32_t source, uint32_t cpu)
     {
         // Interrupts are serialised (the console delivers them one at a time) and run
-        // with the PCR claiming the target hardware thread.
+        // with the PCR claiming the target hardware thread, as a DPC: at DISPATCH_LEVEL
+        // with dpc_active set, as on the console (and Xenia's EmulateCPInterruptDPC),
+        // for guest code that checks either.
         std::lock_guard lock(s_interruptMutex);
         GuestThread* thread = GuestThread::Current();
         if (!thread)
@@ -475,7 +477,15 @@ namespace dao::gpu
         if (cpu > 5)
             cpu = 2;
         *g_memory.Translate<uint8_t>(thread->pcr + kPcrCurrentCpu) = uint8_t(cpu);
+        constexpr uint8_t kDispatchLevel = 2;
+        uint8_t& irql = *g_memory.Translate<uint8_t>(thread->pcr + kPcrIrql);
+        u32& dpcActive = *g_memory.Translate<u32>(thread->pcr + kPcrDpcActive);
+        const uint8_t oldIrql = irql;
+        irql = kDispatchLevel;
+        dpcActive = 1;
         CallGuest(callback, { source, userData });
+        dpcActive = 0;
+        irql = oldIrql;
     }
 }
 

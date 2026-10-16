@@ -3,6 +3,8 @@
 #include "thread.h"
 #include "memory.h"
 
+#include <unordered_set>
+
 namespace dao::kernel
 {
     static std::mutex s_dispatchMutex;
@@ -163,12 +165,39 @@ namespace dao::kernel
         return previous;
     }
 
+    // The live mutants, for abandoning a thread's. Taken after the dispatcher lock.
+    static std::mutex s_mutantsMutex;
+    static std::unordered_set<Mutant*> s_mutants;
+
     Mutant::Mutant(GuestThread* initialOwner) : KernelObject(ObjectType::Mutant)
     {
         if (initialOwner)
         {
             owner = initialOwner;
             recursion = 1;
+        }
+        std::lock_guard lock(s_mutantsMutex);
+        s_mutants.insert(this);
+    }
+
+    Mutant::~Mutant()
+    {
+        std::lock_guard lock(s_mutantsMutex);
+        s_mutants.erase(this);
+    }
+
+    void AbandonMutants(GuestThread* thread)
+    {
+        std::lock_guard lock(s_mutantsMutex);
+        for (Mutant* mutant : s_mutants)
+        {
+            if (mutant->owner != thread)
+                continue;
+            mutant->owner = nullptr;
+            mutant->recursion = 0;
+            mutant->abandoned = true;
+            mutant->SyncGuest();
+            NotifyDispatcher(*mutant);
         }
     }
 
@@ -224,6 +253,25 @@ namespace dao::kernel
     }
 
     // ------------------------------------------------------------------ timers
+
+    // A timer's APC queued on its thread: the console's timer has one KAPC, which isn't
+    // queued again while it waits, and is taken back by a Set or Cancel. So a periodic
+    // timer whose thread is seldom alertable runs its routine once, not once a firing.
+    static bool IsTimerApc(const Apc& apc, const Timer& timer)
+    {
+        return !apc.guestApc && !apc.kernelRoutine && apc.normalRoutine == timer.apcRoutine
+            && apc.normalContext == timer.apcContext;
+    }
+
+    // With the dispatcher lock held.
+    static void TakeBackTimerApc(Timer& timer)
+    {
+        if (!timer.apcRoutine)
+            return;
+        if (auto thread = timer.apcThread.lock())
+            std::erase_if(static_cast<GuestThread*>(thread.get())->apcQueue,
+                [&](const Apc& apc) { return IsTimerApc(apc, timer); });
+    }
 
     struct TimerService
     {
@@ -293,10 +341,13 @@ namespace dao::kernel
             {
                 if (auto thread = timer->apcThread.lock())
                 {
-                    const uint64_t now = SystemTime100ns();
-                    static_cast<GuestThread*>(thread.get())->apcQueue.push_back(
-                        { 0, timer->apcRoutine, timer->apcContext, uint32_t(now), uint32_t(now >> 32), 0 });
-                    NotifyDispatcher(*thread);
+                    auto& queue = static_cast<GuestThread*>(thread.get())->apcQueue;
+                    if (std::ranges::none_of(queue, [&](const Apc& apc) { return IsTimerApc(apc, *timer); }))
+                    {
+                        const uint64_t now = SystemTime100ns();
+                        queue.push_back({ 0, timer->apcRoutine, timer->apcContext, uint32_t(now), uint32_t(now >> 32), 0 });
+                        NotifyDispatcher(*thread);
+                    }
                 }
             }
         }
@@ -324,6 +375,7 @@ namespace dao::kernel
             wasSignaled = signaled;
             signaled = false;
             gen = ++generation;
+            TakeBackTimerApc(*this);
             apcRoutine = routine;
             apcContext = context;
             apcThread = setter ? setter->weak_from_this() : std::weak_ptr<KernelObject>();
@@ -356,6 +408,7 @@ namespace dao::kernel
         auto lock = LockDispatcher();
         const bool wasSet = !signaled;
         generation++;
+        TakeBackTimerApc(*this);
         return wasSet;
     }
 
@@ -598,15 +651,6 @@ namespace dao::kernel
 
         for (;;)
         {
-
-            if (alertable && self && !self->apcQueue.empty())
-            {
-                registration.Remove();
-                lock.unlock();
-                self->DeliverApcs();
-                return X_STATUS_USER_APC;
-            }
-
             if (waitAll)
             {
                 bool all = true;
@@ -635,6 +679,16 @@ namespace dao::kernel
                         return uint32_t(X_STATUS_WAIT_0 + i) + objects[i]->WaitStatusAdjust();
                     }
                 }
+            }
+
+            // APCs only when no object is signalled: as on NT, an alertable wait takes
+            // a signalled object first.
+            if (alertable && self && !self->apcQueue.empty())
+            {
+                registration.Remove();
+                lock.unlock();
+                self->DeliverApcs();
+                return X_STATUS_USER_APC;
             }
 
             if (poll)
@@ -718,8 +772,9 @@ namespace dao::kernel
             // a sleep. A poll that sleeps can miss a flag the other thread clears
             // only briefly: then that thread should wait for the poller
             // (gpu/held_shot.cpp), rather than the sleep be made shorter.
-            // (A poll's gap is a load, a compare and the call: about 0.2-2 us; a loop
-            // doing work between yields is slowed if counted.)
+            // The gap is a poll's cost (a load, a compare and the call: under 2 us
+            // for nearly all the game's Sleep(0)s, measured) with room to spare;
+            // at 50 us, loops doing a little work between yields were slowed too.
             constexpr auto kPollGap = std::chrono::microseconds(10);
             constexpr uint32_t kPollsBeforeSleeping = 64;
             thread_local std::chrono::steady_clock::time_point lastReturn;

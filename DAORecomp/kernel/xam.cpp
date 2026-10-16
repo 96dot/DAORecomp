@@ -44,14 +44,20 @@ namespace dao::imp
         u32 extendedError;
     };
 
-    static void CompleteOverlapped(uint32_t overlapped, uint32_t result, uint32_t extendedError, uint32_t length)
+    // `caller` gets the completion routine when the overlapped names no thread (a
+    // completion on a host thread, which has no current guest thread).
+    static void CompleteOverlapped(uint32_t overlapped, uint32_t result, uint32_t extendedError, uint32_t length,
+        std::shared_ptr<GuestThread> caller = nullptr)
     {
         if (!overlapped)
             return;
         auto* o = g_memory.Translate<X_XOVERLAPPED>(overlapped);
-        o->result = result;
+        // The result last: a thread polling it (XHasOverlappedIoCompleted) then reads
+        // the length and error written.
         o->length = length;
         o->extendedError = extendedError;
+        std::atomic_thread_fence(std::memory_order_release);
+        o->result = result;
         if (const uint32_t event = o->event)
         {
             if (auto e = LookupHandle<Event>(event, ObjectType::Event))
@@ -61,7 +67,7 @@ namespace dao::imp
         {
             std::shared_ptr<GuestThread> thread = LookupHandle<GuestThread>(o->context, ObjectType::Thread);
             if (!thread)
-                thread = GuestThread::CurrentRef();
+                thread = caller ? std::move(caller) : GuestThread::CurrentRef();
             if (thread)
                 thread->QueueApc({ 0, routine, result, length, overlapped, 0 });
         }
@@ -1260,10 +1266,22 @@ namespace dao::imp
         };
         if (!overlapped)
             return run();
-        std::thread([run, overlapped] {
+        // Pending until the player is done, as Xenia's deferred completion: a wait on
+        // an event an earlier call left set, or a poll of the result, would otherwise
+        // see it done at once.
+        auto* o = g_memory.Translate<X_XOVERLAPPED>(overlapped);
+        o->length = 0;
+        o->extendedError = 0;
+        o->result = X_ERROR_IO_PENDING;
+        if (const uint32_t event = o->event)
+        {
+            if (auto e = LookupHandle<Event>(event, ObjectType::Event))
+                e->Reset();
+        }
+        std::thread([run, overlapped, caller = GuestThread::CurrentRef()] {
             SetThreadDescription(GetCurrentThread(), L"Keyboard");
             const uint32_t result = run();
-            CompleteOverlapped(overlapped, result, result ? 0x80070000 | result : 0, 0);
+            CompleteOverlapped(overlapped, result, result ? 0x80070000 | result : 0, 0, caller);
         }).detach();
         return X_ERROR_IO_PENDING;
     }
@@ -1276,15 +1294,50 @@ namespace dao::imp
 
     // --------------------------------------------------------------- messages
 
+    // The music player's (app 0xFA) getters write through pointers in their argument
+    // block: answered as Xenia's XMP app does (nothing playing, full volume, the title
+    // in control), so the caller doesn't read whatever its stack held.
+    static void AnswerMusicPlayer(uint32_t app, uint32_t message, uint32_t args)
+    {
+        if (app != 0xFA || !args)
+            return;
+        const u32* a = g_memory.Translate<u32>(args);
+        auto put = [](uint32_t at, uint32_t value) {
+            if (at)
+                *g_memory.Translate<u32>(at) = value;
+        };
+        switch (message)
+        {
+        case 0x00070009: // XMPGetStatus(client, state*): idle
+            put(a[1], 0);
+            break;
+        case 0x0007000B: // XMPGetVolume(client, float*)
+            if (const uint32_t at = a[1])
+                *g_memory.Translate<be<float>>(at) = 1.0f;
+            break;
+        case 0x0007001B: // XMPGetPlaybackController(client, controller*, locked*): the title's, unlocked
+            put(a[1], 0);
+            put(a[2], 0);
+            break;
+        case 0x00070029: // XMPGetPlaybackBehavior(client, three outputs)
+            put(a[1], 0);
+            put(a[2], 0);
+            put(a[3], 0);
+            break;
+        }
+    }
+
     uint32_t XMsgInProcessCall(uint32_t app, uint32_t message, uint32_t param1, uint32_t param2)
     {
         LOGT("XMsgInProcessCall(app {:02X}, msg {:08X}, {:08X}, {:08X})", app, message, param1, param2);
+        AnswerMusicPlayer(app, message, param1);
         return X_ERROR_SUCCESS;
     }
 
     uint32_t XMsgStartIORequest(uint32_t app, uint32_t message, uint32_t overlapped, uint32_t buffer, uint32_t length)
     {
         LOGT("XMsgStartIORequest(app {:02X}, msg {:08X}, buf {:08X}+{:#x})", app, message, buffer, length);
+        AnswerMusicPlayer(app, message, buffer);
         return Finish(overlapped, X_ERROR_SUCCESS);
     }
 

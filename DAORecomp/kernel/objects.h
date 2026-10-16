@@ -57,6 +57,9 @@ namespace dao::kernel
     using ObjectRef = std::shared_ptr<KernelObject>;
 
     std::unique_lock<std::mutex> LockDispatcher();
+    // A thread ending: the mutants it owns are abandoned, as on the console (their
+    // waiters get STATUS_ABANDONED_WAIT_0). Called with the dispatcher lock held.
+    void AbandonMutants(GuestThread* thread);
     // Wakes the threads waiting on the object; called with the dispatcher lock
     // held, after changing its signal state (or a thread's APCs or suspension).
     void NotifyDispatcher(KernelObject& object);
@@ -99,6 +102,7 @@ namespace dao::kernel
     struct Mutant final : KernelObject
     {
         explicit Mutant(GuestThread* initialOwner);
+        ~Mutant() override;
 
         GuestThread* owner = nullptr;
         uint32_t recursion = 0;

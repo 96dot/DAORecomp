@@ -13,6 +13,7 @@
 #include "xenia/base/clock.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
+#include "xenia/base/platform_win.h"
 #include "xenia/base/profiling.h"
 #include "xenia/base/threading.h"
 #include "xenia/dao_host.h"
@@ -100,6 +101,10 @@ X_STATUS GraphicsSystem::Setup(Memory* memory,
           [this]() {
             xe::dao_host::AttachGuestThread("GPU Frame limiter");
             xe::threading::set_name("GPU Frame limiter");
+            // DAO: the console's vblank interrupt is never late; at normal
+            // priority the guest's threads (mapped to HIGHEST) held it off.
+            // It sleeps nearly all the time.
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
             uint64_t normalized_framerate_limit =
                 std::max<uint64_t>(0, cvars::framerate_limit);
 

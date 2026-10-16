@@ -19,6 +19,9 @@ namespace
 {
     // The job the update thread is waiting for (guest address), or 0.
     std::atomic<uint32_t> s_awaitedJob{ 0 };
+    // The thread waiting for it (host id): a job it runs itself is never held, or
+    // it would wait for itself.
+    std::atomic<DWORD> s_awaitingThread{ 0 };
 
     // The longest a run of the job waits for the update thread, in case it never
     // looks: a few frames.
@@ -33,9 +36,13 @@ namespace
     void EndHoldHook(PPCContext& ctx, uint8_t* base, PPCFunc* original)
     {
         const uint32_t shot = ctx.r3.u32;
-        s_awaitedJob = PPC_LOAD_U8(shot + kShotHeldOffset) ? PPC_LOAD_U32(shot + kShotJobOffset) : 0;
+        // (Restored after, not cleared, should it call itself.)
+        const uint32_t outerJob = s_awaitedJob.exchange(
+            PPC_LOAD_U8(shot + kShotHeldOffset) ? PPC_LOAD_U32(shot + kShotJobOffset) : 0);
+        const DWORD outerThread = s_awaitingThread.exchange(GetCurrentThreadId());
         original(ctx, base);
-        s_awaitedJob = 0;
+        s_awaitingThread = outerThread;
+        s_awaitedJob = outerJob;
     }
 
     // The render job: r3 is the job. Once it returns, its running byte is clear.
@@ -43,7 +50,7 @@ namespace
     {
         const uint32_t job = ctx.r3.u32;
         original(ctx, base);
-        if (!job || s_awaitedJob != job)
+        if (!job || s_awaitedJob != job || s_awaitingThread == GetCurrentThreadId())
             return;
         const auto deadline = std::chrono::steady_clock::now() + kHandOverTimeout;
         while (s_awaitedJob == job && std::chrono::steady_clock::now() < deadline)

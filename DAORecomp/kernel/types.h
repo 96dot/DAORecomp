@@ -179,6 +179,7 @@ namespace dao::kernel
     constexpr uint32_t kPcrPcrPtr = 0x030;
     constexpr uint32_t kPcrStackBase = 0x070;
     constexpr uint32_t kPcrStackEnd = 0x074;
+    constexpr uint32_t kPcrIrql = 0x018;          // current_irql (a byte)
     constexpr uint32_t kPcrCurrentThread = 0x100; // prcb_data.current_thread
     constexpr uint32_t kPcrCurrentCpu = 0x10C;    // prcb_data.current_cpu
     constexpr uint32_t kPcrDpcActive = 0x150;     // prcb_data.dpc_active

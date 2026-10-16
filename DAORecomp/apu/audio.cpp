@@ -128,6 +128,9 @@ namespace dao::apu
         {
             GuestThread::AttachHostThread("XAudio worker");
             SetThreadDescription(GetCurrentThread(), L"XAudio worker");
+            // Above the guest's threads (as the console's audio driver, and Xenia's
+            // worker): late, the callbacks are dropped and the sound breaks up.
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
             using Clock = std::chrono::steady_clock;
             // If the worker falls this far behind, restart the schedule rather than bursting callbacks.
@@ -142,8 +145,12 @@ namespace dao::apu
                 ++frame;
 
                 const Clock::time_point now = Clock::now();
-                if (now - (origin + FrameOffset(frame)) > kMaxLag)
+                if (const auto lag = now - (origin + FrameOffset(frame)); lag > kMaxLag)
                 {
+                    static std::atomic<uint32_t> s_dropped{ 0 };
+                    if (const uint32_t n = ++s_dropped; n <= 5 || (n & (n - 1)) == 0)
+                        LOGW("XAudio: the worker was {} ms late, its callbacks were dropped (#{})",
+                            std::chrono::duration_cast<std::chrono::milliseconds>(lag).count(), n);
                     origin = now;
                     frame = 0;
                 }

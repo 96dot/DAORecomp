@@ -79,7 +79,12 @@ namespace dao::imp
             startAddress, startContext, xapiStartup, params.stackSize, flags, thread->threadId);
 
         if (handleOut)
-            *handleOut = (flags & kReturnKThreadPtr) ? thread->kthread : CreateHandle(thread);
+        {
+            // With the KTHREAD instead of a handle, a handle is still made (and kept, as
+            // Xenia does), so the thread outlives its end for a wait on that KTHREAD.
+            const uint32_t handle = CreateHandle(thread);
+            *handleOut = (flags & kReturnKThreadPtr) ? thread->kthread : handle;
+        }
         if (threadIdOut)
             *threadIdOut = thread->threadId;
         return X_STATUS_SUCCESS;
@@ -367,6 +372,12 @@ namespace dao::imp
         return X_STATUS_SUCCESS;
     }
 
+    // The references ObReferenceObjectByHandle took, by guest object: the object
+    // stays alive (its guest header too) after its handle is closed, until
+    // ObDereferenceObject.
+    static std::mutex s_obRefsMutex;
+    static std::unordered_multimap<uint32_t, ObjectRef> s_obRefs;
+
     uint32_t ObReferenceObjectByHandle(uint32_t handle, uint32_t objectType, u32* objectOut)
     {
         auto object = LookupHandle(handle);
@@ -376,10 +387,21 @@ namespace dao::imp
             return X_STATUS_NO_MEMORY;
         if (objectOut)
             *objectOut = object->guestObject;
+        std::lock_guard lock(s_obRefsMutex);
+        s_obRefs.emplace(object->guestObject, std::move(object));
         return X_STATUS_SUCCESS;
     }
 
-    void ObDereferenceObject(uint32_t) {}
+    void ObDereferenceObject(uint32_t object)
+    {
+        ObjectRef released; // freed after the lock is let go
+        std::lock_guard lock(s_obRefsMutex);
+        if (auto it = s_obRefs.find(object); it != s_obRefs.end())
+        {
+            released = std::move(it->second);
+            s_obRefs.erase(it);
+        }
+    }
 
     // ------------------------------------------------------------------ waits
 
@@ -581,7 +603,7 @@ namespace dao::imp
 
     static uint8_t& Irql(PPCContext& ctx)
     {
-        return *g_memory.Translate<uint8_t>(PcrOf(ctx) + 0x18);
+        return *g_memory.Translate<uint8_t>(PcrOf(ctx) + kPcrIrql);
     }
 
     static void AcquireSpin(PPCContext& ctx, u32* lock)

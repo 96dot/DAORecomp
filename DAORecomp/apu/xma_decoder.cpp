@@ -707,12 +707,21 @@ namespace dao::apu
         BitReader frameStream(m_inputBuffer.data(), (kXmaBitsPerPacket - kXmaBitsPerPacketHeader) * 2);
         frameStream.SetOffset(relativeOffset - kXmaBitsPerPacketHeader);
         // A frame is never longer than a packet's payload; a damaged header saying so would
-        // copy past the frame buffer.
+        // copy past the frame buffer. Decoding goes on at the next packet that starts a
+        // frame, as Xenia resyncs (rather than stop the context: every later pass would
+        // read the same header, and the sound never end).
         if (packetInfo.currentFrameSize > kMaxFrameSizeInBits ||
             packetInfo.currentFrameSize > frameStream.BitsRemaining())
         {
-            data.Set(kErrorStatus, 4);
+            XMA_WARN_LIMITED("XMA: frame size {} bits out of range, resyncing at the next packet",
+                packetInfo.currentFrameSize);
+            const uint32_t nextInputOffset = GetNextPacketReadOffset(data, nextPacketIndex, currentPacketCount);
+            if (nextPacketIndex >= currentPacketCount || nextInputOffset == kXmaBitsPerPacketHeader)
+                SwapInputBuffer(data);
+            data.Set(kInputBufferReadOffset, nextInputOffset);
             m_lastNote = XmaSkip::FrameError;
+            if (m_trace)
+                m_trace->frameErrors++;
             return;
         }
 

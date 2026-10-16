@@ -699,8 +699,14 @@ namespace dao::imp
         if (length < 72)
             return X_STATUS_BUFFER_TOO_SMALL;
 
-        const std::string pattern = AnsiString(fileName);
         std::lock_guard lock(file->mutex);
+        // XAPI passes the mask only on FindFirstFile; NT keeps it for the calls after.
+        // (Not "a new mask restarts", as Xenia: a guest passing the same mask each
+        // time would get the first entry forever.)
+        if (std::string requested = AnsiString(fileName);
+            !requested.empty() && (restart || !file->enumerated || file->searchPattern.empty()))
+            file->searchPattern = std::move(requested);
+        const std::string& pattern = file->searchPattern;
         if (restart || !file->enumerated)
         {
             // Mods layer over the disc: list every layer, the first one wins per name.
@@ -725,6 +731,7 @@ namespace dao::imp
             }
             file->nextEntry = 0;
             file->enumerated = true;
+            file->returnedAny = false;
         }
 
         while (file->nextEntry < file->entries.size())
@@ -755,17 +762,20 @@ namespace dao::imp
             *reinterpret_cast<u32*>(info + 0x3C) = uint32_t(name.size());
             memcpy(info + 0x40, name.data(), name.size());
             const uint32_t written = uint32_t(0x40 + name.size());
+            file->returnedAny = true;
             return CompleteIo(*file, X_STATUS_SUCCESS, written, eventHandle, apcRoutine, apcContext, iosb) == X_STATUS_PENDING
                 ? X_STATUS_PENDING : X_STATUS_SUCCESS;
         }
 
-        SetIosb(iosb, X_STATUS_NO_MORE_FILES, 0);
+        // Nothing matched at all: FindFirstFile's "not found", not the end of a list.
+        const uint32_t status = file->returnedAny ? X_STATUS_NO_MORE_FILES : X_STATUS_NO_SUCH_FILE;
+        SetIosb(iosb, status, 0);
         if (eventHandle)
         {
             if (auto e = LookupHandle<Event>(eventHandle, ObjectType::Event))
                 e->Set();
         }
-        return X_STATUS_NO_MORE_FILES;
+        return status;
     }
 
     uint32_t ObCreateSymbolicLink(X_ANSI_STRING* link, X_ANSI_STRING* target)

@@ -59,6 +59,8 @@ namespace dao::kernel
         std::vector<std::filesystem::directory_entry> entries;
         size_t nextEntry = 0;
         bool enumerated = false;
+        std::string searchPattern; // from the first call: FindNextFile passes none
+        bool returnedAny = false;
 
         // File handles are always signaled (I/O completes synchronously).
         bool IsWaitable() const override { return true; }

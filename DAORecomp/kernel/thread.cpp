@@ -326,6 +326,7 @@ namespace dao::kernel
             auto lock = LockDispatcher();
             exitCode = code;
             terminated = true;
+            AbandonMutants(this);
             SyncGuest();
             g_memory.Translate<X_DISPATCH_HEADER>(kthread)->signalState = 1;
             NotifyDispatcher(*this);
