@@ -12,6 +12,7 @@
 #include "gpu/video.h"
 #include "gpu/xenia_host.h"
 #include "kernel/function.h"
+#include "kernel/game_exit.h"
 #include "kernel/vfs.h"
 #include "program.h"
 #include "settings.h"
@@ -486,7 +487,7 @@ namespace dao::ui
                 Warn("can't start the launcher (error {})", GetLastError());
                 return;
             }
-            TerminateProcess(GetCurrentProcess(), 0);
+            kernel::ExitGame(0);
         }
 
         // "Set <key> <value>", "RestoreDefaults", "OpenMods", "Cheats" (also the

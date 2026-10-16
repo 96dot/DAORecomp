@@ -22,7 +22,7 @@ namespace dao::content
     // A name content can have as its folder: a plain one (IsPlainName) without "~",
     // so it's neither another's short (8.3) name nor a restore's <name>~current (see
     // save_backups.h), and not named as the files kept beside content (<name>.name) or
-    // a save's backup (BackUpSave's <name>.new and <name>.writing).
+    // a save's backup (SetSaveAside's <name>.new and <name>.writing).
     inline bool IsContentName(std::string_view name)
     {
         if (!IsPlainName(name) || name.find('~') != std::string_view::npos)

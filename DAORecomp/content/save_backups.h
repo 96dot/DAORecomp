@@ -1,7 +1,7 @@
 #pragma once
 // The saves' backups. Overwriting a save keeps the one it replaces in
 // userdata/save_backups/<name>/, with its display name in <name>.name (XAM's
-// BackUpSave, kernel/xam.cpp); the launcher lists them and puts one back. A restore
+// SetSaveAside, kernel/xam.cpp); the launcher lists them and puts one back. A restore
 // sets the save it replaces aside there as <name>~current while it works.
 
 #include <chrono>

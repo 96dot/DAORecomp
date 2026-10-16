@@ -4,6 +4,7 @@
 #include "module.h"
 #include "thread.h"
 #include "kernel/console_config.h"
+#include "kernel/game_exit.h"
 
 namespace dao::imp
 {
@@ -546,7 +547,7 @@ namespace dao::imp
     void HalReturnToFirmware(uint32_t routine)
     {
         LOGI("HalReturnToFirmware({}) - exiting", routine);
-        TerminateProcess(GetCurrentProcess(), 0);
+        ExitGame(0);
     }
 
     // ------------------------------------------------------------- XConfig

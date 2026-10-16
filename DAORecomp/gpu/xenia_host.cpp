@@ -4,6 +4,7 @@
 
 #include "gpu/xenia_host.h"
 #include "text.h"
+#include "kernel/game_exit.h"
 #include "kernel/memory.h"
 #include "kernel/module.h"
 #include "kernel/thread.h"
@@ -65,7 +66,9 @@ namespace dao::gpu
             void OnClosing(xe::ui::UIEvent&) override
             {
                 LOGI("Window closed, exiting");
-                TerminateProcess(GetCurrentProcess(), 0);
+                // Gone at once, though a save the game is writing is finished first.
+                ShowWindow(static_cast<xe::ui::Win32Window&>(*s_window).hwnd(), SW_HIDE);
+                ExitGame(0);
             }
         } s_closeListener;
 
