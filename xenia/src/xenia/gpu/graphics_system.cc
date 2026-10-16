@@ -101,9 +101,10 @@ X_STATUS GraphicsSystem::Setup(Memory* memory,
           [this]() {
             xe::dao_host::AttachGuestThread("GPU Frame limiter");
             xe::threading::set_name("GPU Frame limiter");
-            // DAO: the console's vblank interrupt is never late; at normal
-            // priority the guest's threads (mapped to HIGHEST) held it off.
-            // It sleeps nearly all the time.
+            // DAO: the console's vblank interrupt preempts the game's threads;
+            // at normal priority, the guest's busy threads (priority 2 and up
+            // run at HIGHEST) could delay it. At HIGHEST it at least takes
+            // turns with them, and it sleeps nearly all the time.
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
             uint64_t normalized_framerate_limit =
                 std::max<uint64_t>(0, cvars::framerate_limit);

@@ -700,11 +700,13 @@ namespace dao::imp
             return X_STATUS_BUFFER_TOO_SMALL;
 
         std::lock_guard lock(file->mutex);
-        // XAPI passes the mask only on FindFirstFile; NT keeps it for the calls after.
-        // (Not "a new mask restarts", as Xenia: a guest passing the same mask each
-        // time would get the first entry forever.)
-        if (std::string requested = AnsiString(fileName);
-            !requested.empty() && (restart || !file->enumerated || file->searchPattern.empty()))
+        // FindFirstFile passes the mask, FindNextFile none: NT keeps the first call's
+        // for the calls after. (Not "a new mask restarts", as Xenia: a guest passing the
+        // same mask each time would get the first entry forever.) No mask at all
+        // matches everything.
+        std::string requested = AnsiString(fileName);
+        const bool takesMask = restart || !file->enumerated || file->searchPattern.empty();
+        if (!requested.empty() && takesMask)
             file->searchPattern = std::move(requested);
         const std::string& pattern = file->searchPattern;
         if (restart || !file->enumerated)

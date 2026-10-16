@@ -44,6 +44,12 @@ namespace dao::imp
         u32 extendedError;
     };
 
+    // An XAM error's extended error (HRESULT_FROM_WIN32), 0 for success.
+    static uint32_t ExtendedError(uint32_t result)
+    {
+        return result ? 0x80070000 | result : 0;
+    }
+
     // `caller` gets the completion routine when the overlapped names no thread (a
     // completion on a host thread, which has no current guest thread).
     static void CompleteOverlapped(uint32_t overlapped, uint32_t result, uint32_t extendedError, uint32_t length,
@@ -78,7 +84,7 @@ namespace dao::imp
     {
         if (!overlapped)
             return result;
-        CompleteOverlapped(overlapped, result, extendedError ? extendedError : (result ? 0x80070000 | result : 0), length);
+        CompleteOverlapped(overlapped, result, extendedError ? extendedError : ExtendedError(result), length);
         return X_ERROR_IO_PENDING;
     }
 
@@ -1281,7 +1287,7 @@ namespace dao::imp
         std::thread([run, overlapped, caller = GuestThread::CurrentRef()] {
             SetThreadDescription(GetCurrentThread(), L"Keyboard");
             const uint32_t result = run();
-            CompleteOverlapped(overlapped, result, result ? 0x80070000 | result : 0, 0, caller);
+            CompleteOverlapped(overlapped, result, ExtendedError(result), 0, caller);
         }).detach();
         return X_ERROR_IO_PENDING;
     }
@@ -1299,7 +1305,9 @@ namespace dao::imp
     // in control), so the caller doesn't read whatever its stack held.
     static void AnswerMusicPlayer(uint32_t app, uint32_t message, uint32_t args)
     {
-        if (app != 0xFA || !args)
+        constexpr uint32_t kMusicPlayerApp = 0xFA;
+        // (An argument block at the very top of the address space is no game's.)
+        if (app != kMusicPlayerApp || !args || args > 0xFFFFFFF0)
             return;
         const u32* a = g_memory.Translate<u32>(args);
         auto put = [](uint32_t at, uint32_t value) {

@@ -708,8 +708,8 @@ namespace dao::apu
         frameStream.SetOffset(relativeOffset - kXmaBitsPerPacketHeader);
         // A frame is never longer than a packet's payload; a damaged header saying so would
         // copy past the frame buffer. Decoding goes on at the next packet that starts a
-        // frame, as Xenia resyncs (rather than stop the context: every later pass would
-        // read the same header, and the sound never end).
+        // frame, as Xenia resyncs, without the error status (4) that stops the context:
+        // every later pass would read the same header, and the sound would never end.
         if (packetInfo.currentFrameSize > kMaxFrameSizeInBits ||
             packetInfo.currentFrameSize > frameStream.BitsRemaining())
         {

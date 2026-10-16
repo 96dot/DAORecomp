@@ -128,8 +128,9 @@ namespace dao::apu
         {
             GuestThread::AttachHostThread("XAudio worker");
             SetThreadDescription(GetCurrentThread(), L"XAudio worker");
-            // Above the guest's threads (as the console's audio driver, and Xenia's
-            // worker): late, the callbacks are dropped and the sound breaks up.
+            // As high as the guest's busy threads (priority 2 and up are HIGHEST too,
+            // see ApplyHostPriority), as Xenia's worker: late, the callbacks are dropped
+            // and the sound breaks up.
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
             using Clock = std::chrono::steady_clock;
@@ -147,6 +148,7 @@ namespace dao::apu
                 const Clock::time_point now = Clock::now();
                 if (const auto lag = now - (origin + FrameOffset(frame)); lag > kMaxLag)
                 {
+                    // Logged the first 5 times, then at each power of two.
                     static std::atomic<uint32_t> s_dropped{ 0 };
                     if (const uint32_t n = ++s_dropped; n <= 5 || (n & (n - 1)) == 0)
                         LOGW("XAudio: the worker was {} ms late, its callbacks were dropped (#{})",
@@ -825,9 +827,9 @@ namespace dao::imp
             {
                 // The decoders read the guest addresses the game passed, which are always valid host
                 // addresses. The dword values above are physical and are only kept for the guest.
-                // A new sound: the host decoder starts over too (upstream Xenia's
-                // XMAInitializeContext, kernel/xboxkrnl/xboxkrnl_audio_xma.cc, clears the
-                // context through the XMA context-clear register).
+                // A new sound: the host decoder starts over too, as upstream Xenia's
+                // XMAInitializeContext clears the context (through the XMA context-clear
+                // register).
                 ResetSlotDecoders(*slot);
                 slot->inputGuest[0] = uint32_t(init->input0Ptr);
                 slot->inputGuest[1] = uint32_t(init->input1Ptr);

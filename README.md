@@ -362,7 +362,7 @@ are tested, and the traps found so far. The build details are below.
   (`ensure_streamline`), whose DLLs are copied next to the exe.
 - `thirdparty/lmxxf-nr` is the part of lmxxf's neural rendering source the game builds
   (`LmxxfNrRuntime.dll`, from `DAORecomp/neural/lmxxf_runtime.cpp`) and the installer
-  compiles (`installer/neural.py`, its HIP kernels by `hip/build-modules.ps1`'s recipe):
+  compiles (`installer/neural.py`, its HIP kernels by `thirdparty/lmxxf-nr/hip/build-modules.ps1`'s recipe):
   copied from a checkout by `scripts/vendor_lmxxf.py`, which records the commit in
   `SOURCE`. Never the network's weights.
 - `scripts/build_setup_exe.py` builds `dist/DAORecomp.exe`, what players download: the

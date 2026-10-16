@@ -469,7 +469,8 @@ namespace dao::gpu
         // Interrupts are serialised (the console delivers them one at a time) and run
         // with the PCR claiming the target hardware thread, as a DPC: at DISPATCH_LEVEL
         // with dpc_active set, as on the console (and Xenia's EmulateCPInterruptDPC),
-        // for guest code that checks either.
+        // for guest code that reads the IRQL or KeIsExecutingDpc. (Never nested, being
+        // serialised: dpc_active is back to 0 after.)
         std::lock_guard lock(s_interruptMutex);
         GuestThread* thread = GuestThread::Current();
         if (!thread)
@@ -477,7 +478,6 @@ namespace dao::gpu
         if (cpu > 5)
             cpu = 2;
         *g_memory.Translate<uint8_t>(thread->pcr + kPcrCurrentCpu) = uint8_t(cpu);
-        constexpr uint8_t kDispatchLevel = 2;
         uint8_t& irql = *g_memory.Translate<uint8_t>(thread->pcr + kPcrIrql);
         u32& dpcActive = *g_memory.Translate<u32>(thread->pcr + kPcrDpcActive);
         const uint8_t oldIrql = irql;

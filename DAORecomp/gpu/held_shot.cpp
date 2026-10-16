@@ -36,13 +36,15 @@ namespace
     void EndHoldHook(PPCContext& ctx, uint8_t* base, PPCFunc* original)
     {
         const uint32_t shot = ctx.r3.u32;
-        // (Restored after, not cleared, should it call itself.)
-        const uint32_t outerJob = s_awaitedJob.exchange(
-            PPC_LOAD_U8(shot + kShotHeldOffset) ? PPC_LOAD_U32(shot + kShotJobOffset) : 0);
-        const DWORD outerThread = s_awaitingThread.exchange(GetCurrentThreadId());
+        uint32_t job = PPC_LOAD_U8(shot + kShotHeldOffset) ? PPC_LOAD_U32(shot + kShotJobOffset) : 0;
+        DWORD thread = GetCurrentThreadId();
+        s_awaitedJob = job;
+        s_awaitingThread = thread;
         original(ctx, base);
-        s_awaitingThread = outerThread;
-        s_awaitedJob = outerJob;
+        // Cleared only if still this call's: should another thread have ended a hold
+        // meanwhile, nothing is left awaited with no one waiting.
+        s_awaitingThread.compare_exchange_strong(thread, 0);
+        s_awaitedJob.compare_exchange_strong(job, 0);
     }
 
     // The render job: r3 is the job. Once it returns, its running byte is clear.

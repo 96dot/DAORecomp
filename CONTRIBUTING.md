@@ -133,8 +133,8 @@ Graphics tab script and the installer share: run it after changing one.
 python -I scripts/check_constants.py     # values shared by the installer and the program
 python -I scripts/check_include_case.py  # include case (breaks only the Linux build)
 python -I scripts/test_stfs.py           # the package readers
-python scripts/as2c.py DAORecomp/ui/graphics_tab.as DAORecomp/ui/graphics_tab_as.h kGraphicsTabScript --check
-python scripts/as2c.py DAORecomp/ui/pause_menu.as DAORecomp/ui/pause_menu_as.h kPauseMenuScript --check
+python -I scripts/as2c.py DAORecomp/ui/graphics_tab.as DAORecomp/ui/graphics_tab_as.h kGraphicsTabScript --check
+python -I scripts/as2c.py DAORecomp/ui/pause_menu.as DAORecomp/ui/pause_menu_as.h kPauseMenuScript --check
 ```
 
 `check_include_case.py` checks against the Windows SDK in `tools/winsysroot`, which the

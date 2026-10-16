@@ -60,7 +60,7 @@ namespace dao::kernel
         size_t nextEntry = 0;
         bool enumerated = false;
         std::string searchPattern; // from the first call: FindNextFile passes none
-        bool returnedAny = false;
+        bool returnedAny = false;  // since the list was made: else "no such file"
 
         // File handles are always signaled (I/O completes synchronously).
         bool IsWaitable() const override { return true; }

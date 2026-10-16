@@ -183,7 +183,7 @@ bool FsrBackend::EnsureContext(const ContextDesc& desc) {
       }
     }
     if (!version_id) {
-      XELOGW("FSR: FSR {} isn't available, using the default", prefix);
+      XELOGW("FSR: no version {} upscaler available, using the default", prefix);
     }
   }
 
@@ -330,7 +330,8 @@ std::vector<FfxApi::Version> FfxApi::Versions(uint64_t create_desc_type,
   versions.outputCount = &count;
   query(nullptr, &versions.header);
   // The loader's counts aren't trusted further than the arrays given it (a
-  // replaced or proxy DLL could report anything).
+  // replaced or proxy DLL could report anything): the first is capped (the
+  // loader has a handful of versions), and is the second query's capacity.
   constexpr uint64_t kMaxVersions = 64;
   count = std::min(count, kMaxVersions);
   std::vector<uint64_t> ids(count);

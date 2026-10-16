@@ -745,8 +745,10 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
         // DAO: polls in brief sleeps, the core free for the guest's threads
         // (few cores on handhelds). The console re-polls every `wait` GPU
         // clocks; upstream's Sleep(wait / 0x100 ms) with vsync overslept on
-        // Windows' 1 ms timer, delaying the next frame's commands. (The game's
-        // one such wait, its flip, lasts most of a frame: no spin first.)
+        // Windows' 1 ms timer, delaying the next frame's commands. The game's
+        // one such wait, its flip, lasts most of a frame, so there's no yield
+        // loop before the sleeps; 100 us steps end it within about 0.2 ms
+        // (Windows' high resolution timer) at a few thousand wake-ups a second.
         constexpr uint32_t kWaitPollMicroseconds = 100;
         xe::dao_host::ShortSleep(kWaitPollMicroseconds);
 

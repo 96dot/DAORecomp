@@ -116,7 +116,7 @@ the next game.
   for picking) needs `ReadBackGpuWrittenMemory` before it reads. Look for these early:
   the symptom is black or stale images.
 - **Kernel-side, not hooks:** `XamShowKeyboardUI` (a stub returning the default text
-  blocks naming characters), `XamContentCreateEx` (licence mask, keep display names),
+  blocked naming characters; DAO now has an on-screen keyboard, `ui/keyboard.cpp`), `XamContentCreateEx` (licence mask, keep display names),
   save file names (`0x<crc32 of the UTF-16BE character name>` in DAO; check the new
   game's scheme on its saves before touching names).
 

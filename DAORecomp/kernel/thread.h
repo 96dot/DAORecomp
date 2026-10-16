@@ -12,6 +12,7 @@ namespace dao::kernel
         uint32_t arg1;
         uint32_t arg2;
         uint32_t guestApc;       // guest KAPC, 0 for host-queued APCs (timers)
+        const void* timer = nullptr; // the timer that queued it
     };
 
     struct ThreadParams

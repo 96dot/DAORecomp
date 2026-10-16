@@ -259,8 +259,7 @@ namespace dao::kernel
     // timer whose thread is seldom alertable runs its routine once, not once a firing.
     static bool IsTimerApc(const Apc& apc, const Timer& timer)
     {
-        return !apc.guestApc && !apc.kernelRoutine && apc.normalRoutine == timer.apcRoutine
-            && apc.normalContext == timer.apcContext;
+        return apc.timer == &timer;
     }
 
     // With the dispatcher lock held.
@@ -345,7 +344,8 @@ namespace dao::kernel
                     if (std::ranges::none_of(queue, [&](const Apc& apc) { return IsTimerApc(apc, *timer); }))
                     {
                         const uint64_t now = SystemTime100ns();
-                        queue.push_back({ 0, timer->apcRoutine, timer->apcContext, uint32_t(now), uint32_t(now >> 32), 0 });
+                        queue.push_back({ 0, timer->apcRoutine, timer->apcContext, uint32_t(now), uint32_t(now >> 32), 0,
+                            timer.get() });
                         NotifyDispatcher(*thread);
                     }
                 }
@@ -675,8 +675,11 @@ namespace dao::kernel
                     if (objects[i]->IsSignaled(self))
                     {
                         objects[i]->Acquire(self);
+                        // (The adjustment first: it clears an abandoned mutant's flag,
+                        // which the guest's copy shouldn't keep.)
+                        const uint32_t adjust = objects[i]->WaitStatusAdjust();
                         objects[i]->SyncGuest();
-                        return uint32_t(X_STATUS_WAIT_0 + i) + objects[i]->WaitStatusAdjust();
+                        return uint32_t(X_STATUS_WAIT_0 + i) + adjust;
                     }
                 }
             }
@@ -729,20 +732,20 @@ namespace dao::kernel
         static const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
         static const auto delay = reinterpret_cast<DelayFn>(GetProcAddress(ntdll, "NtDelayExecution"));
         static const bool wine = GetProcAddress(ntdll, "wine_get_version") != nullptr;
-        struct Timer
+        struct HighResTimer
         {
             HANDLE handle = wine ? nullptr
                                  : CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
                                        TIMER_ALL_ACCESS);
-            ~Timer()
+            ~HighResTimer()
             {
                 if (handle)
                     ::CloseHandle(handle);
             }
         };
-        thread_local Timer timer;
+        thread_local HighResTimer timer;
         LARGE_INTEGER due;
-        due.QuadPart = -int64_t(microseconds) * 10;
+        due.QuadPart = -int64_t(microseconds) * 10; // relative, in 100 ns units
         if (timer.handle && SetWaitableTimer(timer.handle, &due, 0, nullptr, nullptr, FALSE))
             WaitForSingleObject(timer.handle, INFINITE);
         else if (delay)
@@ -772,9 +775,9 @@ namespace dao::kernel
             // a sleep. A poll that sleeps can miss a flag the other thread clears
             // only briefly: then that thread should wait for the poller
             // (gpu/held_shot.cpp), rather than the sleep be made shorter.
-            // The gap is a poll's cost (a load, a compare and the call: under 2 us
-            // for nearly all the game's Sleep(0)s, measured) with room to spare;
-            // at 50 us, loops doing a little work between yields were slowed too.
+            // A poll's gap (a load, a compare and the call) was under 2 us for
+            // nearly all the game's Sleep(0)s, measured; 10 us leaves room. A wider
+            // gap (it was 50 us) also slowed loops doing a little work between yields.
             constexpr auto kPollGap = std::chrono::microseconds(10);
             constexpr uint32_t kPollsBeforeSleeping = 64;
             thread_local std::chrono::steady_clock::time_point lastReturn;

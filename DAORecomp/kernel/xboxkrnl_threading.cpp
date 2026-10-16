@@ -79,12 +79,7 @@ namespace dao::imp
             startAddress, startContext, xapiStartup, params.stackSize, flags, thread->threadId);
 
         if (handleOut)
-        {
-            // With the KTHREAD instead of a handle, a handle is still made (and kept, as
-            // Xenia does), so the thread outlives its end for a wait on that KTHREAD.
-            const uint32_t handle = CreateHandle(thread);
-            *handleOut = (flags & kReturnKThreadPtr) ? thread->kthread : handle;
-        }
+            *handleOut = (flags & kReturnKThreadPtr) ? thread->kthread : CreateHandle(thread);
         if (threadIdOut)
             *threadIdOut = thread->threadId;
         return X_STATUS_SUCCESS;
@@ -372,12 +367,12 @@ namespace dao::imp
         return X_STATUS_SUCCESS;
     }
 
-    // The references ObReferenceObjectByHandle took, by guest object: the object
-    // stays alive (its guest header too) after its handle is closed, until
-    // ObDereferenceObject.
+    // The references ObReferenceObjectByHandle took, by guest object.
     static std::mutex s_obRefsMutex;
     static std::unordered_multimap<uint32_t, ObjectRef> s_obRefs;
 
+    // A reference keeps the object alive (its guest header too) after its handle is
+    // closed, until ObDereferenceObject.
     uint32_t ObReferenceObjectByHandle(uint32_t handle, uint32_t objectType, u32* objectOut)
     {
         auto object = LookupHandle(handle);
@@ -392,6 +387,7 @@ namespace dao::imp
         return X_STATUS_SUCCESS;
     }
 
+    // Drops one reference ObReferenceObjectByHandle took (none taken: nothing to do).
     void ObDereferenceObject(uint32_t object)
     {
         ObjectRef released; // freed after the lock is let go
@@ -630,7 +626,7 @@ namespace dao::imp
     uint32_t KfAcquireSpinLock(PPCContext& ctx, u32* lock)
     {
         const uint32_t old = Irql(ctx);
-        Irql(ctx) = 2;
+        Irql(ctx) = kDispatchLevel;
         AcquireSpin(ctx, lock);
         return old;
     }
@@ -647,7 +643,7 @@ namespace dao::imp
     uint32_t KeRaiseIrqlToDpcLevel(PPCContext& ctx)
     {
         const uint32_t old = Irql(ctx);
-        Irql(ctx) = 2;
+        Irql(ctx) = kDispatchLevel;
         return old;
     }
 

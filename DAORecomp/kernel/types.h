@@ -176,10 +176,11 @@ namespace dao::kernel
     // Processor control region, pointed to by r13.
     constexpr uint32_t kPcrSize = 0x2D8;
     constexpr uint32_t kPcrTlsPtr = 0x000;
+    constexpr uint32_t kPcrIrql = 0x018;          // current_irql (a byte)
+    constexpr uint8_t kDispatchLevel = 2;         // DISPATCH_LEVEL, a DPC's IRQL
     constexpr uint32_t kPcrPcrPtr = 0x030;
     constexpr uint32_t kPcrStackBase = 0x070;
     constexpr uint32_t kPcrStackEnd = 0x074;
-    constexpr uint32_t kPcrIrql = 0x018;          // current_irql (a byte)
     constexpr uint32_t kPcrCurrentThread = 0x100; // prcb_data.current_thread
     constexpr uint32_t kPcrCurrentCpu = 0x10C;    // prcb_data.current_cpu
     constexpr uint32_t kPcrDpcActive = 0x150;     // prcb_data.dpc_active
