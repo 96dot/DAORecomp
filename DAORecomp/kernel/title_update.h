@@ -16,8 +16,7 @@ namespace dao::kernel
     // The same for a default.xexp read into memory.
     int TitleUpdateNumber(std::span<const uint8_t> xexp);
 
-    // Whether a default.xex read into memory is the disc's the code was recompiled
-    // from (by its SHA-1), the only one the loader and the patcher trust what they read
-    // in.
+    // Whether a default.xex read into memory is the disc's (by its SHA-1): the one
+    // the code was recompiled from, and the only one the loader patches and parses.
     bool IsGameXex(std::span<const uint8_t> xex);
 }

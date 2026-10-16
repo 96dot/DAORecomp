@@ -157,9 +157,9 @@ uint32_t JitterPhaseCount(uint32_t render_width, uint32_t display_width);
 
 // The camera as FSR's depth-based heuristics take it (the upscaler's and frame
 // generation's), roughly: the game's draws don't give it. The vertical field of
-// view is about the game's own (91.5 degrees horizontal at 16:9 is 60 degrees,
-// 1.05 rad, vertical); the field of view setting only shifts the heuristics a
-// little.
+// view, 1.0 rad, is a little under the game's own (91.5 degrees horizontal at
+// 16:9 is 60 degrees, 1.05 rad, vertical), and isn't changed by the field of
+// view setting.
 inline constexpr float kFfxCameraNear = 0.1f;
 inline constexpr float kFfxCameraFar = 1000.0f;
 inline constexpr float kFfxCameraFovVertical = 1.0f;

@@ -12,8 +12,8 @@
 #include <vector>
 
 #include "xenia/base/cvar.h"
-#include "xenia/dao_temporal_upscaler.h"
 #include "xenia/base/logging.h"
+#include "xenia/dao_temporal_upscaler.h"
 #include "xenia/ui/graphics_provider.h"
 
 #include "sl.h"

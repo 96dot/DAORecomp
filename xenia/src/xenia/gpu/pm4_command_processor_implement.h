@@ -722,7 +722,6 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
                 : register_file_->values[poll_reg_addr];
 
   bool matched = false;
-  uint64_t poll_start = 0;
 
   do {
     uint32_t value = value_ref;
@@ -743,23 +742,13 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
       // Wait.
       if (wait >= 0x100) {
         PrepareForWait();
-        {
-          // DAO: polls, but after a short while in brief sleeps, so the core is
-          // free for the guest's threads (few cores on handhelds) during waits
-          // of most of a frame. (Not Sleep(wait / 0x100 ms), as upstream with
-          // vsync: the console re-polls every `wait` GPU clocks, and the game's
-          // per-frame flip wait (wait 0x100) ended 0-2 ms after the vblank
-          // released it, on the command processor's path to the next frame.)
-          const uint64_t now = Clock::QueryHostUptimeMillis();
-          if (!poll_start) {
-            poll_start = now + 1;
-          }
-          if (now >= poll_start) {
-            xe::dao_host::ShortSleep(100);
-          } else {
-            xe::threading::MaybeYield();
-          }
-        }
+        // DAO: polls in brief sleeps, the core free for the guest's threads
+        // (few cores on handhelds). The console re-polls every `wait` GPU
+        // clocks; upstream's Sleep(wait / 0x100 ms) with vsync overslept on
+        // Windows' 1 ms timer, delaying the next frame's commands. (The game's
+        // one such wait, its flip, lasts most of a frame: no spin first.)
+        constexpr uint32_t kWaitPollMicroseconds = 100;
+        xe::dao_host::ShortSleep(kWaitPollMicroseconds);
 
         if (!worker_running_) {
           // Short-circuited exit.

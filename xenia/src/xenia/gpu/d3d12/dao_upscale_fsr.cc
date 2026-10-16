@@ -18,7 +18,6 @@
 #include "dx12/ffx_api_dx12.h"
 #include "ffx_upscale.h"
 
-
 namespace xe {
 namespace gpu {
 namespace d3d12 {
@@ -184,7 +183,7 @@ bool FsrBackend::EnsureContext(const ContextDesc& desc) {
       }
     }
     if (!version_id) {
-      XELOGW("FSR: no FSR {} upscaler available, using the default", prefix);
+      XELOGW("FSR: FSR {} isn't available, using the default", prefix);
     }
   }
 
@@ -330,13 +329,17 @@ std::vector<FfxApi::Version> FfxApi::Versions(uint64_t create_desc_type,
   uint64_t count = 0;
   versions.outputCount = &count;
   query(nullptr, &versions.header);
+  // The loader's counts aren't trusted further than the arrays given it (a
+  // replaced or proxy DLL could report anything).
+  constexpr uint64_t kMaxVersions = 64;
+  count = std::min(count, kMaxVersions);
   std::vector<uint64_t> ids(count);
   std::vector<const char*> names(count);
   versions.versionIds = ids.data();
   versions.versionNames = names.data();
   query(nullptr, &versions.header);
-  std::vector<Version> result(count);
-  for (uint64_t i = 0; i < count; ++i) {
+  std::vector<Version> result(std::min<size_t>(count, ids.size()));
+  for (size_t i = 0; i < result.size(); ++i) {
     result[i] = {ids[i], names[i]};
   }
   return result;
