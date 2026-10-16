@@ -58,11 +58,10 @@ namespace dao::ui
         // the messages over the controls.
         constexpr float kDescriptionGap = 12.0f, kDescriptionLeft = 52.0f, kDescriptionWidth = 376.0f;
         constexpr float kDescriptionSize = 17.0f, kDescriptionLines = 3.0f, kDescriptionLineHeight = 1.3f;
-        constexpr float kToastY = 606.0f, kToastSize = 19.0f;
         // The paused game dimmed behind the menu, as behind the game's own menus.
         constexpr ImU32 kBackdrop = IM_COL32(0, 0, 0, 90);
         // Seconds: how long a message lasts, and how long it takes to fade out.
-        constexpr double kToastTime = 2.5, kToastFade = 0.5;
+        constexpr double kToastTime = 2.5;
         // Held d-pad: the first repeat, then every.
         constexpr double kRepeatDelay = 0.35, kRepeatEvery = 0.07;
 
@@ -178,7 +177,7 @@ namespace dao::ui
             {
                 if (now_ >= toastUntil_)
                     return;
-                const float alpha = float(std::min(1.0, (toastUntil_ - now_) / kToastFade));
+                const float alpha = FadeOut(toastUntil_ - now_, kToastFade);
                 DrawMessage(draw, overlay_, stage_, overlay_.italic, kToastSize, kToastY, toast_, alpha);
             }
 

@@ -182,9 +182,10 @@ files there stay; if AMD's driver can't say which GPU it is, they stay too).
 
 When you save over a save, the version it replaces is kept in
 `userdata/save_backups/`: one per save, the one before its latest overwrite (a save
-the game crashed while writing doesn't replace it). On a nearly full drive a save isn't
-overwritten at all: a message over the game says it wasn't saved, and the old one
-stays. Closing the window while the game is saving waits (a few seconds at most) for the
+the game crashed while writing doesn't replace it). When the old save can't be kept (the
+drive is nearly full, or it can't be copied) or the new one's folder can't be made, the
+save isn't overwritten at all: a message over the game says it wasn't saved, and the old
+one stays. Closing the window while the game is saving waits (10 seconds at most) for the
 save to be finished. To get one back, open the launcher's *Save Backups*: it lists them by
 character, with when each backup and the save in its place were made. *Restore* puts
 the backup back (after asking, and not while the game is running), and the save it

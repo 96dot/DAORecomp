@@ -143,6 +143,15 @@ namespace dao::ui
     // divider's bottom (stage units).
     float DrawPanel(ImDrawList* draw, const Overlay& overlay, const Stage& stage, std::string_view title,
         std::span<const PanelRow> rows, int selected, float shadeBelow = 0);
+    // Where the menus' passing messages go (stage units: over the controls' bar),
+    // their size, and their fade at the end (seconds).
+    inline constexpr float kToastY = 606.0f, kToastSize = 19.0f;
+    inline constexpr double kToastFade = 0.5;
+    // A message's alpha with `left` seconds to go, fading out over the last `fade`.
+    inline float FadeOut(double left, double fade)
+    {
+        return float(std::min(1.0, left / fade));
+    }
     // A line of text centred across the stage at `y` (stage units) on a
     // highlighted plate, faded by `alpha`.
     void DrawMessage(ImDrawList* draw, const Overlay& overlay, const Stage& stage, ImFont* font, float size, float y,

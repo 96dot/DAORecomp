@@ -66,7 +66,8 @@ namespace dao::gpu
             void OnClosing(xe::ui::UIEvent&) override
             {
                 LOGI("Window closed, exiting");
-                // Gone at once, though a save the game is writing is finished first.
+                // Gone at once, though a save the game is writing is finished first (this
+                // thread waits for it: the game's threads don't need it meanwhile).
                 ShowWindow(static_cast<xe::ui::Win32Window&>(*s_window).hwnd(), SW_HIDE);
                 ExitGame(0);
             }

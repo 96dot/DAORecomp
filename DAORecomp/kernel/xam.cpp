@@ -144,13 +144,13 @@ namespace dao::imp
     void XamLoaderTerminateTitle()
     {
         LOGI("XamLoaderTerminateTitle - exiting");
-        ExitGame(0);
+        TerminateProcess(GetCurrentProcess(), 0);
     }
 
     void XamLoaderLaunchTitle(const char* name, uint32_t flags)
     {
         LOGI("XamLoaderLaunchTitle('{}', {:#x}) - exiting", name ? name : "", flags);
-        ExitGame(0);
+        TerminateProcess(GetCurrentProcess(), 0);
     }
 
     // ------------------------------------------------------------------ users
@@ -785,11 +785,12 @@ namespace dao::imp
     // one is moved aside first, to userdata/save_backups/<name>.new, and becomes the
     // backup (save_backups/<name>, outside the saves' folder so the game doesn't list it)
     // once the new one's folder is made (KeepBackup), or goes back if it can't be
-    // (RestoreSave). A save the game didn't close (a crash while writing it) doesn't
-    // replace a backup: it's deleted.
+    // (RestoreSave, or RecoverSetAsideSaves after the game ended in between). A save the
+    // game didn't close (a crash while writing it) doesn't replace a backup: it's deleted.
     enum class OldSave
     {
-        Deleted,
+        // Deleted (or there was none).
+        Gone,
         SetAside,
         // Can't be set aside: left as it was, and not overwritten.
         Kept,
@@ -800,6 +801,9 @@ namespace dao::imp
         return SaveBackups() / (fileName + ".new");
     }
 
+    // The save at `path` before it's replaced: set aside, deleted (unclean), or kept
+    // where it is (it can't be set aside: the game then isn't saved, and a notice says
+    // so, as the game doesn't).
     static OldSave SetSaveAside(const fs::path& path, const std::string& fileName)
     {
         // Room for the new save's own files and the log besides.
@@ -810,7 +814,7 @@ namespace dao::imp
         {
             LOGW("XamContentCreateEx: '{}' wasn't closed cleanly; its backup stays as it was", fileName);
             fs::remove_all(path, ec);
-            return OldSave::Deleted;
+            return OldSave::Gone;
         }
         // The old save's space isn't freed until the new one is written.
         const fs::space_info space = fs::space(path, ec);
@@ -818,7 +822,8 @@ namespace dao::imp
         {
             LOGW("XamContentCreateEx: too little disk space to write '{}' and keep the old one; not "
                 "overwritten", fileName);
-            ui::ShowNotice("The game wasn't saved: the disk is full. The old save is still there.");
+            ui::ShowNotice("The game wasn't saved: the disk is too full to keep the old save as well. "
+                "It's still there.");
             return OldSave::Kept;
         }
 
@@ -827,9 +832,11 @@ namespace dao::imp
         fs::rename(path, staged, ec);
         if (ec)
         {
-            // A folder with a file still open in it can't be moved: copied instead.
+            // A folder with a file still open in it can't be moved: copied instead (links
+            // as links, as the rename would have moved them).
+            constexpr auto kCopy = fs::copy_options::recursive | fs::copy_options::copy_symlinks;
             ec.clear();
-            fs::copy(path, staged, fs::copy_options::recursive, ec);
+            fs::copy(path, staged, kCopy, ec);
             if (ec)
             {
                 LOGW("XamContentCreateEx: can't back up '{}' ({}); not overwritten", fileName, ec.message());
@@ -838,6 +845,18 @@ namespace dao::imp
                 return OldSave::Kept;
             }
             fs::remove_all(path, ec);
+            if (ec)
+            {
+                // Partly deleted (that open file): made whole again from the copy.
+                LOGW("XamContentCreateEx: can't move '{}' aside ({}); not overwritten", fileName, ec.message());
+                fs::copy(staged, path, kCopy | fs::copy_options::overwrite_existing, ec);
+                if (ec)
+                    LOGE("XamContentCreateEx: '{}' is only whole in save_backups as {}.new", fileName, fileName);
+                else
+                    fs::remove_all(staged, ec);
+                ui::ShowNotice("The game wasn't saved: the old save couldn't be backed up. It's still there.");
+                return OldSave::Kept;
+            }
         }
         return OldSave::SetAside;
     }
@@ -868,9 +887,11 @@ namespace dao::imp
             fs::rename(StagedBackup(fileName), backups / fileName, ec);
         if (ec)
         {
-            // (Kept there: the next backup of this save replaces it.)
+            // (Kept there: the next backup of this save replaces it.) Nor is the name of
+            // the backup that was there left behind.
             LOGW("XamContentCreateEx: can't put the backup of '{}' in place ({}); it's in save_backups as "
                 "{}.new", fileName, ec.message(), fileName);
+            fs::remove(backups / nameFile, ec);
             return;
         }
 
@@ -883,6 +904,63 @@ namespace dao::imp
             return;
         }
         LOGI("XamContentCreateEx: backed up '{}' to save_backups", fileName);
+    }
+
+    // Makes content's folder, replacing what's there for "create always" and "truncate
+    // existing" (`replace`; a save through SetSaveAside). false if it can't be made or
+    // a save can't be replaced: the game then reports the failure (a save's, a notice)
+    // instead of writing into nothing.
+    static bool MakeContentFolder(const fs::path& path, const std::string& fileName, bool save, bool replace)
+    {
+        std::error_code ec;
+        OldSave old = OldSave::Gone;
+        if (replace && save)
+            old = SetSaveAside(path, fileName);
+        else if (replace)
+            fs::remove_all(path, ec);
+        if (old == OldSave::Kept)
+            return false;
+        fs::create_directories(path, ec);
+        if (ec)
+        {
+            LOGE("XamContentCreateEx: can't create the folder of '{}' ({})", fileName, ec.message());
+            if (old == OldSave::SetAside)
+                RestoreSave(path, fileName);
+            if (save)
+                ui::ShowNotice("The game wasn't saved: its folder couldn't be made (see dao.log).");
+            return false;
+        }
+        if (old == OldSave::SetAside)
+            KeepBackup(path, fileName);
+        return true;
+    }
+
+    // Saves set aside (SetSaveAside) whose new one's folder was never made, the game
+    // having ended in between: put back before the game lists its saves. Under
+    // s_contentMutex.
+    static void RecoverSetAsideSaves()
+    {
+        std::error_code ec;
+        std::vector<fs::path> staged;
+        for (const fs::directory_entry& entry : fs::directory_iterator(SaveBackups(), ec))
+        {
+            if (entry.path().extension() == ".new" && entry.is_directory(ec))
+                staged.push_back(entry.path());
+        }
+        for (const fs::path& from : staged)
+        {
+            const std::optional<std::string> fileName = dao::ToAnsi(from.stem());
+            if (!fileName || !content::IsContentName(*fileName))
+                continue;
+            const fs::path path = ContentPath(content::kContentSave, *fileName);
+            if (fs::exists(path, ec) || ec)
+                continue;
+            fs::rename(from, path, ec);
+            if (ec)
+                LOGW("Saves: can't put '{}' back from save_backups ({})", *fileName, ec.message());
+            else
+                LOGI("Saves: put '{}' back, set aside when the game ended", *fileName);
+        }
     }
 
     static std::string RootName(const char* root)
@@ -946,45 +1024,18 @@ namespace dao::imp
             break;
         }
 
-        if (result == X_ERROR_SUCCESS)
+        if (result == X_ERROR_SUCCESS && !MakeContentFolder(path, fileName, save, replace))
         {
-            // Not mounted if the old save can't be kept or its folder can't be made (a full
-            // disk, no permission): the game then reports the failure instead of writing
-            // into nothing.
-            OldSave old = OldSave::Deleted;
-            if (replace && save)
-                old = SetSaveAside(path, fileName);
-            else if (replace)
-                fs::remove_all(path, ec);
-            if (old != OldSave::Kept)
+            result = X_ERROR_ACCESS_DENIED;
+            disposition = 0;
+            // Nor is content mounted at this root before (not closed) written into.
+            if (auto it = s_savesWriting.find(root); it != s_savesWriting.end())
             {
-                fs::create_directories(path, ec);
-                if (ec)
-                {
-                    LOGE("XamContentCreateEx: can't create the folder of '{}' ({})", fileName, ec.message());
-                    if (old == OldSave::SetAside)
-                        RestoreSave(path, fileName);
-                    if (save)
-                        ui::ShowNotice("The game wasn't saved: its folder couldn't be made (see dao.log).");
-                }
-                else if (old == OldSave::SetAside)
-                {
-                    KeepBackup(path, fileName);
-                }
+                fs::remove(WritingMarker(it->second), ec);
+                s_savesWriting.erase(it);
             }
-            if (old == OldSave::Kept || ec)
-            {
-                result = X_ERROR_ACCESS_DENIED;
-                disposition = 0;
-                // Nor is content mounted at this root before (not closed) written into.
-                if (auto it = s_savesWriting.find(root); it != s_savesWriting.end())
-                {
-                    fs::remove(WritingMarker(it->second), ec);
-                    s_savesWriting.erase(it);
-                }
-                VfsDeleteSymlink(root);
-                VfsUnmountDevice("\\Device\\Content\\" + root.substr(0, root.size() - 1));
-            }
+            VfsDeleteSymlink(root);
+            VfsUnmountDevice("\\Device\\Content\\" + root.substr(0, root.size() - 1));
         }
         if (result == X_ERROR_SUCCESS)
         {
@@ -1001,19 +1052,16 @@ namespace dao::imp
                 fs::remove(WritingMarker(it->second), ec);
                 s_savesWriting.erase(it);
             }
-            // Being written until the game closes it (see SetSaveAside).
+            // Being written until the game closes it (see SetSaveAside; ExitGame waits
+            // for it, marked or not).
             if (save && disposition == 1)
             {
+                s_savesWriting[root] = fileName;
                 fs::create_directories(SaveBackups(), ec);
                 if (FILE* f = _wfopen(WritingMarker(fileName).c_str(), L"wb"))
-                {
                     fclose(f);
-                    s_savesWriting[root] = fileName;
-                }
                 else
-                {
                     LOGW("XamContentCreateEx: can't mark '{}' as being written", fileName);
-                }
             }
         }
         lock.unlock();
@@ -1062,6 +1110,11 @@ namespace dao::imp
         e->itemSize = sizeof(XCONTENT_DATA);
         e->itemsPerEnumerate = std::max<uint32_t>(itemsPerEnumerate, 1);
 
+        if (contentType == content::kContentSave)
+        {
+            std::lock_guard lock(s_contentMutex);
+            RecoverSetAsideSaves();
+        }
         std::error_code ec;
         const fs::path dir = ContentPath(contentType, "");
         for (auto& entry : fs::directory_iterator(dir, ec))
@@ -1263,15 +1316,19 @@ namespace dao::kernel
 {
     void ExitGame(uint32_t exitCode)
     {
-        // (Not for good: a save the game never closes is only marked unclean.)
+        // The wait is capped: a save the game never closes is only marked unclean, and
+        // mustn't keep the game from ending (nor a long copy of one, SetSaveAside's).
         constexpr auto kSaveWait = std::chrono::seconds(10);
         const auto deadline = std::chrono::steady_clock::now() + kSaveWait;
+        // Held to the end once taken: no save starts being replaced in between.
+        std::unique_lock lock(imp::s_contentMutex, std::defer_lock);
         for (bool waiting = false;; Sleep(20))
         {
+            if (lock.try_lock())
             {
-                std::lock_guard lock(imp::s_contentMutex);
                 if (imp::s_savesWriting.empty())
                     break;
+                lock.unlock();
             }
             if (!waiting)
                 LOGI("Exiting once the save being written is closed");

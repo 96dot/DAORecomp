@@ -16,11 +16,9 @@ namespace dao::ui
     {
         using Clock = std::chrono::steady_clock;
 
-        // On the game's 1280x720 stage, as the cheats menu's messages; seconds shown
-        // (long enough to read twice), and the fade at the end.
-        constexpr float kNoticeY = 606.0f, kNoticeSize = 19.0f;
+        // How long it's shown: longer than the menus' messages, which answer a button
+        // the player just pressed; this one comes unasked, and is longer.
         constexpr auto kNoticeTime = std::chrono::seconds(6);
-        constexpr double kNoticeFade = 0.5;
 
         class NoticeDialog;
         NoticeDialog* s_notice = nullptr; // UI thread
@@ -56,8 +54,8 @@ namespace dao::ui
                         ImGuiWindowFlags_NoScrollWithMouse);
                 ImDrawList* draw = ImGui::GetWindowDrawList();
                 draw->PushClipRectFullScreen();
-                DrawMessage(draw, overlay_, Stage(io), overlay_.italic, kNoticeSize, kNoticeY, text_,
-                    float(std::min(1.0, left / kNoticeFade)));
+                DrawMessage(draw, overlay_, Stage(io), overlay_.italic, kToastSize, kToastY, text_,
+                    FadeOut(left, kToastFade));
                 draw->PopClipRect();
                 ImGui::End();
             }

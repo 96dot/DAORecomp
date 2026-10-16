@@ -76,12 +76,12 @@ namespace dao::ui
         // Laid out on the game's 1280x720 stage (the panel and the controls as
         // overlay.cpp's). Messages (on a highlighted plate): what was saved, over the
         // controls, and the setting the d-pad changes, at the top.
-        constexpr float kToastY = 606.0f, kToastSize = 19.0f, kReadoutY = 22.0f, kReadoutSize = 22.0f;
+        constexpr float kReadoutY = 22.0f, kReadoutSize = 22.0f;
         constexpr float kCrossArm = 18.0f;
         // Seconds: how long messages and the flash last, and how long the toast and
         // the readout take to fade out at the end.
         constexpr double kToastTime = 3.0, kReadoutTime = 1.2, kFlashTime = 0.25;
-        constexpr double kToastFade = 0.5, kReadoutFade = 0.3;
+        constexpr double kReadoutFade = 0.3;
         // Held d-pad on the panel: the first repeat, then every.
         constexpr double kRepeatDelay = 0.35, kRepeatEvery = 0.07;
         // The longest frame time the d-pad's zoom and roll take (a hitch doesn't
@@ -322,7 +322,7 @@ namespace dao::ui
             {
                 if (now_ >= readoutUntil_)
                     return;
-                const float alpha = float(std::min(1.0, (readoutUntil_ - now_) / kReadoutFade));
+                const float alpha = FadeOut(readoutUntil_ - now_, kReadoutFade);
                 DrawMessage(draw, overlay_, stage_, overlay_.bold, kReadoutSize, kReadoutY,
                     fmt::format("{}  {}", kRowNames[int(readout_)], Value(readout_)), alpha);
             }
@@ -349,7 +349,7 @@ namespace dao::ui
             {
                 if (now_ >= toastUntil_)
                     return;
-                const float alpha = float(std::min(1.0, (toastUntil_ - now_) / kToastFade));
+                const float alpha = FadeOut(toastUntil_ - now_, kToastFade);
                 DrawMessage(draw, overlay_, stage_, overlay_.italic, kToastSize, kToastY, toast_, alpha);
             }
 
