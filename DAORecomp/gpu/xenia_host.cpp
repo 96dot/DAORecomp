@@ -500,10 +500,4 @@ namespace xe::dao_host
     {
         dao::kernel::ShortSleep(microseconds);
     }
-
-    bool PollGpuWaits()
-    {
-        return dao::FrameRateAbove60(dao::gpu::FrameRate()) ||
-            !xe::dao_live::Load(xe::dao_live::values.present_vsync);
-    }
 }

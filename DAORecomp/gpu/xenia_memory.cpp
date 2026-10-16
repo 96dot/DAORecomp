@@ -217,18 +217,44 @@ namespace xe
 
         const uint32_t start = first << kPageShift;
         const uint32_t size = (last - first + 1) << kPageShift;
+        if (!unprotect)
+            unwatch_exact_range = true; // nothing to save by widening
+        // Each callback returns the range it holds nothing in any more (a fault widens
+        // its invalidation: the shared memory's up to 256 KB, the primitive processor's
+        // to its buckets). Their common part is unwatched, within a 4 MB window around
+        // the touched pages, as Xenia's PhysicalHeap::TriggerCallbacks does: re-uploading
+        // a little extra costs less than a fault (and three VirtualProtect calls) for
+        // each further page the game writes.
+        uint32_t keepFirst = 0, keepLast = UINT32_MAX; // bytes, inclusive
         for (auto* callback : state_->callbacks)
-            callback->first(callback->second, start, size, unwatch_exact_range);
+        {
+            const auto range = callback->first(callback->second, start, size, unwatch_exact_range);
+            if (!unwatch_exact_range)
+            {
+                keepFirst = std::max(keepFirst, range.first);
+                const uint32_t extra = std::max(range.second, 1u) - 1;
+                keepLast = std::min(keepLast, extra > UINT32_MAX - range.first ? UINT32_MAX : range.first + extra);
+            }
+        }
+        uint32_t unwatchFirst = first, unwatchLast = last;
+        if (!unwatch_exact_range)
+        {
+            constexpr uint32_t kMaxExcess = 4u << 20;
+            const uint32_t endByte = start + size - 1;
+            keepFirst = std::max(std::min(keepFirst, start), start & ~(kMaxExcess - 1));
+            keepLast = std::min({ std::max(keepLast, endByte), endByte | (kMaxExcess - 1), kPhysicalSize - 1 });
+            unwatchFirst = keepFirst >> kPageShift;
+            unwatchLast = keepLast >> kPageShift;
+        }
 
-        // Unwatch exactly the touched pages: every callback has dropped whatever it
-        // cached in them. (Xenia widens this to the common range the callbacks
-        // report, saving faults on large sequential writes - a later optimization.)
+        // Only pages that are watched (armed because they were writable) are made
+        // writable again.
         if (unprotect)
         {
             uint32_t runStart = UINT32_MAX;
-            for (uint32_t page = first; page <= last + 1; page++)
+            for (uint32_t page = unwatchFirst; page <= unwatchLast + 1; page++)
             {
-                const bool watched = page <= last && state_->IsWatched(page);
+                const bool watched = page <= unwatchLast && state_->IsWatched(page);
                 if (watched)
                 {
                     state_->SetWatched(page, false);

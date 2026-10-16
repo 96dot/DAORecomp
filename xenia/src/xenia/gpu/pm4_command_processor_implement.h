@@ -743,12 +743,13 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
       // Wait.
       if (wait >= 0x100) {
         PrepareForWait();
-        // DAO: or above 60 fps or without vsync, where a millisecond's sleep
-        // costs frames.
-        if (!cvars::vsync || xe::dao_host::PollGpuWaits()) {
-          // User wants it fast and dangerous: polls, but after a short while
-          // in brief sleeps, so the core is free for the guest's threads (few
-          // cores on handhelds) during waits of most of a frame.
+        {
+          // DAO: polls, but after a short while in brief sleeps, so the core is
+          // free for the guest's threads (few cores on handhelds) during waits
+          // of most of a frame. (Not Sleep(wait / 0x100 ms), as upstream with
+          // vsync: the console re-polls every `wait` GPU clocks, and the game's
+          // per-frame flip wait (wait 0x100) ended 0-2 ms after the vblank
+          // released it, on the command processor's path to the next frame.)
           const uint64_t now = Clock::QueryHostUptimeMillis();
           if (!poll_start) {
             poll_start = now + 1;
@@ -758,9 +759,6 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
           } else {
             xe::threading::MaybeYield();
           }
-        } else {
-          xe::threading::Sleep(std::chrono::milliseconds(wait / 0x100));
-          ReturnFromWait();
         }
 
         if (!worker_running_) {

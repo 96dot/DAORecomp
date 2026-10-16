@@ -598,6 +598,7 @@ namespace dao::kernel
 
         for (;;)
         {
+
             if (alertable && self && !self->apcQueue.empty())
             {
                 registration.Remove();
@@ -717,7 +718,9 @@ namespace dao::kernel
             // a sleep. A poll that sleeps can miss a flag the other thread clears
             // only briefly: then that thread should wait for the poller
             // (gpu/held_shot.cpp), rather than the sleep be made shorter.
-            constexpr auto kPollGap = std::chrono::microseconds(50);
+            // (A poll's gap is a load, a compare and the call: about 0.2-2 us; a loop
+            // doing work between yields is slowed if counted.)
+            constexpr auto kPollGap = std::chrono::microseconds(10);
             constexpr uint32_t kPollsBeforeSleeping = 64;
             thread_local std::chrono::steady_clock::time_point lastReturn;
             thread_local uint32_t polls = 0;
